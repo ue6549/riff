@@ -1,0 +1,33 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# iOS
+**/Pods/
+**/build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+**/.xcode.env.local
+
+# Android
+.gradle/
+.idea/
+local.properties
+*.iml
+*.hprof
+.cxx/
+*.keystore
+!debug.keystore
+.kotlin/
+
+# Metro / RN
+.metro-health-check*
+*.jsbundle
+
+# macOS
+.DS_Store
+
+# Ruby
+/vendor/bundle/

@@ -1,0 +1,26 @@
+/**
+ * M4.2 — RNMeasuredCell codegen spec.
+ *
+ * A Fabric view that fires `onMeasured` from its native `layoutSubviews`
+ * BEFORE the frame reaches the screen.  This eliminates the JS measurement
+ * loop (useLayoutEffect + ref.measure()) and gives CollectionView.tsx the
+ * actual cell height within the same native commit.
+ *
+ * Usage: wrap a variable-height cell with <RNMeasuredCell onMeasured={...}>.
+ * Do NOT set an explicit height — Yoga computes the intrinsic height from the
+ * content subtree, which is exactly what we want to capture.
+ */
+import type { ViewProps } from 'react-native';
+import type { DirectEventHandler, Float } from 'react-native/Libraries/Types/CodegenTypes';
+import codegenNativeComponent from 'react-native/Libraries/Utilities/codegenNativeComponent';
+
+type OnMeasuredEvent = Readonly<{
+  height: Float;
+  width: Float;
+}>;
+
+interface NativeProps extends ViewProps {
+  onMeasured?: DirectEventHandler<OnMeasuredEvent>;
+}
+
+export default codegenNativeComponent<NativeProps>('RNMeasuredCell');
