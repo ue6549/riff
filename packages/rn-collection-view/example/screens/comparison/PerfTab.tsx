@@ -7,7 +7,7 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { CollectionView } from '../../components/CollectionView';
+import { Riff } from '../../components/CollectionView';
 import { useFPS } from '../../utils/useMetrics';
 
 // ── Scenarios ─────────────────────────────────────────────────────────────────
@@ -266,7 +266,7 @@ function Scenario1({ mode, onRenderCount }: ScenarioProps) {
   const keyEx = React.useCallback((i: SimpleItem) => String(i.id), []);
   const renderSimple = React.useCallback(({ item }: { item: SimpleItem }) => <SimpleCell item={item} />, []);
   return mode === 'cv' ? (
-    <CollectionView data={data} keyExtractor={keyEx} itemHeight={44}
+    <Riff data={data} keyExtractor={keyEx} itemHeight={44}
       renderItem={renderSimple} onRenderCountChange={onRenderCount} />
   ) : (
     <FlashList data={data} keyExtractor={keyEx} estimatedItemSize={44}
@@ -279,7 +279,7 @@ function Scenario2({ mode, onRenderCount }: ScenarioProps) {
   const keyEx = React.useCallback((i: TextItem) => String(i.id), []);
   const renderText = React.useCallback(({ item }: { item: TextItem }) => <TextCell item={item} />, []);
   return mode === 'cv' ? (
-    <CollectionView data={data} keyExtractor={keyEx} estimatedItemHeight={60}
+    <Riff data={data} keyExtractor={keyEx} estimatedItemHeight={60}
       renderItem={renderText} onRenderCountChange={onRenderCount} />
   ) : (
     <FlashList data={data} keyExtractor={keyEx} estimatedItemSize={60}
@@ -299,7 +299,7 @@ function Scenario3({ mode, onRenderCount }: ScenarioProps) {
     layout.size = heteroSizes[item.type] ?? 50;
   }, []);
   return mode === 'cv' ? (
-    <CollectionView data={data} keyExtractor={keyEx} estimatedItemHeight={50}
+    <Riff data={data} keyExtractor={keyEx} estimatedItemHeight={50}
       renderItem={renderHetero} onRenderCountChange={onRenderCount} />
   ) : (
     <FlashList data={data} keyExtractor={keyEx} estimatedItemSize={50}
@@ -319,7 +319,7 @@ function Scenario4({ mode, onRenderCount }: ScenarioProps) {
     layout.size = item.height;
   }, []);
   return mode === 'cv' ? (
-    <CollectionView data={data} keyExtractor={keyEx} estimatedItemHeight={120}
+    <Riff data={data} keyExtractor={keyEx} estimatedItemHeight={120}
       renderItem={renderUnique} onRenderCountChange={onRenderCount} />
   ) : (
     <FlashList data={data} keyExtractor={keyEx} estimatedItemSize={120}

@@ -82,7 +82,7 @@ export default function Comparison() {
             onPress={() => setEngine('cv')}
           >
             <Text style={[S.engineText, engine === 'cv' && S.engineTextActive]}>
-              CollectionView
+              Riff
             </Text>
           </Pressable>
           <Pressable
@@ -99,8 +99,8 @@ export default function Comparison() {
         <View style={S.engineBar}>
           <Text style={S.cvOnlyLabel}>
             {activeTab === 'snapshot'
-              ? 'CollectionView only — FlashList has no snapshot API'
-              : 'CollectionView only — impossible in FlashList'}
+              ? 'Riff only — FlashList has no snapshot API'
+              : 'Riff only — impossible in FlashList'}
           </Text>
         </View>
       )}

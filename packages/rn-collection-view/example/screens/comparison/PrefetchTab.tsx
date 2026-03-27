@@ -18,7 +18,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { CollectionView } from '../../components/CollectionView';
+import { Riff } from '../../components/CollectionView';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SHARED
@@ -101,7 +101,7 @@ function CVSimulated() {
     startLoading(keys.map(k => parseInt(k, 10)).filter(n => !isNaN(n)));
   }, []);
   return (
-    <CollectionView
+    <Riff
       data={SIM_DATA}
       keyExtractor={item => String(item.id)}
       renderItem={({ item }) => <SimCell item={item} />}
@@ -184,7 +184,7 @@ function CVImages() {
     }
   }, []);
   return (
-    <CollectionView
+    <Riff
       data={IMG_DATA}
       keyExtractor={item => String(item.id)}
       renderItem={({ item }) => <ImgCell item={item} />}

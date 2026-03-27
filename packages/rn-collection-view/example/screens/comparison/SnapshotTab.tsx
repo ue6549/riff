@@ -19,7 +19,7 @@ import {
   View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { CollectionView, CollectionViewHandle } from '../../components/CollectionView';
+import { Riff, RiffHandle } from '../../components/CollectionView';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ const ItemCell = React.memo(({ item }: { item: Item }) => (
 // ── CV side ───────────────────────────────────────────────────────────────────
 
 function CVSnapshot({ log }: { log: (e: DiffEntry) => void }) {
-  const ref = useRef<CollectionViewHandle<Item>>(null);
+  const ref = useRef<RiffHandle<Item>>(null);
   const [data, setData] = useState<Item[]>(INITIAL);
   const ke = useCallback((item: Item) => String(item.id), []);
 
@@ -88,7 +88,7 @@ function CVSnapshot({ log }: { log: (e: DiffEntry) => void }) {
         <Pressable style={S.btn} onPress={deleteFn}><Text style={S.btnText}>−3 top</Text></Pressable>
         <Pressable style={S.btn} onPress={move}><Text style={S.btnText}>move↓</Text></Pressable>
       </View>
-      <CollectionView
+      <Riff
         data={data}
         handle={ref}
         keyExtractor={ke}
@@ -172,7 +172,7 @@ export default function SnapshotTab() {
 
       {/* Column headers */}
       <View style={S.headers}>
-        <Text style={[S.colHeader, S.colHeaderCV]}>CollectionView</Text>
+        <Text style={[S.colHeader, S.colHeaderCV]}>Riff</Text>
         <Text style={[S.colHeader, S.colHeaderFlash]}>FlashList</Text>
       </View>
 

@@ -13,7 +13,7 @@
  */
 import React, { useCallback } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { CollectionView, SectionConfig } from '../components/CollectionView';
+import { Riff, SectionConfig } from '../components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -63,7 +63,7 @@ export default function F2_2_StickyHeaders() {
 
   return (
     <View style={S.root}>
-      <CollectionView
+      <Riff
         sections={SECTIONS}
         renderItem={renderItem}
         estimatedItemHeight={44}

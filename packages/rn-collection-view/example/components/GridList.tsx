@@ -6,7 +6,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { ScrollView, View, StyleSheet } from 'react-native';
-import NativeCollectionViewModule from 'rn-collection-view/src/specs/NativeCollectionViewModule';
+import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
 
 const nativeMod = NativeCollectionViewModule as unknown as {
   gridLayout: {

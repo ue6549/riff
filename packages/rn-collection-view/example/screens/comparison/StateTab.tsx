@@ -9,7 +9,7 @@
 import React, { useCallback } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { CollectionView } from '../../components/CollectionView';
+import { Riff } from '../../components/CollectionView';
 import {
   ComparisonCell,
   getMountCount,
@@ -51,7 +51,7 @@ export default function StateTab({ mode }: { mode: 'cv' | 'flash' }) {
       <View style={S.listArea}>
         <Metrics renderCount={mode === 'cv' ? renderCount : null} />
         {mode === 'cv' ? (
-          <CollectionView
+          <Riff
             data={DATA}
             keyExtractor={item => String(item.id)}
             renderItem={({ item }) => <ComparisonCell item={item} />}

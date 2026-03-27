@@ -24,7 +24,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Mount counter (shared with M3.3 pattern) ────────────────────────────────
 
@@ -130,7 +130,7 @@ export default function M3_5_CellBudget() {
 
       </View>
 
-      <CollectionView
+      <Riff
         key={resetKey}
         data={DATA}
         keyExtractor={item => String(item.id)}

@@ -204,7 +204,7 @@ function Menu({ onSelect }: { onSelect: (key: string) => void }) {
   return (
     <SafeAreaView style={S.safe}>
       <ScrollView contentContainerStyle={S.menuContainer}>
-        <Text style={S.appTitle}>RNCollectionView</Text>
+        <Text style={S.appTitle}>Riff</Text>
         <Text style={S.appSubtitle}>{Platform.OS.toUpperCase()} · tap a screen to open it</Text>
 
         {/* ── Section 1: Features & Comparison ─────────────────────────── */}

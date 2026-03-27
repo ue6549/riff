@@ -32,7 +32,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Dataset ──────────────────────────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ const DATA: Item[] = Array.from({ length: ITEM_COUNT }, (_, i) => ({ id: i }));
 const EXTRA_LINES = [
   'This is extra content that appears when you tap the cell.',
   'It demonstrates dynamic self-sizing — the cell grows without a remount.',
-  'The CollectionView detects the height change and adjusts layout automatically.',
+  'Riff detects the height change and adjusts layout automatically.',
   'Scroll correction prevents visible content from jumping when cells above resize.',
 ];
 
@@ -122,7 +122,7 @@ export default function M4_3_SelfSizingCells() {
         </View>
       </View>
 
-      <CollectionView
+      <Riff
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={renderItem}

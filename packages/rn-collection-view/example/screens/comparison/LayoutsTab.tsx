@@ -16,7 +16,7 @@ import { MasonryList } from '../../components/MasonryList';
 import { GridList } from '../../components/GridList';
 import { CircularList } from '../../components/CircularList';
 import { Carousel3D } from '../../components/Carousel3D';
-import NativeCollectionViewModule from 'rn-collection-view/src/specs/NativeCollectionViewModule';
+import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
 
 const nativeMod = NativeCollectionViewModule as unknown as {
   flowLayout: {
@@ -65,7 +65,7 @@ const TAG_LABELS = [
   'React Native', 'C++', 'JSI', 'TypeScript', 'Layout', 'Masonry', 'Grid',
   'Flow', 'Custom', 'Carousel', 'Performance', 'Virtualization', 'Windowing',
   'Sticky', 'Headers', 'Prefetch', 'Diff', 'Snapshot', 'Animation', 'Fabric',
-  'Hermes', 'iOS', 'Android', 'Yoga', 'CollectionView', 'FlashList', 'FlatList',
+  'Hermes', 'iOS', 'Android', 'Yoga', 'Riff', 'FlashList', 'FlatList',
   'ScrollView', 'Reanimated', 'Gesture', 'UIKit', 'SwiftUI', 'Compose', 'Kotlin',
   'Bridge', 'TurboModule', 'Codegen', 'Metro', 'Babel', 'SWC',
 ];

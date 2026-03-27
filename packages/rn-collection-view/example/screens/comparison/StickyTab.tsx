@@ -11,7 +11,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { CollectionView, type SectionConfig } from '../../components/CollectionView';
+import { Riff, type SectionConfig } from '../../components/CollectionView';
 
 // ── Sections ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ function makeFlatData(): { data: FlatItem[]; stickyIndices: number[] } {
 function CVSticky() {
   const sections = React.useMemo(() => makeSections(), []);
   return (
-    <CollectionView
+    <Riff
       sections={sections}
       renderItem={({ item }) => <ItemCell item={item as Item} />}
       estimatedItemHeight={44}

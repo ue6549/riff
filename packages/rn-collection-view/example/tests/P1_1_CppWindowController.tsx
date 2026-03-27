@@ -24,8 +24,8 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
-import NativeCollectionViewModule from 'rn-collection-view/src/specs/NativeCollectionViewModule';
+import { Riff } from '../components/CollectionView';
+import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
 
 // ─── JSI access ──────────────────────────────────────────────────────────────
 
@@ -369,7 +369,7 @@ export default function P1_1_CppWindowController() {
 
       <Text style={S.demoLabel}>Live Scroll Demo (500 items, C++ engine)</Text>
       <View style={S.demoContainer}>
-        <CollectionView
+        <Riff
           data={DEMO_DATA}
           keyExtractor={item => String(item.id)}
           renderItem={renderItem}

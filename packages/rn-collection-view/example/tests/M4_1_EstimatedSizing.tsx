@@ -29,7 +29,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Dataset ──────────────────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ export default function M4_1_EstimatedSizing() {
         </View>
       </View>
 
-      <CollectionView
+      <Riff
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={({ item }) => <EstimatedCell item={item} />}

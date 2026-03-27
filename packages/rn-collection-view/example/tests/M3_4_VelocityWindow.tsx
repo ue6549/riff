@@ -27,7 +27,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Dataset ──────────────────────────────────────────────────────────────────
 
@@ -119,7 +119,7 @@ export default function M3_4_VelocityWindow() {
       </View>
 
       {/* List */}
-      <CollectionView
+      <Riff
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={({ item }) => <VelocityCell item={item} />}

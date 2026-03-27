@@ -17,7 +17,7 @@
  */
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ export default function CollectionViewDemo() {
     <View style={S.root}>
       <View style={S.header}>
         <View style={S.headerRow}>
-          <Text style={S.headerTitle}>CollectionView Demo</Text>
+          <Text style={S.headerTitle}>Riff Demo</Text>
           {renderCount !== null && (
             <View style={S.badge}>
               <Text style={S.badgeText}>
@@ -72,7 +72,7 @@ export default function CollectionViewDemo() {
         </Text>
       </View>
 
-      <CollectionView
+      <Riff
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={({ item }) => <Cell item={item} />}

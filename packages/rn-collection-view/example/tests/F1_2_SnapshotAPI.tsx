@@ -23,7 +23,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView, CollectionViewHandle } from '../components/CollectionView';
+import { Riff, RiffHandle } from '../components/CollectionView';
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 
@@ -49,7 +49,7 @@ type LogEntry = { op: string; pass: boolean; detail: string };
 export default function F1_2_SnapshotAPI() {
   const [data, setData] = useState<Item[]>(initialData);
   const [log,  setLog]  = useState<LogEntry[]>([]);
-  const listRef    = useRef<CollectionViewHandle<Item>>(null);
+  const listRef    = useRef<RiffHandle<Item>>(null);
   const nextIdRef  = useRef(INITIAL_COUNT);
 
   const addLog = useCallback((entry: LogEntry) => {
@@ -248,7 +248,7 @@ export default function F1_2_SnapshotAPI() {
 
       {/* ── List ── */}
       <View style={S.list}>
-        <CollectionView
+        <Riff
           data={data}
           renderItem={renderItem}
           keyExtractor={keyExtractor}

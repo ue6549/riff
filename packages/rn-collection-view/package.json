@@ -1,5 +1,5 @@
 {
-  "name": "rn-collection-view",
+  "name": "riff",
   "version": "0.1.0",
   "description": "High-performance collection view for React Native New Architecture",
   "main": "src/index.ts",

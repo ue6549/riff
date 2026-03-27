@@ -17,8 +17,8 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
-import NativeCollectionViewModule from 'rn-collection-view/src/specs/NativeCollectionViewModule';
+import { Riff } from '../components/CollectionView';
+import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
 
 // Access the JSI memory sub-object directly so we can read metrics + simulate.
 const nativeMod = NativeCollectionViewModule as unknown as {
@@ -155,7 +155,7 @@ export default function P4_1_MemoryBudget() {
 
       {/* ── 10k item list ─────────────────────────────────────────────────── */}
       <View style={S.listWrapper}>
-        <CollectionView
+        <Riff
           data={DATA}
           itemHeight={44}
           mountedWindowSize={baseMws}

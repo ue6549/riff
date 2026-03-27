@@ -43,9 +43,9 @@ export type ApplyResult<T> = {
   firstChangedIndex: number;
 };
 
-// ─── CollectionSnapshot ───────────────────────────────────────────────────────
+// ─── RiffSnapshot ─────────────────────────────────────────────────────────────
 
-export class CollectionSnapshot<T> {
+export class RiffSnapshot<T> {
   private readonly _origData: T[];
   private readonly _ke: (item: T, index: number) => string;
   private readonly _ops: MutationOp<T>[] = [];

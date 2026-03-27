@@ -10,7 +10,7 @@
 import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { CollectionView, type SectionConfig } from '../../components/CollectionView';
+import { Riff, type SectionConfig } from '../../components/CollectionView';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ function CVDecorations() {
   const sections = React.useMemo(() => makeSections(), []);
 
   return (
-    <CollectionView
+    <Riff
       sections={sections}
       renderItem={({ item }) => <DecoCell item={item as Item} transparent />}
       estimatedItemHeight={48}

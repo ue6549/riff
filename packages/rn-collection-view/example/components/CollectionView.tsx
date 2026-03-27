@@ -60,12 +60,12 @@ const Activity = (React as any).Activity as
   | React.ComponentType<{ mode: 'visible' | 'hidden'; children: React.ReactNode }>
   | undefined;
 
-import NativeCollectionViewModule from 'rn-collection-view/src/specs/NativeCollectionViewModule';
-import { CollectionSnapshot } from './CollectionSnapshot';
+import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
+import { RiffSnapshot } from './CollectionSnapshot';
 import RNMeasuredCell from './RNMeasuredCellNativeComponent';
 import RNScrollCoordinatedView from './RNScrollCoordinatedViewNativeComponent';
-import { layoutCache } from 'rn-collection-view/src/LayoutCache';
-import type { CollectionViewLayout, LayoutContext } from 'rn-collection-view/src/types/protocol';
+import { layoutCache } from 'riff/src/LayoutCache';
+import type { CollectionViewLayout, LayoutContext } from 'riff/src/types/protocol';
 
 // ─── JSI module types ─────────────────────────────────────────────────────────
 
@@ -165,18 +165,18 @@ export interface SectionedRenderItemInfo<T> {
  * a handle prop instead — identical ergonomics without the casting ceremony.
  *
  * Usage:
- *   const ref = useRef<CollectionViewHandle<MyItem>>(null);
- *   <CollectionView handle={ref} ... />
+ *   const ref = useRef<RiffHandle<MyItem>>(null);
+ *   <Riff handle={ref} ... />
  *   const snap = ref.current.snapshot();
  *   snap.appendItems(newItems);
  *   ref.current.apply(snap);   // diff + LayoutAnimation + startTransition
  */
-export interface CollectionViewHandle<T = unknown> {
+export interface RiffHandle<T = unknown> {
   /**
    * Create a snapshot seeded with the current data array and key extractor.
    * Record mutations on it, then pass to apply().
    */
-  snapshot(): CollectionSnapshot<T>;
+  snapshot(): RiffSnapshot<T>;
 
   /**
    * Apply a snapshot: compute new data, evict stale heights for
@@ -184,7 +184,7 @@ export interface CollectionViewHandle<T = unknown> {
    * and commit the update inside startTransition.
    * The new data is delivered via the onDataChange prop.
    */
-  apply(snap: CollectionSnapshot<T>, animated?: boolean): void;
+  apply(snap: RiffSnapshot<T>, animated?: boolean): void;
 
   /**
    * Evict cached heights for the given keys so they are re-measured on the
@@ -193,7 +193,7 @@ export interface CollectionViewHandle<T = unknown> {
   invalidateKeys(keys: Iterable<string>): void;
 }
 
-export interface CollectionViewProps<T = unknown> {
+export interface RiffProps<T = unknown> {
   /** Flat mode data. Mutually exclusive with `sections`. */
   data?: T[];
   /** Sectioned mode. Mutually exclusive with `data`. */
@@ -206,7 +206,7 @@ export interface CollectionViewProps<T = unknown> {
    * ignored — the layout's delegate owns sizing.
    *
    * Usage:
-   *   import { list, masonry, grid, flow, customLayout } from 'rn-collection-view/layouts';
+   *   import { list, masonry, grid, flow, customLayout } from 'riff/layouts';
    *   <CollectionView layout={masonry({ columns: 3, heightForItem: fn })} ... />
    */
   layout?: CollectionViewLayout;
@@ -287,9 +287,9 @@ export interface CollectionViewProps<T = unknown> {
 
   /**
    * F1.2 — Imperative handle ref. Exposes snapshot(), apply(), invalidateKeys().
-   * Pass a ref created with useRef<CollectionViewHandle<T>>(null).
+   * Pass a ref created with useRef<RiffHandle<T>>(null).
    */
-  handle?: React.RefObject<CollectionViewHandle<T>>;
+  handle?: React.RefObject<RiffHandle<T>>;
 
   /**
    * F1.2 — Called by handle.apply(snap) with the new data array.
@@ -727,7 +727,7 @@ const MemoizedCellContent = React.memo(function MemoizedCellContent({
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function CollectionView<T = unknown>({
+export function Riff<T = unknown>({
   data: propData,
   sections: propSections,
   layout: layoutProp,
@@ -761,7 +761,7 @@ export function CollectionView<T = unknown>({
   renderScrollView: propRenderScrollView,
   style,
   showHUD = false,
-}: CollectionViewProps<T>) {
+}: RiffProps<T>) {
 
   // ── Section flattening ──────────────────────────────────────────────────────
   // If `sections` is provided, flatten to a flat item array. The rest of the
@@ -1233,9 +1233,9 @@ export function CollectionView<T = unknown>({
   // ── F1.2: Imperative handle ───────────────────────────────────────────────────
 
   useImperativeHandle(handle, () => ({
-    snapshot: () => new CollectionSnapshot(data, keyExtractor),
+    snapshot: () => new RiffSnapshot(data, keyExtractor),
 
-    apply: (snap: CollectionSnapshot<T>, animated = true) => {
+    apply: (snap: RiffSnapshot<T>, animated = true) => {
       const { data: newData, reloadedKeys } = snap.apply();
 
       // Evict cached heights for removed items (diff against current data)

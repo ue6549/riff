@@ -19,7 +19,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -113,7 +113,7 @@ export default function F1_3_PrefetchCallbacks() {
 
       {/* ── List ── */}
       <View style={S.list}>
-        <CollectionView
+        <Riff
           data={data}
           renderItem={renderItem}
           keyExtractor={keyExtractor}

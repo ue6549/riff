@@ -26,7 +26,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CollectionView } from '../components/CollectionView';
+import { Riff } from '../components/CollectionView';
 
 // ─── Global mount tracking ────────────────────────────────────────────────────
 
@@ -120,7 +120,7 @@ export default function M3_3_ColdEviction() {
       </View>
 
       {/* List */}
-      <CollectionView
+      <Riff
         key={resetKey}
         data={DATA}
         keyExtractor={item => String(item.id)}

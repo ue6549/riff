@@ -57,7 +57,7 @@ const SECTIONS: Section[] = [
   },
   {
     id: 'vs',
-    title: 'CollectionView vs FlashList',
+    title: 'Riff vs FlashList',
     subtitle: 'Honest capability comparison',
     accent: '#60a5fa',
     items: [
@@ -200,7 +200,7 @@ export default function SalientPoints() {
     <ScrollView style={S.root} contentContainerStyle={S.content}>
       {/* Hero */}
       <View style={S.hero}>
-        <Text style={S.heroTitle}>RNCollectionView</Text>
+        <Text style={S.heroTitle}>Riff</Text>
         <Text style={S.heroTagline}>
           UICollectionView-class power · React Native ergonomics
         </Text>
