@@ -293,10 +293,9 @@ function Scenario3({ mode, onRenderCount }: ScenarioProps) {
   const renderHetero = React.useCallback(({ item }: { item: HeteroItem }) => <HeteroCell item={item} />, []);
   // Declare 4 item types so FlashList creates typed recycling pools.
   // This is FlashList's design target — pool per type, reuse within type.
-  const heteroSizes: Record<string, number> = { image: 60, banner: 80, compact: 32, text: 44 };
   const overrideLayout3 = React.useCallback((layout: { size?: number; type?: string | number }, item: HeteroItem) => {
     layout.type = item.type;
-    layout.size = heteroSizes[item.type] ?? 50;
+    layout.size = HETERO_SIZES[item.type] ?? 50;
   }, []);
   return mode === 'cv' ? (
     <Riff data={data} keyExtractor={keyEx} estimatedItemHeight={50}

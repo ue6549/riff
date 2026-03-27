@@ -24,7 +24,8 @@ import {
   View,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { GridList } from '../../components/GridList';
+import { Riff } from '../../components/CollectionView';
+import { grid } from 'riff/src/layouts';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -104,11 +105,23 @@ const responsiveColumns = (containerWidth: number) =>
 
 // ── CV side: Grid with C++ layout ────────────────────────────────────────────
 
+const cvGridLayout = grid({
+  columns: responsiveColumns,
+  rowHeight: ROW_HEIGHT,
+  columnSpacing: 6,
+  rowSpacing: 6,
+});
+
 function CVResize({ widthAnim, onLayout: onLayoutCb }: {
   widthAnim: Animated.Value;
   onLayout?: () => void;
 }) {
   const keyExt = useCallback((item: GridItem) => String(item.id), []);
+  const renderCV = useCallback(({ item }: { item: GridItem }) => (
+    <View style={[S.gridCell, { backgroundColor: item.color }]}>
+      <Text style={S.cellId}>{item.id}</Text>
+    </View>
+  ), []);
 
   return (
     <Animated.View
@@ -120,19 +133,15 @@ function CVResize({ widthAnim, onLayout: onLayoutCb }: {
       }]}
       onLayout={onLayoutCb}
     >
-      <GridList
+      <Riff
         data={DATA}
-        columns={responsiveColumns}
-        columnSpacing={6}
-        rowSpacing={6}
-        rowHeight={ROW_HEIGHT}
+        layout={cvGridLayout}
         keyExtractor={keyExt}
-        insets={{ top: 4, left: 4, right: 4, bottom: 4 }}
-        renderItem={({ item }) => (
-          <View style={[S.gridCell, { backgroundColor: item.color }]}>
-            <Text style={S.cellId}>{item.id}</Text>
-          </View>
-        )}
+        renderItem={renderCV}
+        sectionInsetTop={4}
+        sectionInsetBottom={4}
+        sectionInsetLeft={4}
+        sectionInsetRight={4}
       />
     </Animated.View>
   );

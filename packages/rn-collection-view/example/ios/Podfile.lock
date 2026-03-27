@@ -2627,7 +2627,7 @@ DEPENDENCIES:
   - ReactAppDependencyProvider (from `build/generated/ios/ReactAppDependencyProvider`)
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
-  - RNCollectionView (from `../node_modules/rn-collection-view`)
+  - RNCollectionView (from `../node_modules/riff`)
   - SocketRocket (~> 0.7.1)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
@@ -2793,7 +2793,7 @@ EXTERNAL SOURCES:
   ReactCommon:
     :path: "../node_modules/react-native/ReactCommon"
   RNCollectionView:
-    :path: "../node_modules/rn-collection-view"
+    :path: "../node_modules/riff"
   Yoga:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 

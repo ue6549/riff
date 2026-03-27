@@ -67,10 +67,13 @@ class MasonryLayoutEngine implements CollectionViewLayout {
       return;
     }
 
+    const w = context.containerWidth;
+    const effectiveColumns = typeof d.columns === 'function' ? d.columns(w) : d.columns;
+
     // Build heights array via per-index callback
     const heights: number[] = new Array(sec.itemCount);
     for (let i = 0; i < sec.itemCount; i++) {
-      heights[i] = d.heightForItem(i, 0);
+      heights[i] = d.heightForItem(i, 0, w);
     }
 
     // Build keys array
@@ -81,7 +84,7 @@ class MasonryLayoutEngine implements CollectionViewLayout {
 
     const result = nativeMod.masonryLayout.computeMasonryLayout({
       itemCount: sec.itemCount,
-      columns: d.columns,
+      columns: effectiveColumns,
       columnSpacing: d.columnSpacing ?? 8,
       rowSpacing: d.rowSpacing ?? 8,
       viewportWidth: context.containerWidth,

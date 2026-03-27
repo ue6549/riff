@@ -276,6 +276,13 @@ export interface RiffProps<T = unknown> {
   onRenderCountChange?: (renderCount: number, totalCount: number) => void;
 
   /**
+   * Fires when the container's measured size changes.
+   * Useful for coordinating external UI (animations, other components) with container resize.
+   * The layout itself re-computes automatically — this callback is for consumer side effects only.
+   */
+  onContainerSizeChange?: (width: number, height: number) => void;
+
+  /**
    * P5.3 / FlashList-compatible blank area callback.
    * Fires on every scroll event with the number of blank (unrendered) pixels
    * at the top and bottom of the visible viewport.
@@ -761,6 +768,7 @@ export function Riff<T = unknown>({
   renderScrollView: propRenderScrollView,
   style,
   showHUD = false,
+  onContainerSizeChange,
 }: RiffProps<T>) {
 
   // ── Section flattening ──────────────────────────────────────────────────────
@@ -1292,6 +1300,7 @@ export function Riff<T = unknown>({
     const hChanged = h !== viewportHeightRef.current;
     if (wChanged) { viewportWidthRef.current = w; setViewportWidth(w); }
     if (hChanged) { viewportHeightRef.current = h; setViewportHeight(h); }
+    if ((wChanged || hChanged) && onContainerSizeChange) { onContainerSizeChange(w, h); }
 
     // ── Eager initial range: eliminate the blank-frame flash ────────────────
     // On the very first layout, renderRange is still null and the useEffect

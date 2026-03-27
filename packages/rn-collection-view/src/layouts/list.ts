@@ -47,12 +47,13 @@ class ListLayout implements CollectionViewLayout {
     // Build section params for C++ layout engine
     const sectionParams = context.sections.map((sec, sIdx) => {
       // Determine item heights for this section
+      const w = context.containerWidth;
       let itemHeights: number[] | undefined;
       if (d.heightForItem) {
         // Per-item callback — only compute for items in this section
         itemHeights = [];
         for (let i = 0; i < sec.itemCount; i++) {
-          itemHeights.push(d.heightForItem(i, sIdx));
+          itemHeights.push(d.heightForItem(i, sIdx, w));
         }
       }
 
@@ -85,7 +86,7 @@ class ListLayout implements CollectionViewLayout {
 
       const params: Record<string, unknown> = {
         itemCount: sec.itemCount,
-        itemHeight: d.itemHeight ?? d.estimatedItemHeight ?? 44,
+        itemHeight: (typeof d.itemHeight === 'function' ? d.itemHeight(context.containerWidth) : d.itemHeight) ?? d.estimatedItemHeight ?? 44,
         viewportWidth: context.containerWidth,
         sectionInsetTop: sec.insets?.top ?? 0,
         sectionInsetBottom: sec.insets?.bottom ?? 0,
@@ -147,7 +148,7 @@ class ListLayout implements CollectionViewLayout {
     const sectionParams = context.sections.map((sec, sIdx) => {
       const params: Record<string, unknown> = {
         itemCount: sec.itemCount,
-        itemHeight: this.delegate.itemHeight ?? this.delegate.estimatedItemHeight ?? 44,
+        itemHeight: (typeof this.delegate.itemHeight === 'function' ? this.delegate.itemHeight(context.containerWidth) : this.delegate.itemHeight) ?? this.delegate.estimatedItemHeight ?? 44,
         viewportWidth: context.containerWidth,
         itemSpacing: this.delegate.itemSpacing ?? 0,
         section: sIdx,

@@ -64,12 +64,16 @@ class GridLayoutEngine implements CollectionViewLayout {
       return;
     }
 
+    const w = context.containerWidth;
+    const effectiveColumns = typeof d.columns === 'function' ? d.columns(w) : d.columns;
+    const effectiveRowHeight = typeof d.rowHeight === 'function' ? d.rowHeight(w) : d.rowHeight;
+
     // Build per-item heights if dynamic
     let itemHeights: number[] | undefined;
-    if (!d.rowHeight && d.heightForItem) {
+    if (!effectiveRowHeight && d.heightForItem) {
       itemHeights = new Array(sec.itemCount);
       for (let i = 0; i < sec.itemCount; i++) {
-        itemHeights[i] = d.heightForItem(i, 0);
+        itemHeights[i] = d.heightForItem(i, 0, w);
       }
     }
 
@@ -81,11 +85,11 @@ class GridLayoutEngine implements CollectionViewLayout {
 
     const result = nativeMod.gridLayout.computeGridLayout({
       itemCount: sec.itemCount,
-      columns: d.columns,
+      columns: effectiveColumns,
       columnSpacing: d.columnSpacing ?? 0,
       rowSpacing: d.rowSpacing ?? 0,
-      viewportWidth: context.containerWidth,
-      rowHeight: d.rowHeight ?? 0,
+      viewportWidth: w,
+      rowHeight: effectiveRowHeight ?? 0,
       sectionInsetTop: sec.insets?.top ?? 0,
       sectionInsetBottom: sec.insets?.bottom ?? 0,
       sectionInsetLeft: sec.insets?.left ?? 0,

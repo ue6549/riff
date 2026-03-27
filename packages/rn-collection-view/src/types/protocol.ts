@@ -140,12 +140,13 @@ export interface InvalidationScope {
  */
 export interface ListLayoutDelegate {
   // ── Item sizing (one of these) ──
-  /** Fixed height for all items. Fast path — no measurement needed. */
-  itemHeight?: number;
+  /** Fixed height for all items, or a function of container width. Fast path — no measurement needed. */
+  itemHeight?: number | ((containerWidth: number) => number);
   /** Estimated height for variable-height items. Items will be measured after render. */
   estimatedItemHeight?: number;
-  /** Per-item height callback. Called only for items in the windowed range. */
-  heightForItem?: (index: number, section: number) => number;
+  /** Per-item height callback. Called only for items in the windowed range.
+   *  `containerWidth` lets the consumer compute aspect-ratio or breakpoint-based heights. */
+  heightForItem?: (index: number, section: number, containerWidth: number) => number;
 
   // ── Header sizing ──
   headerHeight?: number;
@@ -171,10 +172,11 @@ export interface ListLayoutDelegate {
  * Width is derived from container width and column count.
  */
 export interface MasonryLayoutDelegate {
-  /** Number of columns. Mandatory. */
-  columns: number;
-  /** Per-item height callback. Mandatory. Called only for items in the windowed range. */
-  heightForItem: (index: number, section: number) => number;
+  /** Number of columns, or a function of container width for responsive layouts. Mandatory. */
+  columns: number | ((containerWidth: number) => number);
+  /** Per-item height callback. Mandatory. Called only for items in the windowed range.
+   *  `containerWidth` lets the consumer compute aspect-ratio heights. */
+  heightForItem: (index: number, section: number, containerWidth: number) => number;
 
   // ── Header/footer sizing ──
   headerHeight?: number;
@@ -196,13 +198,14 @@ export interface MasonryLayoutDelegate {
  * Width is derived from container width and column count.
  */
 export interface GridLayoutDelegate {
-  /** Number of columns. Mandatory. */
-  columns: number;
+  /** Number of columns, or a function of container width for responsive layouts. Mandatory. */
+  columns: number | ((containerWidth: number) => number);
 
-  /** Fixed row height — all rows same height. */
-  rowHeight?: number;
-  /** Per-item height for dynamic rows. Row height = max(items in row). */
-  heightForItem?: (index: number, section: number) => number;
+  /** Fixed row height, or a function of container width (e.g. aspect-ratio cards). All rows same height. */
+  rowHeight?: number | ((containerWidth: number) => number);
+  /** Per-item height for dynamic rows. Row height = max(items in row).
+   *  `containerWidth` lets the consumer compute aspect-ratio heights. */
+  heightForItem?: (index: number, section: number, containerWidth: number) => number;
 
   // ── Header/footer sizing ──
   headerHeight?: number;
@@ -225,8 +228,9 @@ export interface GridLayoutDelegate {
  * the next item wouldn't fit.
  */
 export interface FlowLayoutDelegate {
-  /** Per-item size callback. Mandatory. Returns both width and height. */
-  sizeForItem: (index: number, section: number) => Readonly<{ width: number; height: number }>;
+  /** Per-item size callback. Mandatory. Returns both width and height.
+   *  `containerWidth` lets the consumer derive proportional widths or aspect-ratio heights. */
+  sizeForItem: (index: number, section: number, containerWidth: number) => Readonly<{ width: number; height: number }>;
 
   // ── Header/footer sizing ──
   headerHeight?: number;

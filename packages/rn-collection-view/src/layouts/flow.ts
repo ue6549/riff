@@ -66,8 +66,9 @@ class FlowLayoutEngine implements CollectionViewLayout {
     // Build widths and heights arrays via per-index callback
     const widths: number[] = new Array(sec.itemCount);
     const heights: number[] = new Array(sec.itemCount);
+    const w = context.containerWidth;
     for (let i = 0; i < sec.itemCount; i++) {
-      const size = d.sizeForItem(i, 0);
+      const size = d.sizeForItem(i, 0, w);
       widths[i] = size.width;
       heights[i] = size.height;
     }

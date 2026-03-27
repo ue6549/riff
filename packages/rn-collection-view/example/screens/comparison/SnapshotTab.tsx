@@ -166,8 +166,9 @@ export default function SnapshotTab() {
     <View style={S.root}>
       {/* Callout */}
       <View style={S.callout}>
-        <Text style={S.calloutGreen}>CV: identity-based snapshot API — diff, animate, preserve scroll.</Text>
+        <Text style={S.calloutGreen}>Riff: identity-based snapshot API — insert/delete/move with scroll preserved.</Text>
         <Text style={S.calloutAmber}>FlashList: no snapshot API — replace data array, no identity tracking.</Text>
+        <Text style={S.calloutPending}>⏳ Cell animation on snapshot apply — pending (LayoutAnimation wired, per-cell spring in roadmap).</Text>
       </View>
 
       {/* Column headers */}
@@ -212,6 +213,8 @@ const S = StyleSheet.create({
                   borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
   calloutAmber: { fontSize: 10, color: '#fcd34d', backgroundColor: '#2a2510',
                   borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
+  calloutPending: { fontSize: 10, color: '#94a3b8', backgroundColor: '#1a1a2a',
+                    borderRadius: 6, paddingHorizontal: 8, paddingVertical: 4 },
 
   headers: { flexDirection: 'row', paddingHorizontal: 8, paddingTop: 6 },
   colHeader: { flex: 1, fontSize: 11, fontWeight: '700', textAlign: 'center' },
