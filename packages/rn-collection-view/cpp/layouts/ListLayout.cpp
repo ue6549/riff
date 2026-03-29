@@ -105,61 +105,56 @@ bool ListLayout::applyMeasurements(
     LayoutCache& cache) {
   if (deltas.empty()) return true;
 
-  // For list layout, when heights change, all subsequent items shift by the delta.
-  // Find the earliest affected index, update its height, then shift everything after.
-  int earliestIndex = std::numeric_limits<int>::max();
+  // For a 1D list layout, changing item heights simply shifts everything below them.
+  // Instead of recalculating Y from scratch (which loses section insets and headers),
+  // we accumulate a rolling `aggregateShift` and apply it sequentially.
+
+  // 1. Convert deltas to a fast lookup map: key -> delta height.
+  // d.newValue is the new height. We need to know (new - old) later.
+  std::unordered_map<std::string, double> newHeights;
   for (const auto& d : deltas) {
-    // Update the height in cache.
-    auto attrs = cache.getAttributes(d.key);
-    if (attrs) {
-      auto updated = *attrs;
-      updated.frame.height = d.newValue;
-      updated.sizingState = SizingState::Measured;
-      cache.setAttributes(updated);
-      if (d.index < earliestIndex) earliestIndex = d.index;
-    }
+    newHeights[d.key] = d.newValue;
   }
 
-  if (earliestIndex == std::numeric_limits<int>::max()) return true;
-
-  // Reflow from earliest affected index: read all items in order, recompute Y.
   auto all = cache.getAll();
+  if (all.empty()) return true;
 
-  // Sort by current Y to get layout order (cache getAll returns insertion order).
+  // Sort by strictly increasing Y to process top-to-bottom.
   std::sort(all.begin(), all.end(), [](const LayoutAttributes& a, const LayoutAttributes& b) {
     return a.frame.y < b.frame.y;
   });
 
-  // Find the item spacing by looking at gaps between consecutive items.
-  double spacing = 0;
-  if (all.size() >= 2) {
-    // Spacing = gap between item 0 bottom and item 1 top.
-    spacing = all[1].frame.y - (all[0].frame.y + all[0].frame.height);
-    if (spacing < 0) spacing = 0;
-  }
+  double aggregateShift = 0.0;
 
-  // Find the earliest item in sorted order and reflow from there.
-  double y = -1;
-  for (size_t i = 0; i < all.size(); ++i) {
-    if (all[i].index >= earliestIndex && !all[i].isSupplementary) {
-      if (i == 0) {
-        y = all[i].frame.y; // keep its current Y, it's the first item
-      } else {
-        // Y = previous item's bottom + spacing
-        y = all[i - 1].frame.y + all[i - 1].frame.height + spacing;
+  for (auto& attr : all) {
+    bool changed = false;
+
+    // Apply any accumulated shift from items above us
+    if (aggregateShift != 0.0) {
+      attr.frame.y += aggregateShift;
+      changed = true;
+    }
+
+    // If this item itself has a new measurement, update it and add to rolling shift
+    auto it = newHeights.find(attr.key);
+    if (it != newHeights.end()) {
+      double newHeight = it->second;
+      double heightDiff = newHeight - attr.frame.height;
+      
+      if (heightDiff != 0.0) {
+        attr.frame.height = newHeight;
+        aggregateShift += heightDiff;
+        changed = true;
       }
-      // Reflow from here
-      for (size_t j = i; j < all.size(); ++j) {
-        if (all[j].isSupplementary) continue;
-        if (all[j].frame.y != y) {
-          auto updated = all[j];
-          updated.frame.y = y;
-          cache.setAttributes(updated);
-          all[j].frame.y = y; // keep local copy in sync
-        }
-        y = all[j].frame.y + all[j].frame.height + spacing;
+      if (attr.sizingState != SizingState::Measured) {
+        attr.sizingState = SizingState::Measured;
+        changed = true;
       }
-      break;
+    }
+
+    // Write back to cache if modified
+    if (changed) {
+      cache.setAttributes(attr);
     }
   }
 
