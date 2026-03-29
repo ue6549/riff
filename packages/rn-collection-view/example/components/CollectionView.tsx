@@ -941,10 +941,15 @@ export function Riff<T = unknown>({
       let minIdx = Infinity, maxIdx = -Infinity;
       for (const attr of attrs) {
         const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(attr.key) ?? -1) : attr.index;
-        if (fi === -1) continue;
+        if (fi === -1) {
+          console.log(`[RNCVX-MISS] C++ emitted key='${attr.key}' but JS map didn't have it!`);
+          continue;
+        }
         if (fi < minIdx) minIdx = fi;
         if (fi > maxIdx) maxIdx = fi;
       }
+      
+      console.log(`[RNCVX] scrollY=${scrollY} sectioned=${isSectioned} C++_attr_count=${attrs.length} -> max_fi=${maxIdx}`);
       const render = { first: minIdx === Infinity ? 0 : minIdx, last: maxIdx === -Infinity ? -1 : maxIdx };
 
       const visAttrs = effectiveLayout.attributesForElements({
