@@ -394,7 +394,7 @@ const S = StyleSheet.create({
   listCellTitle: { fontSize: 15, fontWeight: '600', color: '#fff' },
   listCellSub: { fontSize: 12, color: '#888', marginTop: 2 },
 
-  gridCell: { flex: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  gridCell: { height: 100, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   gridCellText: { fontSize: 18, fontWeight: '700', color: '#fff' },
 
   masonryCell: { flex: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },

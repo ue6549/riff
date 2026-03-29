@@ -1269,16 +1269,12 @@ export function Riff<T = unknown>({
     let estimatedTop: number;
     let cellLeft = sectionInsetLeft;
     let cellWidth = itemWidth;
-    let cellHeight: number | undefined = !isVariableHeight && !measureOnly ? effectiveItemHeight : undefined;
 
     const attr = effectiveLayout.attributesForItem(index, 0);
     if (attr) {
       estimatedTop = attr.frame.y;
       cellLeft = attr.frame.x;
       cellWidth = attr.frame.width;
-      if (attr.frame.height > 0) {
-        cellHeight = attr.frame.height;
-      }
     } else {
       estimatedTop = sectionInsetTop + index * stride;
     }
@@ -1286,6 +1282,9 @@ export function Riff<T = unknown>({
     const top  = (measureOnly && !useRealPosition) ? -9999 : estimatedTop;
     const left = (measureOnly && !useRealPosition) ? -9999 : cellLeft;
 
+    // No explicit height — Yoga measures from content. The ShadowNode reads
+    // Yoga's measured height, compares with the LayoutCache estimate, and
+    // cascades position corrections if they differ (zero-frame correction).
     const containerStyle = [
       {
         position: 'absolute' as const,
@@ -1293,7 +1292,6 @@ export function Riff<T = unknown>({
         top,
         ...(viewportWidth > 0 ? { width: cellWidth } : {}),
       },
-      cellHeight != null && !measureOnly && { height: cellHeight },
     ];
 
     // ShadowNode measures via Yoga — no RNMeasuredCell wrapping needed.

@@ -3,9 +3,13 @@
  *
  * Backed by the C++ GridLayout engine via JSI.
  * Items placed left-to-right in rows. Each row's height = tallest item in that row
- * (or fixed `rowHeight` if provided).
+ * (or estimated `rowHeight` if provided — actual height determined by Yoga).
  *
  * Width per item = (containerWidth - insets - spacing) / columns.
+ *
+ * The C++ engine writes LayoutAttributes to the shared LayoutCache.
+ * This JS wrapper delegates all spatial queries to the LayoutCache so the
+ * ShadowNode's measurement corrections are immediately visible to JS.
  */
 
 import type {
@@ -45,9 +49,6 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class GridLayoutEngine implements CollectionViewLayout {
   readonly type = 'grid';
   private readonly delegate: GridLayoutDelegate;
-  private _contentHeight = 0;
-  private _positions: number[] = [];
-  private _containerWidth = 0;
 
   constructor(delegate: GridLayoutDelegate) {
     this.delegate = delegate;
@@ -55,12 +56,9 @@ class GridLayoutEngine implements CollectionViewLayout {
 
   prepare(context: LayoutContext): void {
     const d = this.delegate;
-    this._containerWidth = context.containerWidth;
 
     const sec = context.sections[0];
     if (!sec || sec.itemCount === 0 || context.containerWidth <= 0) {
-      this._contentHeight = 0;
-      this._positions = [];
       return;
     }
 
@@ -85,7 +83,10 @@ class GridLayoutEngine implements CollectionViewLayout {
       keys[i] = `grid-${i}`;
     }
 
-    const result = nativeMod.gridLayout.computeGridLayout({
+    // C++ engine computes layout and writes to shared LayoutCache.
+    // We discard the JS return value — all queries go through the cache
+    // so ShadowNode measurement corrections are immediately visible.
+    nativeMod.gridLayout.computeGridLayout({
       itemCount: sec.itemCount,
       columns: effectiveColumns,
       columnSpacing: d.columnSpacing ?? 0,
@@ -99,69 +100,14 @@ class GridLayoutEngine implements CollectionViewLayout {
       ...(itemHeights ? { itemHeights } : {}),
       keys,
     });
-
-    this._positions = result.positions;
-    this._contentHeight = result.contentHeight;
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    const result: LayoutAttributes[] = [];
-    const pos = this._positions;
-    const n = pos.length / 4;
-
-    for (let i = 0; i < n; i++) {
-      const x = pos[i * 4]!;
-      const y = pos[i * 4 + 1]!;
-      const w = pos[i * 4 + 2]!;
-      const h = pos[i * 4 + 3]!;
-
-      if (y + h < inRect.y || y > inRect.y + inRect.height) continue;
-      if (x + w < inRect.x || x > inRect.x + inRect.width) continue;
-
-      result.push({
-        key: `grid-${i}`,
-        section: 0,
-        index: i,
-        frame: { x, y, width: w, height: h },
-        zIndex: 0,
-        isSupplementary: false,
-        supplementaryKind: null,
-        sizingState: 'measured',
-        isDirty: false,
-        tier: 'visible',
-        isSticky: false,
-        alpha: 1,
-        isAnimating: false,
-      });
-    }
-
-    return result;
+    return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
   attributesForItem(index: number, _section: number): LayoutAttributes | null {
-    const pos = this._positions;
-    if (index < 0 || index >= pos.length / 4) return null;
-
-    return {
-      key: `grid-${index}`,
-      section: 0,
-      index,
-      frame: {
-        x: pos[index * 4]!,
-        y: pos[index * 4 + 1]!,
-        width: pos[index * 4 + 2]!,
-        height: pos[index * 4 + 3]!,
-      },
-      zIndex: 0,
-      isSupplementary: false,
-      supplementaryKind: null,
-      sizingState: 'measured',
-      isDirty: false,
-      tier: 'visible',
-      isSticky: false,
-      alpha: 1,
-      isAnimating: false,
-    };
+    return nativeMod.layoutCache.getAttributes(`grid-${index}`);
   }
 
   attributesForSupplementary(_kind: string, _section: number): LayoutAttributes | null {
@@ -169,7 +115,7 @@ class GridLayoutEngine implements CollectionViewLayout {
   }
 
   contentSize(): Size {
-    return { width: this._containerWidth, height: this._contentHeight };
+    return nativeMod.layoutCache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {
@@ -185,10 +131,10 @@ class GridLayoutEngine implements CollectionViewLayout {
  * Create a grid layout with the given delegate configuration.
  *
  * ```typescript
- * // Fixed row height
+ * // Estimated row height (actual determined by Yoga measurement)
  * layout={grid({ columns: 3, rowHeight: 100, columnSpacing: 8, rowSpacing: 8 })}
  *
- * // Dynamic row height (tallest in row wins)
+ * // Dynamic per-item height estimate (tallest in row wins)
  * layout={grid({ columns: 3, heightForItem: (i) => heights[i], columnSpacing: 8 })}
  * ```
  */
