@@ -92,6 +92,22 @@ std::string CollectionViewModule::ping() {
   return "pong";
 }
 
+void CollectionViewModule::invalidate() {
+  _layoutCacheJSI.reset();
+  _listLayoutJSI.reset();
+  _windowControllerJSI.reset();
+  _metricsJSI.reset();
+  _signpostJSI.reset();
+  _diffEngineJSI.reset();
+  _memoryJSI.reset();
+  _masonryLayoutJSI.reset();
+  _gridLayoutJSI.reset();
+  _flowLayoutJSI.reset();
+
+  _memoryPressureJsFn.reset();
+  _memoryPressureRt = nullptr;
+}
+
 Value CollectionViewModule::getLayoutCacheObject(Runtime& rt) {
   if (!_layoutCacheJSI.has_value()) {
     Object obj(rt);

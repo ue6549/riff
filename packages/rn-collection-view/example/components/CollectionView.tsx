@@ -1245,9 +1245,9 @@ export function Riff<T = unknown>({
       
       let attr = null;
       if (isSectioned && fiDesc?._kind === 'header') {
-        attr = effectiveLayout.attributesForSupplementaryView?.('header', 0, fiDesc.sectionIndex);
+        attr = effectiveLayout.attributesForSupplementary?.('header', fiDesc.sectionIndex);
       } else {
-        attr = effectiveLayout.attributesForItem(isSectioned ? (fiDesc?.itemIndex ?? fi) : fi, isSectioned ? (fiDesc?.sectionIndex ?? 0) : 0);
+        attr = effectiveLayout.attributesForItem(isSectioned ? ((fiDesc as any)?.itemIndex ?? fi) : fi, isSectioned ? (fiDesc?.sectionIndex ?? 0) : 0);
       }
       
       const naturalY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
@@ -1259,9 +1259,9 @@ export function Riff<T = unknown>({
         const nextDesc = isSectioned ? flattenResult?.flatData[nextFi] : null;
         let nextAttr = null;
         if (isSectioned && nextDesc?._kind === 'header') {
-          nextAttr = effectiveLayout.attributesForSupplementaryView?.('header', 0, nextDesc.sectionIndex);
+          nextAttr = effectiveLayout.attributesForSupplementary?.('header', nextDesc.sectionIndex);
         } else {
-          nextAttr = effectiveLayout.attributesForItem(isSectioned ? (nextDesc?.itemIndex ?? nextFi) : nextFi, isSectioned ? (nextDesc?.sectionIndex ?? 0) : 0);
+          nextAttr = effectiveLayout.attributesForItem(isSectioned ? ((nextDesc as any)?.itemIndex ?? nextFi) : nextFi, isSectioned ? (nextDesc?.sectionIndex ?? 0) : 0);
         }
         boundaryY = nextAttr ? nextAttr.frame.y : sectionInsetTop + nextFi * stride;
       }

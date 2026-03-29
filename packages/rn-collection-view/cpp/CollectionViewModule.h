@@ -42,6 +42,7 @@ public:
   explicit CollectionViewModule(std::shared_ptr<CallInvoker> jsInvoker);
 
   std::string ping();
+  void invalidate() override;
   jsi::Value get(jsi::Runtime& rt, const jsi::PropNameID& name) override;
 
   /**
