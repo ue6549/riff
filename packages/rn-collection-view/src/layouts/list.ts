@@ -112,6 +112,8 @@ class ListLayout implements CollectionViewLayout {
       return params;
     });
 
+    console.log(`[RNCVX-LIST] Sending to C++ nativeMod.listLayout.computeSections:`, sectionParams.map(s => ({ headerHeight: s.headerHeight, footerHeight: s.footerHeight, itemCount: s.itemCount })));
+
     nativeMod.layoutCache.clear();
 
     if (sectionParams.length === 1) {
