@@ -132,7 +132,7 @@ class ListLayout implements CollectionViewLayout {
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    const key = `${kind}-${section}`;
+    const key = `item-${section}-${kind}`;
     return nativeMod.layoutCache.getAttributes(key);
   }
 

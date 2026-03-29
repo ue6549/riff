@@ -939,17 +939,19 @@ export function Riff<T = unknown>({
       setRenderRange({ first: 0, last: -1 });
     } else {
       let minIdx = Infinity, maxIdx = -Infinity;
+      let missedKeys = [];
       for (const attr of attrs) {
         const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(attr.key) ?? -1) : attr.index;
         if (fi === -1) {
-          console.log(`[RNCVX-MISS] C++ emitted key='${attr.key}' but JS map didn't have it!`);
+          missedKeys.push(attr.key);
           continue;
         }
         if (fi < minIdx) minIdx = fi;
         if (fi > maxIdx) maxIdx = fi;
       }
       
-      console.log(`[RNCVX] scrollY=${scrollY} sectioned=${isSectioned} C++_attr_count=${attrs.length} -> max_fi=${maxIdx}`);
+      if (missedKeys.length > 0) console.log(`[RNCVX] scrollY=${scrollY} MISSING KEYS (first 3):`, missedKeys.slice(0, 3));
+      console.log(`[RNCVX] scrollY=${scrollY} sectioned=${isSectioned} C++_attr_count=${attrs.length} -> max_fi=${maxIdx} min_fi=${minIdx}`);
       const render = { first: minIdx === Infinity ? 0 : minIdx, last: maxIdx === -Infinity ? -1 : maxIdx };
 
       const visAttrs = effectiveLayout.attributesForElements({
@@ -1271,6 +1273,7 @@ export function Riff<T = unknown>({
         boundaryY = nextAttr ? nextAttr.frame.y : sectionInsetTop + nextFi * stride;
       }
 
+      console.log(`[RNCVX-STICKY] sIdx=${fiDesc?.sectionIndex} naturalY=${naturalY} boundaryY=${boundaryY} attrOk=${!!attr} fi=${fi} nextFi=${nextFi}`);
       map.set(fi, { naturalY, boundaryY, headerHeight });
     }
     return map;
