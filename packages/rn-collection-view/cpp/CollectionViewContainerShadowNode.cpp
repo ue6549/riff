@@ -84,6 +84,28 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   RNCV_SN_LOG("correctPositions cacheId=%d cache=%s engine=%s layout=%s renderStart=%d children=%zu containerW=%.1f",
               props.layoutCacheId, cache ? "YES" : "NO", engine ? "YES" : "NO",
               layoutType.c_str(), renderRangeStart, children.size(), containerWidth);
+  RNCV_SN_LOG("keyResolution keyPrefix=%s cacheVersion=%llu", keyPrefix.c_str(),
+              static_cast<unsigned long long>(cache ? cache->version() : 0ULL));
+
+  auto warnOnMissingSupplementaryKey = [&](const std::string& type,
+                                           const std::string& kind,
+                                           int32_t index,
+                                           const std::string& cacheKey) {
+    if (layoutType == "list" && type == "supplementary" && cacheKey.empty()) {
+      RNCV_SN_LOG("WARNING missing cacheKey for list supplementary node (kind=%s index=%d). Falling back to positional key; header/footer placement may drift.",
+                  kind.c_str(), index);
+    }
+  };
+  auto warnOnUnexpectedType = [&](const std::string& type,
+                                  const std::string& kind,
+                                  int32_t index,
+                                  const std::string& cacheKey) {
+    if (layoutType == "list" && !type.empty() &&
+        type != "cell" && type != "supplementary" && type != "decoration") {
+      RNCV_SN_LOG("WARNING unexpected child type=%s kind=%s index=%d cacheKey=%s",
+                  type.c_str(), kind.c_str(), index, cacheKey.c_str());
+    }
+  };
 
   // ── Phase 1: Read positions from cache for each mounted child ──────────
   //
@@ -95,17 +117,61 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   correctedPositions_.reserve(children.size() * 4);
 
   for (size_t i = 0; i < children.size(); ++i) {
-    const auto dataIndex = renderRangeStart + static_cast<int32_t>(i);
-    const auto key = keyPrefix + std::to_string(dataIndex);
+    // Read the cache key from the child's props (same logic as Phase 2).
+    // This is critical for headers/footers whose keys are "item-{section}-header",
+    // not "item-{section}-{dataIndex}".
+    std::string key;
+    std::string propType;
+    std::string propKind;
+    int32_t propIndex = -1;
+    std::string propCacheKey;
+    std::string component = "unknown";
+    std::string fallbackKey;
+    if (auto measuredProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
+      const auto& p = *measuredProps;
+      component = "RNMeasuredCell";
+      propType = p.type;
+      propKind = p.kind;
+      propIndex = p.index;
+      propCacheKey = p.cacheKey;
+      warnOnMissingSupplementaryKey(p.type, p.kind, p.index, p.cacheKey);
+      warnOnUnexpectedType(p.type, p.kind, p.index, p.cacheKey);
+      key = p.cacheKey;
+      if (key.empty()) {
+        fallbackKey = keyPrefix + std::to_string(p.index >= 0 ? p.index : (renderRangeStart + static_cast<int32_t>(i)));
+        key = fallbackKey;
+      }
+    } else if (auto scrollProps = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
+      const auto& p = *scrollProps;
+      component = "RNScrollCoordinatedView";
+      propType = p.type;
+      propKind = p.kind;
+      propIndex = p.index;
+      propCacheKey = p.cacheKey;
+      warnOnMissingSupplementaryKey(p.type, p.kind, p.index, p.cacheKey);
+      warnOnUnexpectedType(p.type, p.kind, p.index, p.cacheKey);
+      key = p.cacheKey;
+      if (key.empty()) {
+        fallbackKey = keyPrefix + std::to_string(p.index >= 0 ? p.index : (renderRangeStart + static_cast<int32_t>(i)));
+        key = fallbackKey;
+      }
+    } else {
+      // Unknown child type — use positional fallback
+      const auto dataIndex = renderRangeStart + static_cast<int32_t>(i);
+      fallbackKey = keyPrefix + std::to_string(dataIndex);
+      key = fallbackKey;
+    }
 
     Float effectiveX = 0;
     Float effectiveY = 0;
     Float effectiveWidth = containerWidth;
     Float effectiveHeight = estimatedItemHeight;
 
+    bool cacheHit = false;
     if (cache) {
       auto cached = cache->getAttributes(key);
       if (cached) {
+        cacheHit = true;
         effectiveX = static_cast<Float>(cached->frame.x);
         effectiveY = static_cast<Float>(cached->frame.y);
         if (cached->frame.width > 0) {
@@ -123,10 +189,11 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     correctedPositions_.push_back(effectiveHeight);
 
     // Log first 5 children: cache position vs what we'll store
-    if (i < 5) {
+    if (i < 8 || propKind == "header" || key.find("header") != std::string::npos) {
       const auto& childMetrics = children[i]->getLayoutMetrics();
-      RNCV_SN_LOG("  child[%zu] key=%s cache=(%.1f,%.1f,%.1f,%.1f) yoga=(%.1f,%.1f,%.1f,%.1f)",
-                  i, key.c_str(),
+      RNCV_SN_LOG("  child[%zu] component=%s type=%s kind=%s index=%d propCacheKey=%s fallbackKey=%s finalKey=%s cacheHit=%s cache=(%.1f,%.1f,%.1f,%.1f) yoga=(%.1f,%.1f,%.1f,%.1f)",
+                  i, component.c_str(), propType.c_str(), propKind.c_str(), propIndex,
+                  propCacheKey.c_str(), fallbackKey.c_str(), key.c_str(), cacheHit ? "YES" : "NO",
                   effectiveX, effectiveY, effectiveWidth, effectiveHeight,
                   childMetrics.frame.origin.x, childMetrics.frame.origin.y,
                   childMetrics.frame.size.width, childMetrics.frame.size.height);
@@ -150,17 +217,21 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     std::string kind;
     int32_t dataIndex = -1;
 
-    if (auto cellNode = std::dynamic_pointer_cast<const RNMeasuredCellShadowNode>(children[i])) {
-      const auto& p = cellNode->getConcreteProps();
+    if (auto measuredProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
+      const auto& p = *measuredProps;
       type = p.type;
       kind = p.kind;
       dataIndex = p.index;
+      warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
+      warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
       key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
-    } else if (auto scrollNode = std::dynamic_pointer_cast<const RNScrollCoordinatedViewShadowNode>(children[i])) {
-      const auto& p = scrollNode->getConcreteProps();
+    } else if (auto scrollProps = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
+      const auto& p = *scrollProps;
       type = p.type;
       kind = p.kind;
       dataIndex = p.index;
+      warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
+      warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
       key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
     } else {
       RNCV_SN_LOG("child[%zu] is neither RNMeasuredCell nor RNScrollCoordinatedView, skipping", i);
@@ -168,9 +239,14 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     }
     
     // Fallback logic for old apps parsing by type/kind
+    const std::string keyBeforeRemap = key;
     if (key.empty() || (!type.empty() && key.find(keyPrefix) == 0)) {
        if (type == "supplementary") key = kind + "-" + std::to_string(dataIndex);
        else if (type == "decoration") key = "deco-" + kind + "-" + std::to_string(dataIndex);
+    }
+    if (i < 8 || kind == "header" || key.find("header") != std::string::npos) {
+      RNCV_SN_LOG("  remap[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",
+                  i, type.c_str(), kind.c_str(), dataIndex, keyBeforeRemap.c_str(), key.c_str());
     }
 
     const auto& childMetrics = children[i]->getLayoutMetrics();
@@ -200,9 +276,14 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
 
   if (!deltas.empty() && engine && cache) {
     hadMeasurementDeltas_ = true;
+    const auto cacheVersionBeforeApply = cache->version();
     RNCV_SN_LOG("applyMeasurements: %zu deltas (first: key=%s old=%.1f new=%.1f)",
                 deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
     bool handled = engine->applyMeasurements(deltas, *cache);
+    RNCV_SN_LOG("applyMeasurements handled=%s cacheVersionBefore=%llu cacheVersionAfter=%llu",
+                handled ? "YES" : "NO",
+                static_cast<unsigned long long>(cacheVersionBeforeApply),
+                static_cast<unsigned long long>(cache->version()));
 
     if (handled) {
       // Re-read all positions from cache (engine may have cascaded changes).
@@ -212,25 +293,34 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
         std::string kind;
         int32_t dataIndex = -1;
 
-        if (auto cellNode = std::dynamic_pointer_cast<const RNMeasuredCellShadowNode>(children[i])) {
-          const auto& p = cellNode->getConcreteProps();
+        if (auto measuredProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
+          const auto& p = *measuredProps;
           type = p.type;
           kind = p.kind;
           dataIndex = p.index;
+          warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
+          warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
           key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
-        } else if (auto scrollNode = std::dynamic_pointer_cast<const RNScrollCoordinatedViewShadowNode>(children[i])) {
-          const auto& p = scrollNode->getConcreteProps();
+        } else if (auto scrollProps = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
+          const auto& p = *scrollProps;
           type = p.type;
           kind = p.kind;
           dataIndex = p.index;
+          warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
+          warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
           key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
         } else {
           continue;
         }
         
+        const std::string keyBeforeRemap = key;
         if (key.empty() || (!type.empty() && key.find(keyPrefix) == 0)) {
            if (type == "supplementary") key = kind + "-" + std::to_string(dataIndex);
            else if (type == "decoration") key = "deco-" + kind + "-" + std::to_string(dataIndex);
+        }
+        if (i < 8 || kind == "header" || key.find("header") != std::string::npos) {
+          RNCV_SN_LOG("  reread[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",
+                      i, type.c_str(), kind.c_str(), dataIndex, keyBeforeRemap.c_str(), key.c_str());
         }
 
         auto cached = cache->getAttributes(key);
@@ -239,6 +329,11 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
           correctedPositions_[i * 4 + 1] = static_cast<Float>(cached->frame.y);
           correctedPositions_[i * 4 + 2] = static_cast<Float>(cached->frame.width);
           correctedPositions_[i * 4 + 3] = static_cast<Float>(cached->frame.height);
+          if (i < 8 || kind == "header" || key.find("header") != std::string::npos) {
+            RNCV_SN_LOG("  rereadHit[%zu] key=%s frame=(%.1f,%.1f,%.1f,%.1f)",
+                        i, key.c_str(), cached->frame.x, cached->frame.y,
+                        cached->frame.width, cached->frame.height);
+          }
         }
       }
     }

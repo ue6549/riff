@@ -164,11 +164,21 @@ function ListDemo() {
   const listLayout = useMemo(() => list({
     estimatedItemHeight: 72,
     itemSpacing: 8,
+    stickyMode: 'push',
   }), []);
 
   const sections = useMemo(() => [{
     key: 'section-0',
     data: LIST_DATA.slice(0, 50),
+    header: {
+      render: () => (
+        <View style={{ height: 50, backgroundColor: '#e94560', justifyContent: 'center', paddingHorizontal: 16 }}>
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Section 1</Text>
+        </View>
+      ),
+      height: 50,
+      sticky: true,
+    },
     insets: { top: 8, bottom: 8, left: 0, right: 0 },
   }], []);
 

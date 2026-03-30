@@ -3,6 +3,18 @@
 #include <sstream>
 #include <stdexcept>
 
+#if DEBUG
+  #ifdef __APPLE__
+    #include <os/log.h>
+    #define RNCV_LIST_LOG(fmt, ...) os_log_info(os_log_create("com.rncv", "listlayout"), "[RNCV-LIST] " fmt, ##__VA_ARGS__)
+  #else
+    #include <android/log.h>
+    #define RNCV_LIST_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "RNCV-LIST", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_LIST_LOG(fmt, ...) ((void)0)
+#endif
+
 namespace rncv {
 
 using namespace facebook;
@@ -289,6 +301,9 @@ double ListLayout::computeSection(const ListLayoutParams& p,
   const double contentWidth = p.viewportWidth - p.sectionInsetLeft - p.sectionInsetRight;
 
   double y = startY;
+  RNCV_LIST_LOG("computeSection start section=%d p.section=%d prefix=%s itemCount=%d headerH=%.1f footerH=%.1f startY=%.1f keysCount=%zu",
+                sectionIndex, p.section, prefix.c_str(), p.itemCount, p.headerHeight, p.footerHeight,
+                startY, p.keys.size());
 
   // ── Header ────────────────────────────────────────────────────────────────
   if (p.headerHeight > 0) {
@@ -301,6 +316,9 @@ double ListLayout::computeSection(const ListLayoutParams& p,
     _scratch.sizingState      = SizingState::Measured;
     _scratch.isDirty          = false;
     _cache->setAttributes(_scratch);
+    RNCV_LIST_LOG("write key=%s kind=%s section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                  _scratch.key.c_str(), _scratch.supplementaryKind.c_str(), _scratch.section, _scratch.index,
+                  _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
     y += p.headerHeight;
   }
 
@@ -324,6 +342,11 @@ double ListLayout::computeSection(const ListLayoutParams& p,
       _scratch.index  = i;
       _scratch.frame.y = y;
       _cache->setAttributes(_scratch);
+      if (i < 5 || i == p.itemCount - 1) {
+        RNCV_LIST_LOG("write key=%s kind=item section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                      _scratch.key.c_str(), _scratch.section, _scratch.index,
+                      _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
+      }
       y += p.itemHeight + p.itemSpacing;
     }
   } else {
@@ -337,6 +360,11 @@ double ListLayout::computeSection(const ListLayoutParams& p,
       _scratch.frame.y    = y;
       _scratch.frame.height = h;
       _cache->setAttributes(_scratch);
+      if (i < 5 || i == count - 1) {
+        RNCV_LIST_LOG("write key=%s kind=item section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                      _scratch.key.c_str(), _scratch.section, _scratch.index,
+                      _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
+      }
       y += h + p.itemSpacing;
     }
   }
@@ -358,9 +386,13 @@ double ListLayout::computeSection(const ListLayoutParams& p,
     _scratch.sizingState      = SizingState::Measured;
     _scratch.isDirty          = false;
     _cache->setAttributes(_scratch);
+    RNCV_LIST_LOG("write key=%s kind=%s section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                  _scratch.key.c_str(), _scratch.supplementaryKind.c_str(), _scratch.section, _scratch.index,
+                  _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
     y += p.footerHeight;
   }
 
+  RNCV_LIST_LOG("computeSection end section=%d endY=%.1f", sectionIndex, y);
   return y; // Y where next section starts
 }
 
@@ -368,9 +400,11 @@ double ListLayout::computeSection(const ListLayoutParams& p,
 
 void ListLayout::computeSections(const std::vector<ListLayoutParams>& sections) {
   double y = 0.0;
+  RNCV_LIST_LOG("computeSections begin sections=%zu", sections.size());
   for (int s = 0; s < static_cast<int>(sections.size()); ++s) {
     y = computeSection(sections[s], s, y);
   }
+  RNCV_LIST_LOG("computeSections end totalContentHeight=%.1f", y);
 }
 
 // ─── computeSectionFromCache ──────────────────────────────────────────────────

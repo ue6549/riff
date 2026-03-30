@@ -2737,7 +2737,7 @@ __metadata:
     react-native: "npm:0.83.4"
     react-native-safe-area-context: "npm:^5.5.2"
     react-test-renderer: "npm:19.2.0"
-    riff: "file:../"
+    riff: "link:../"
     typescript: "npm:^5.8.3"
   languageName: unknown
   linkType: soft
@@ -7736,15 +7736,11 @@ __metadata:
   languageName: node
   linkType: hard
 
-"riff@file:../::locator=CollectionViewExample%40workspace%3A.":
-  version: 0.1.0
-  resolution: "riff@file:../#../::hash=a321d7&locator=CollectionViewExample%40workspace%3A."
-  peerDependencies:
-    react: ">=19.2.0"
-    react-native: ">=0.83.0"
-  checksum: 10c0/899ddf4b53db3ad393f5c8167a36f691cccca754f19834ea1c92c281f6b877fa165e8d12a89d220f3d06220b6540eece20307bfd018355a8023eb6c83cf81093
+"riff@link:../::locator=CollectionViewExample%40workspace%3A.":
+  version: 0.0.0-use.local
+  resolution: "riff@link:../::locator=CollectionViewExample%40workspace%3A."
   languageName: node
-  linkType: hard
+  linkType: soft
 
 "rimraf@npm:^3.0.2":
   version: 3.0.2

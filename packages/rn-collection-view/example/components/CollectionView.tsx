@@ -465,6 +465,17 @@ interface FlattenResult<T> {
   keyToFlatIndex:            Map<string, number>;
 }
 
+const RNCV_DEBUG_LOGS = true;
+
+function rncvLog(tag: string, payload: Record<string, unknown>) {
+  if (!__DEV__ || !RNCV_DEBUG_LOGS) return;
+  // Print a single serialized line so Metro doesn't collapse payload to "Object".
+  const serialized = JSON.stringify(payload, (_key, value) =>
+    value === undefined ? '__undefined__' : value
+  );
+  console.log(`[${tag}] ${serialized}`);
+}
+
 function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
   const flatData:                FlatItem<T>[] = [];
   const stickyHeaderFlatIndices: number[]      = [];
@@ -483,11 +494,31 @@ function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
       declaredHeights.set(`__h_${s.key}`, s.header.height);
       keyToFlatIndex.set(`item-${si}-header`, fi);
       flatData.push({ _kind: 'header', sectionIndex: si });
+      rncvLog('RNCV-JS-FLAT', {
+        op: 'push-header',
+        sectionIndex: si,
+        sectionKey: s.key,
+        flatIndex: fi,
+        cacheKey: `item-${si}-header`,
+        sticky: !!s.header.sticky,
+        declaredHeight: s.header.height,
+      });
     }
 
     for (let ii = 0; ii < s.data.length; ii++) {
-      keyToFlatIndex.set(`item-${si}-${ii}`, flatData.length);
+      const fi = flatData.length;
+      keyToFlatIndex.set(`item-${si}-${ii}`, fi);
       flatData.push({ _kind: 'item', sectionIndex: si, item: s.data[ii]!, itemIndex: ii });
+      if (ii < 3 || ii === s.data.length - 1) {
+        rncvLog('RNCV-JS-FLAT', {
+          op: 'push-item',
+          sectionIndex: si,
+          sectionKey: s.key,
+          itemIndex: ii,
+          flatIndex: fi,
+          cacheKey: `item-${si}-${ii}`,
+        });
+      }
     }
 
     if (s.footer) {
@@ -496,8 +527,28 @@ function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
       declaredHeights.set(`__f_${s.key}`, s.footer.height);
       keyToFlatIndex.set(`item-${si}-footer`, fi);
       flatData.push({ _kind: 'footer', sectionIndex: si });
+      rncvLog('RNCV-JS-FLAT', {
+        op: 'push-footer',
+        sectionIndex: si,
+        sectionKey: s.key,
+        flatIndex: fi,
+        cacheKey: `item-${si}-footer`,
+        sticky: !!s.footer.sticky,
+        declaredHeight: s.footer.height,
+      });
     }
   }
+
+  rncvLog('RNCV-JS-FLAT', {
+    op: 'summary',
+    sectionCount: sections.length,
+    flatCount: flatData.length,
+    stickyHeaderFlatIndices,
+    stickyFooterFlatIndices,
+    sectionStartFlatIndices,
+    keyToFlatIndexSize: keyToFlatIndex.size,
+    keyToFlatIndexSample: Array.from(keyToFlatIndex.entries()).slice(0, 16),
+  });
 
   return { flatData, stickyHeaderFlatIndices, stickyFooterFlatIndices, sectionStartFlatIndices, declaredHeights, keyToFlatIndex };
 }
@@ -510,10 +561,38 @@ function sectionedKeyExtractor<T>(
   flatIndex: number,
 ): string {
   const sk = sections[fi.sectionIndex]?.key ?? String(fi.sectionIndex);
-  if (fi._kind === 'header') return `__h_${sk}`;
-  if (fi._kind === 'footer') return `__f_${sk}`;
+  if (fi._kind === 'header') {
+    const out = `__h_${sk}`;
+    rncvLog('RNCV-JS-KEY', {
+      kind: fi._kind,
+      sectionIndex: fi.sectionIndex,
+      flatIndex,
+      reactKey: out,
+    });
+    return out;
+  }
+  if (fi._kind === 'footer') {
+    const out = `__f_${sk}`;
+    rncvLog('RNCV-JS-KEY', {
+      kind: fi._kind,
+      sectionIndex: fi.sectionIndex,
+      flatIndex,
+      reactKey: out,
+    });
+    return out;
+  }
   const raw = userKE ? userKE(fi.item, fi.sectionIndex, fi.itemIndex) : String(flatIndex);
-  return `${sk}:${raw}`;
+  const out = `${sk}:${raw}`;
+  if (fi.itemIndex < 3) {
+    rncvLog('RNCV-JS-KEY', {
+      kind: fi._kind,
+      sectionIndex: fi.sectionIndex,
+      itemIndex: fi.itemIndex,
+      flatIndex,
+      reactKey: out,
+    });
+  }
+  return out;
 }
 
 // ─── Cell wrapper ─────────────────────────────────────────────────────────────
@@ -693,6 +772,18 @@ export function Riff<T = unknown>({
     [propSections],
   );
 
+  useEffect(() => {
+    if (!isSectioned || !flattenResult) return;
+    rncvLog('RNCV-JS-FLAT', {
+      op: 'useMemo-result',
+      flatCount: flattenResult.flatData.length,
+      stickyHeaders: flattenResult.stickyHeaderFlatIndices,
+      stickyFooters: flattenResult.stickyFooterFlatIndices,
+      sectionStartFlatIndices: flattenResult.sectionStartFlatIndices,
+      keyToFlatIndexSize: flattenResult.keyToFlatIndex.size,
+    });
+  }, [isSectioned, flattenResult]);
+
   // In sectioned mode, wrap the consumer's renderItem to dispatch
   // headers/footers to their section render functions.
   const sectionedRenderItem = useCallback((info: RenderItemInfo<any>) => {
@@ -705,7 +796,19 @@ export function Riff<T = unknown>({
 
   const sectionedKeyExtractorCb = useCallback((item: any, index: number) => {
     if (!propSections) return propKeyExtractor ? propKeyExtractor(item, index) : String(index);
-    return sectionedKeyExtractor(propSections, propKeyExtractor, item as FlatItem<T>, index);
+    const fi = item as FlatItem<T>;
+    const k = sectionedKeyExtractor(propSections, propKeyExtractor, fi, index);
+    if (fi._kind === 'header' || fi._kind === 'footer' || (fi._kind === 'item' && fi.itemIndex < 2)) {
+      rncvLog('RNCV-JS-KEY', {
+        op: 'sectionedKeyExtractorCb',
+        flatIndex: index,
+        kind: fi._kind,
+        sectionIndex: fi.sectionIndex,
+        itemIndex: (fi as any).itemIndex,
+        reactKey: k,
+      });
+    }
+    return k;
   }, [propSections, propKeyExtractor]);
 
   // Effective values used by the rest of the component.
@@ -1280,6 +1383,17 @@ export function Riff<T = unknown>({
         console.log(`[RNCVX-DEBUG] Section ${fiDesc.sectionIndex} header raw native cache hit: `, !!rawCache);
       }
       console.log(`[RNCVX-STICKY] sIdx=${fiDesc?.sectionIndex} naturalY=${naturalY} boundaryY=${boundaryY} attrOk=${!!attr} fi=${fi} nextFi=${nextFi}`);
+      rncvLog('RNCV-JS-STICKY', {
+        op: 'stickyConfigMap-entry',
+        fi,
+        sectionIndex: fiDesc?.sectionIndex,
+        kind: fiDesc?._kind,
+        attrHit: !!attr,
+        naturalY,
+        boundaryY,
+        headerHeight,
+        nextFi,
+      });
       map.set(fi, { naturalY, boundaryY, headerHeight });
     }
     return map;
@@ -1309,6 +1423,16 @@ export function Riff<T = unknown>({
     if (fiDesc?._kind === 'header') cacheKey = `item-${sk}-header`;
     if (fiDesc?._kind === 'footer') cacheKey = `item-${sk}-footer`;
     if (effectiveLayout.type !== 'list') cacheKey = `${effectiveLayout.type}-${index}`;
+    rncvLog('RNCV-JS-CELL', {
+      op: 'derive-cell-key',
+      index,
+      measureOnly,
+      layoutType: effectiveLayout.type,
+      kind: fiDesc?._kind,
+      sectionIndex: fiDesc?.sectionIndex,
+      itemIndex: (fiDesc as any)?.itemIndex,
+      cacheKey,
+    });
 
     // Render-range cells are Activity=visible. Measure-range cells use
     // Activity=hidden so Fabric computes their Yoga layout without painting.
@@ -1341,6 +1465,20 @@ export function Riff<T = unknown>({
     } else {
       estimatedTop = sectionInsetTop + index * stride;
     }
+    rncvLog('RNCV-JS-CELL', {
+      op: 'layout-attr',
+      index,
+      measureOnly,
+      kind: fiDesc?._kind,
+      sectionIndex: fiDesc?.sectionIndex,
+      cacheKey,
+      attrHit: !!attr,
+      attrY: attr?.frame?.y,
+      attrH: attr?.frame?.height,
+      estimatedTop,
+      cellLeft,
+      cellWidth,
+    });
 
     const top  = (measureOnly && !useRealPosition) ? -9999 : estimatedTop;
     const left = (measureOnly && !useRealPosition) ? -9999 : cellLeft;
@@ -1365,6 +1503,16 @@ export function Riff<T = unknown>({
     );
 
     const stickyConfig = stickyConfigMap?.get(index);
+    rncvLog('RNCV-JS-CELL', {
+      op: 'render-branch',
+      index,
+      measureOnly,
+      kind: fiDesc?._kind,
+      sectionIndex: fiDesc?.sectionIndex,
+      cacheKey,
+      stickyConfig: !!stickyConfig,
+      branch: stickyConfig && !measureOnly ? 'RNScrollCoordinatedView' : 'RNMeasuredCell',
+    });
 
     if (stickyConfig && !measureOnly) {
       // RNScrollCoordinatedView IS the cell container — its transform must be
@@ -1456,6 +1604,14 @@ export function Riff<T = unknown>({
 
     const first = Math.max(0, activeSlot - STICKY_BUFFER_BEFORE);
     const last  = Math.min(stickyHeaderFlatIndices.length - 1, activeSlot + STICKY_BUFFER_AFTER);
+    rncvLog('RNCV-JS-STICKY', {
+      op: 'sticky-active-window',
+      scrollY,
+      stickyHeaderFlatIndices,
+      activeSlot,
+      first,
+      last,
+    });
 
     mountedStickySet = new Set<number>();
     stickyHeaderCells = [];
@@ -1465,6 +1621,11 @@ export function Riff<T = unknown>({
       mountedStickySet.add(fi);
       stickyHeaderCells.push(renderCell(data[fi]!, fi, false));
     }
+    rncvLog('RNCV-JS-STICKY', {
+      op: 'sticky-mounted',
+      mountedStickyIndices: Array.from(mountedStickySet.values()),
+      mountedCount: mountedStickySet.size,
+    });
   }
 
   const scrollContent = (() => {
@@ -1503,6 +1664,17 @@ export function Riff<T = unknown>({
         cells.push(renderCell(data[i]!, i, measureOnly));
       }
     }
+    rncvLog('RNCV-JS-RANGE', {
+      op: 'scrollContent',
+      rr,
+      measureRange,
+      effFirst,
+      effLast,
+      cellsCount: cells.length,
+      stickyCellsCount: stickyHeaderCells?.length ?? 0,
+      mountedStickyIndices: mountedStickySet ? Array.from(mountedStickySet.values()) : [],
+      isVariableHeight,
+    });
 
     return <>{stickyHeaderCells}{cells}</>;
   })();

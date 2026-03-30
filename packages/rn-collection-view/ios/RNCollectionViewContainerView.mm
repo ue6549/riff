@@ -119,13 +119,21 @@ static os_log_t rncvLog(void) {
 - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView
                           index:(NSInteger)index
 {
+  RNCV_LOG("mountChild index=%ld tag=%ld beforeSubviews=%lu",
+           (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
   [_contentView insertSubview:childComponentView atIndex:index];
+  RNCV_LOG("mountChild index=%ld tag=%ld afterSubviews=%lu",
+           (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
 }
 
 - (void)unmountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView
                             index:(NSInteger)index
 {
+  RNCV_LOG("unmountChild index=%ld tag=%ld beforeSubviews=%lu",
+           (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
   [childComponentView removeFromSuperview];
+  RNCV_LOG("unmountChild index=%ld tag=%ld afterSubviews=%lu",
+           (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
 }
 
 // ── Props ───────────────────────────────────────────────────────────────────
@@ -165,6 +173,9 @@ static os_log_t rncvLog(void) {
            data.positions.size() / 4,
            (unsigned long)_contentView.subviews.count,
            data.contentSize.height);
+  RNCV_LOG("updateState rev=%d contentOffset=(%.1f,%.1f) correctionY=%.1f",
+           data.layoutRevision, _scrollView.contentOffset.x, _scrollView.contentOffset.y,
+           data.contentOffsetCorrectionY);
 
   // Reset scroll offset on first state (new mount).
   if (!_hasReceivedFirstState) {
@@ -228,8 +239,10 @@ static os_log_t rncvLog(void) {
     _scrollView.frame = self.bounds;
   }
 
-  RNCV_LOG("layoutSubviews subviews=%lu",
-           (unsigned long)_contentView.subviews.count);
+  RNCV_LOG("layoutSubviews subviews=%lu offset=(%.1f,%.1f) contentSize=(%.1f,%.1f)",
+           (unsigned long)_contentView.subviews.count,
+           _scrollView.contentOffset.x, _scrollView.contentOffset.y,
+           _scrollView.contentSize.width, _scrollView.contentSize.height);
 
   [self applyPositionsFromState:@"layoutSubviews"];
 
@@ -272,8 +285,10 @@ static os_log_t rncvLog(void) {
     return;
   }
 
-  RNCV_LOG("applyPositions(%s) posCount=%zu subviews=%lu",
-           caller.UTF8String, childCount, (unsigned long)subviews.count);
+  int32_t revision = _state ? _state->getData().layoutRevision : -1;
+  RNCV_LOG("applyPositions(%s) rev=%d posCount=%zu subviews=%lu offset=(%.1f,%.1f)",
+           caller.UTF8String, revision, childCount, (unsigned long)subviews.count,
+           _scrollView.contentOffset.x, _scrollView.contentOffset.y);
 
   // Apply full frame (position + size) from ShadowNode-computed layout.
   for (size_t i = 0; i < childCount && i < (size_t)subviews.count; i++) {
@@ -285,9 +300,9 @@ static os_log_t rncvLog(void) {
     CGRect frame = child.frame;
 
     // Log first 5 children
-    if (i < 5) {
-      RNCV_LOG("  apply[%zu] target=(%.1f,%.1f,%.1f,%.1f) current=(%.1f,%.1f,%.1f,%.1f)",
-               i, targetX, targetY, targetW, targetH,
+    if (i < 8) {
+      RNCV_LOG("  apply[%zu] tag=%ld target=(%.1f,%.1f,%.1f,%.1f) current=(%.1f,%.1f,%.1f,%.1f)",
+               i, (long)child.tag, targetX, targetY, targetW, targetH,
                frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
     }
 
@@ -295,6 +310,12 @@ static os_log_t rncvLog(void) {
         (frame.origin.x != targetX || frame.origin.y != targetY ||
          frame.size.width != targetW || frame.size.height != targetH)) {
       child.frame = CGRectMake(targetX, targetY, targetW, targetH);
+      if (i < 8) {
+        CGRect applied = child.frame;
+        RNCV_LOG("  applied[%zu] tag=%ld frame=(%.1f,%.1f,%.1f,%.1f)",
+                 i, (long)child.tag,
+                 applied.origin.x, applied.origin.y, applied.size.width, applied.size.height);
+      }
     }
   }
 }
