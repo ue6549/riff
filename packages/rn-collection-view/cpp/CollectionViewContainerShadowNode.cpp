@@ -238,12 +238,8 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
       continue;
     }
     
-    // Fallback logic for old apps parsing by type/kind
+    // No legacy key remap: preserve canonical cache keys end-to-end.
     const std::string keyBeforeRemap = key;
-    if (key.empty() || (!type.empty() && key.find(keyPrefix) == 0)) {
-       if (type == "supplementary") key = kind + "-" + std::to_string(dataIndex);
-       else if (type == "decoration") key = "deco-" + kind + "-" + std::to_string(dataIndex);
-    }
     if (i < 8 || kind == "header" || key.find("header") != std::string::npos) {
       RNCV_SN_LOG("  remap[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",
                   i, type.c_str(), kind.c_str(), dataIndex, keyBeforeRemap.c_str(), key.c_str());
@@ -313,11 +309,8 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
           continue;
         }
         
+        // No legacy key remap: preserve canonical cache keys end-to-end.
         const std::string keyBeforeRemap = key;
-        if (key.empty() || (!type.empty() && key.find(keyPrefix) == 0)) {
-           if (type == "supplementary") key = kind + "-" + std::to_string(dataIndex);
-           else if (type == "decoration") key = "deco-" + kind + "-" + std::to_string(dataIndex);
-        }
         if (i < 8 || kind == "header" || key.find("header") != std::string::npos) {
           RNCV_SN_LOG("  reread[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",
                       i, type.c_str(), kind.c_str(), dataIndex, keyBeforeRemap.c_str(), key.c_str());

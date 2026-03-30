@@ -298,18 +298,37 @@ static os_log_t rncvLog(void) {
     CGFloat targetW = positions[i * 4 + 2];
     CGFloat targetH = positions[i * 4 + 3];
     CGRect frame = child.frame;
+    const BOOL hasActiveTransform = !CGAffineTransformIsIdentity(child.transform);
+    const CGFloat currentNaturalX =
+        hasActiveTransform ? (child.center.x - child.bounds.size.width * 0.5f) : frame.origin.x;
+    const CGFloat currentNaturalY =
+        hasActiveTransform ? (child.center.y - child.bounds.size.height * 0.5f) : frame.origin.y;
+    const CGFloat currentNaturalW = hasActiveTransform ? child.bounds.size.width : frame.size.width;
+    const CGFloat currentNaturalH = hasActiveTransform ? child.bounds.size.height : frame.size.height;
+    static const CGFloat kLayoutEpsilon = 0.1f;
+    const BOOL differsX = std::abs(currentNaturalX - targetX) > kLayoutEpsilon;
+    const BOOL differsY = std::abs(currentNaturalY - targetY) > kLayoutEpsilon;
+    const BOOL differsW = std::abs(currentNaturalW - targetW) > kLayoutEpsilon;
+    const BOOL differsH = std::abs(currentNaturalH - targetH) > kLayoutEpsilon;
 
     // Log first 5 children
     if (i < 8) {
-      RNCV_LOG("  apply[%zu] tag=%ld target=(%.1f,%.1f,%.1f,%.1f) current=(%.1f,%.1f,%.1f,%.1f)",
-               i, (long)child.tag, targetX, targetY, targetW, targetH,
-               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height);
+      RNCV_LOG("  apply[%zu] tag=%ld transformed=%s target=(%.1f,%.1f,%.1f,%.1f) current=(%.1f,%.1f,%.1f,%.1f) natural=(%.1f,%.1f,%.1f,%.1f)",
+               i, (long)child.tag, hasActiveTransform ? "YES" : "NO", targetX, targetY, targetW, targetH,
+               frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+               currentNaturalX, currentNaturalY, currentNaturalW, currentNaturalH);
     }
 
     if (targetW > 0 && targetH > 0 &&
-        (frame.origin.x != targetX || frame.origin.y != targetY ||
-         frame.size.width != targetW || frame.size.height != targetH)) {
-      child.frame = CGRectMake(targetX, targetY, targetW, targetH);
+        (differsX || differsY || differsW || differsH)) {
+      if (hasActiveTransform) {
+        // Keep transformed sticky views stable by updating their natural geometry
+        // (bounds + center) instead of transformed frame.
+        child.bounds = CGRectMake(0, 0, targetW, targetH);
+        child.center = CGPointMake(targetX + targetW * 0.5f, targetY + targetH * 0.5f);
+      } else {
+        child.frame = CGRectMake(targetX, targetY, targetW, targetH);
+      }
       if (i < 8) {
         CGRect applied = child.frame;
         RNCV_LOG("  applied[%zu] tag=%ld frame=(%.1f,%.1f,%.1f,%.1f)",
