@@ -3,9 +3,10 @@
 /**
  * CollectionViewContainerState — shared state between ShadowNode and native view.
  *
- * The ShadowNode writes layout corrections during layout().
- * The native iOS view reads them in updateState: to apply positions
- * and scroll offset corrections.
+ * The ShadowNode writes layout positions during layout().
+ * The native iOS view reads them in updateState: to apply child frames.
+ * MVC scroll offset correction is handled separately via LayoutCache
+ * (snapshotAnchor → computeCorrection → consumePendingCorrection).
  *
  * State is immutable per revision — updates create new instances.
  */
@@ -32,20 +33,6 @@ class CollectionViewContainerState final {
  public:
   CollectionViewContainerState() = default;
 
-  CollectionViewContainerState(
-      Size contentSize,
-      Point contentOffset,
-      Rect contentBoundingRect,
-      std::vector<Float> positions,
-      Float contentOffsetCorrectionY,
-      int32_t layoutRevision)
-      : contentSize(contentSize),
-        contentOffset(contentOffset),
-        contentBoundingRect(contentBoundingRect),
-        positions(std::move(positions)),
-        contentOffsetCorrectionY(contentOffsetCorrectionY),
-        layoutRevision(layoutRevision) {}
-
   // ── Scroll container state (superset of ScrollViewState) ──────────
 
   /// Total scrollable content size.
@@ -57,17 +44,13 @@ class CollectionViewContainerState final {
   /// Bounding rect of all mounted children.
   Rect contentBoundingRect{};
 
-  // ── Layout correction state ───────────────────────────────────────
+  // ── Layout position state ─────────────────────────────────────────
 
   /// Flat array [x0,y0,w0,h0, x1,y1,w1,h1, ...] for mounted children.
   /// Written by ShadowNode::layout(), read by native view for positioning.
   std::vector<Float> positions;
 
-  /// Scroll offset correction delta. When items above viewport change
-  /// height, native view applies this to UIScrollView.contentOffset.y.
-  Float contentOffsetCorrectionY = 0;
-
-  /// Bumped on every layout correction. Native view uses to detect changes.
+  /// Bumped on every layout revision. Native view uses to detect changes.
   int32_t layoutRevision = 0;
 
   // ── Window state ──────────────────────────────────────────────────

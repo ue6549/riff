@@ -15,13 +15,13 @@
  *   Radial Arc — TS custom layout, circular. FlashList: not possible.
  *   3D Carousel — TS custom layout, perspective. FlashList: not possible.
  */
-import React, { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
+import { Pressable, ScrollView, StyleSheet, Text, View, Animated, Easing } from 'react-native';
 import { Riff as CollectionView } from '../../components/CollectionView';
-import { list } from 'riff/src/layouts/list';
-import { grid } from 'riff/src/layouts/grid';
-import { masonry } from 'riff/src/layouts/masonry';
-import { flow } from 'riff/src/layouts/flow';
+import { list } from '../../../src/layouts/list';
+import { grid } from '../../../src/layouts/grid';
+import { masonry } from '../../../src/layouts/masonry';
+import { flow } from '../../../src/layouts/flow';
 import { CircularList } from '../../components/CircularList';
 import { Carousel3D } from '../../components/Carousel3D';
 
@@ -33,12 +33,16 @@ const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d'
 
 const LIST_COUNT = 500;
 type ListItem = { id: string; color: string; num: number; subtitle: string };
-const LIST_DATA: ListItem[] = Array.from({ length: LIST_COUNT }, (_, i) => ({
-  id: `list-${i}`,
-  color: COLORS[i % COLORS.length]!,
-  num: i,
-  subtitle: `Item ${i} — ${['Short', 'A bit longer text', 'This is a much longer subtitle to show variable content'][i % 3]}`,
-}));
+const LIST_DATA: ListItem[] = Array.from({ length: LIST_COUNT }, (_, i) => {
+  const lineCount = (i % 3) + 1;
+  const subtitle = Array(lineCount).fill('This is a dynamically sized text line that proves Yoga intrinsic measurement works perfectly.').join('\n');
+  return {
+    id: `list-${i}`,
+    color: COLORS[i % COLORS.length]!,
+    num: i,
+    subtitle,
+  };
+});
 
 // ── Grid data ────────────────────────────────────────────────────────────────
 
@@ -110,29 +114,90 @@ const CAROUSEL_DATA: CarouselItem[] = Array.from({ length: CAROUSEL_COUNT }, (_,
 
 // ── List layout config ──────────────────────────────────────────────────────
 
+// ── Supplemental Animated Components ──────────────────────────────────────────
+
+function AnimatedSectionBackground({ sectionIndex }: { sectionIndex: number }) {
+  const anim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(anim, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const opacity = anim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.05, 0.15]
+  });
+
+  return <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: COLORS[sectionIndex % COLORS.length]!, opacity }]} />;
+}
+
+function AnimatedTimerHeader({ title, color }: { title: string, color: string }) {
+  const [ticks, setTicks] = useState(0);
+  useEffect(() => {
+    const int = setInterval(() => setTicks(t => t + 1), 100);
+    return () => clearInterval(int);
+  }, []);
+  
+  return (
+    <View style={{ height: 50, backgroundColor: color, justifyContent: 'center', paddingHorizontal: 16 }}>
+      <Text style={{ color: '#fff', fontWeight: 'bold' }}>{title}  |  Ticks Native State: {ticks}</Text>
+    </View>
+  );
+}
+
+function AnimatedTimerFooter({ title }: { title: string }) {
+  return (
+    <View style={{ height: 30, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' }}>
+      <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold' }}>{title}</Text>
+    </View>
+  );
+}
+
+// ── List layout config ──────────────────────────────────────────────────────
+
 function ListDemo() {
   const listLayout = useMemo(() => list({
-    itemHeight: 72,
-    itemSpacing: 0,
+    estimatedItemHeight: 72,
+    itemSpacing: 8,
+    stickyMode: 'push',
   }), []);
+
+  const sections = useMemo(() => [{
+    key: 'section-0',
+    data: LIST_DATA.slice(0, 50),
+    header: {
+      render: () => (
+        <View style={{ height: 50, backgroundColor: '#e94560', justifyContent: 'center', paddingHorizontal: 16 }}>
+          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Section 1</Text>
+        </View>
+      ),
+      height: 50,
+      sticky: true,
+    },
+    footer: {
+      render: () => <AnimatedTimerFooter title="Section 1 Footer" />,
+      height: 30,
+      sticky: true,
+    },
+    insets: { top: 8, bottom: 8, left: 0, right: 0 },
+  }], []);
 
   return (
     <CollectionView
-      data={LIST_DATA}
+      sections={sections}
       layout={listLayout}
       estimatedItemHeight={72}
-      sectionInsetTop={0}
-      sectionInsetBottom={0}
-      sectionInsetLeft={0}
-      sectionInsetRight={0}
+      scrollViewProps={{ style: { backgroundColor: '#2a2a3e' }, indicatorStyle: 'white' }}
       keyExtractor={useCallback((item: ListItem) => item.id, [])}
       renderItem={useCallback(({ item }: { item: ListItem }) => (
-        <View style={[S.listCell, { borderLeftColor: item.color }]}>
-          <Text style={S.listCellNum}>{item.num}</Text>
-          <View style={S.listCellContent}>
-            <Text style={S.listCellTitle}>Item {item.num}</Text>
-            <Text style={S.listCellSub} numberOfLines={1}>{item.subtitle}</Text>
-          </View>
+        <View style={{ backgroundColor: '#1a1a2e', borderLeftWidth: 4, borderLeftColor: item.color, paddingHorizontal: 16, paddingVertical: 12 }}>
+          <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Item {item.num}</Text>
+          <Text style={{ color: '#aaa', fontSize: 13, marginTop: 4 }}>{item.subtitle}</Text>
         </View>
       ), [])}
     />
@@ -386,15 +451,15 @@ const S = StyleSheet.create({
 
   content: { flex: 1 },
 
-  listCell: { height: 72, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16,
-              borderLeftWidth: 4, borderBottomWidth: StyleSheet.hairlineWidth,
-              borderBottomColor: 'rgba(255,255,255,0.08)' },
+  listCell: { minHeight: 72, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16,
+              borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.08)',
+              borderLeftWidth: 4, backgroundColor: 'rgba(255,255,255,0.03)' },
   listCellNum: { fontSize: 14, fontWeight: '700', color: '#888', width: 36 },
   listCellContent: { flex: 1 },
   listCellTitle: { fontSize: 15, fontWeight: '600', color: '#fff' },
-  listCellSub: { fontSize: 12, color: '#888', marginTop: 2 },
+  listCellSub: { fontSize: 12, color: '#888', marginTop: 4, lineHeight: 18 },
 
-  gridCell: { flex: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  gridCell: { height: 100, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   gridCellText: { fontSize: 18, fontWeight: '700', color: '#fff' },
 
   masonryCell: { flex: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },

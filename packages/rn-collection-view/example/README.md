@@ -50,6 +50,25 @@ bundle exec pod install
 
 For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
 
+### Local Riff Guardrails
+
+This example consumes the local library from `../` via a live link (`"riff": "link:../"`).
+To prevent stale native sources in `example/node_modules/riff`, run these from `example/`:
+
+```sh
+# Verify node_modules/riff points to ../
+yarn check:riff-link
+
+# Re-link riff if it drifts
+yarn sync:riff
+
+# Install pods only after link verification
+yarn pods
+```
+
+When launching Metro / iOS / Android via package scripts, this project sets
+`NODE_OPTIONS=--preserve-symlinks` so linked package resolution remains stable.
+
 ```sh
 # Using npm
 npm run ios

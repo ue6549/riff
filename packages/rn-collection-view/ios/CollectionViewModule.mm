@@ -26,6 +26,7 @@ using namespace facebook::react;
 // P5.3 — one os_log handle shared across all signpost intervals.
 // Defined at file scope so it outlives any module instance.
 static os_log_t _rncvLog;
+static const BOOL kRNCVEnableSignposts = NO;
 
 @implementation RNCollectionViewModule {
   std::shared_ptr<CollectionViewModule> _cppModule;
@@ -81,27 +82,29 @@ RCT_EXPORT_MODULE(RNCollectionViewModule)
   // P5.3 — signpost callbacks. Called on JS thread; os_signpost is thread-safe.
   // Names must be compile-time string literals — os_signpost requirement.
   // id: 0=ScrollHandler  1=LayoutPass  2=MeasureFlush
-  if (!_rncvLog) {
-    _rncvLog = os_log_create("com.rncv", "CollectionView");
-  }
-  mod->setSignpostCallbacks(
-    ^(int eventId) {
-      switch (eventId) {
-        case 0: os_signpost_interval_begin(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "ScrollHandler"); break;
-        case 1: os_signpost_interval_begin(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "LayoutPass");    break;
-        case 2: os_signpost_interval_begin(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "MeasureFlush"); break;
-        default: break;
-      }
-    },
-    ^(int eventId) {
-      switch (eventId) {
-        case 0: os_signpost_interval_end(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "ScrollHandler"); break;
-        case 1: os_signpost_interval_end(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "LayoutPass");    break;
-        case 2: os_signpost_interval_end(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "MeasureFlush"); break;
-        default: break;
-      }
+  if (kRNCVEnableSignposts) {
+    if (!_rncvLog) {
+      _rncvLog = os_log_create("com.rncv", "CollectionView");
     }
-  );
+    mod->setSignpostCallbacks(
+      ^(int eventId) {
+        switch (eventId) {
+          case 0: os_signpost_interval_begin(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "ScrollHandler"); break;
+          case 1: os_signpost_interval_begin(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "LayoutPass");    break;
+          case 2: os_signpost_interval_begin(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "MeasureFlush"); break;
+          default: break;
+        }
+      },
+      ^(int eventId) {
+        switch (eventId) {
+          case 0: os_signpost_interval_end(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "ScrollHandler"); break;
+          case 1: os_signpost_interval_end(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "LayoutPass");    break;
+          case 2: os_signpost_interval_end(_rncvLog, OS_SIGNPOST_ID_EXCLUSIVE, "MeasureFlush"); break;
+          default: break;
+        }
+      }
+    );
+  }
 
   return mod;
 }

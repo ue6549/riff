@@ -9,6 +9,16 @@
 
 using namespace facebook::react;
 
+#ifndef RNCV_ENABLE_STICKY_TRACE
+#define RNCV_ENABLE_STICKY_TRACE 0
+#endif
+
+#if DEBUG && RNCV_ENABLE_STICKY_TRACE
+  #define RNCV_IOS_STICKY_LOG(...) NSLog(__VA_ARGS__)
+#else
+  #define RNCV_IOS_STICKY_LOG(...) ((void)0)
+#endif
+
 // String→enum for behavior prop.
 static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   return b == RNScrollCoordinatedViewBehavior::Push;
@@ -26,6 +36,7 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   CGFloat _headerHeight;
   BOOL    _isPush;
   BOOL    _enabled;
+  BOOL    _isFooter;
 }
 
 // ── Fabric registration ──────────────────────────────────────────────────────
@@ -46,6 +57,7 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
     _headerHeight = 0;
     _isPush      = YES;    // default behavior = push
     _enabled     = YES;
+    _isFooter    = NO;
     _observing   = NO;
   }
   return self;
@@ -56,7 +68,22 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   [self _stopObserving];
 }
 
-// ── Props ────────────────────────────────────────────────────────────────────
+// ── Layout metrics ────────────────────────────────────────────────────────────
+//
+// Fabric calls this when Yoga assigns a new frame to the view.  The base class
+// sets center/bounds from the Yoga-computed natural position but does NOT touch
+// layer.transform.  If a sticky translate is active the view would appear at
+// naturalY + staleTranslate — visually wrong.  Re-apply the transform
+// immediately so the correct visual position is established.
+
+- (void)updateLayoutMetrics:(const facebook::react::LayoutMetrics &)layoutMetrics
+           oldLayoutMetrics:(const facebook::react::LayoutMetrics &)oldLayoutMetrics
+{
+  [super updateLayoutMetrics:layoutMetrics oldLayoutMetrics:oldLayoutMetrics];
+  [self _applyTransform];
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 - (void)updateProps:(const Props::Shared &)props oldProps:(const Props::Shared &)oldProps
 {
@@ -68,6 +95,7 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   _headerHeight = newProps.headerHeight;
   _isPush       = isPush(newProps.behavior);
   _enabled      = newProps.enabled;
+  _isFooter     = (newProps.kind == "footer");
 
   // Re-apply transform immediately with current scroll position.
   [self _applyTransform];
@@ -105,6 +133,12 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   if (!_observing && self.window) {
     [self _findAndObserveScrollView];
   }
+
+  // Recompute the sticky transform whenever our geometry changes.
+  // applyPositionsFromState (in the container view) sets our bounds+center,
+  // which marks us as needing layout and lands here.  Without this call,
+  // the transform stays stale until the next scroll event fires KVO.
+  [self _applyTransform];
 }
 
 - (void)_findAndObserveScrollView
@@ -171,6 +205,7 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   if (self.bounds.size.height <= 0) return;
 
   CGFloat scrollY = _parentScrollView.contentOffset.y;
+  CGFloat viewportH = _parentScrollView.bounds.size.height;
 
   // Derive naturalY from the view's actual Fabric-managed position.
   // self.center and self.bounds are independent of self.layer.transform,
@@ -179,20 +214,35 @@ static inline bool isPush(RNScrollCoordinatedViewBehavior b) {
   // lag behind as variable heights are measured and positions shift.
   CGFloat naturalY = self.center.y - self.bounds.size.height * 0.5;
   CGFloat translateY;
+  CGFloat desiredTop = 0.0;
 
-  if (_isPush) {
-    // push: max(0, min(scrollY - naturalY, boundaryY - naturalY - headerHeight))
-    CGFloat maxTranslate = _boundaryY - naturalY - _headerHeight;
-    translateY = MAX(0.0, MIN(scrollY - naturalY, maxTranslate));
+  if (_isFooter) {
+    // Footer pins to viewport bottom: desiredTop = scrollY + viewportH - height
+    // translate = min(0, desiredTop - naturalY), with optional push boundary.
+    desiredTop = scrollY + viewportH - _headerHeight;
+    if (_isPush) {
+      // boundaryY = section start Y (header or first item). Footer shouldn't
+      // be pulled above it. Use MAX so we pick the LESS negative value —
+      // constraining upward movement, not exaggerating it.
+      CGFloat minTranslate = _boundaryY - naturalY;
+      translateY = MIN(0.0, MAX(desiredTop - naturalY, minTranslate));
+    } else {
+      translateY = MIN(0.0, desiredTop - naturalY);
+    }
   } else {
-    // sticky: max(0, scrollY - naturalY)
-    translateY = MAX(0.0, scrollY - naturalY);
+    // Header pins to viewport top: translate = max(0, scrollY - naturalY), with push boundary.
+    if (_isPush) {
+      CGFloat maxTranslate = _boundaryY - naturalY - _headerHeight;
+      translateY = MAX(0.0, MIN(scrollY - naturalY, maxTranslate));
+    } else {
+      translateY = MAX(0.0, scrollY - naturalY);
+    }
   }
 
   self.layer.transform = CATransform3DMakeTranslation(0, translateY, 0);
 
   // Elevate z when actively sticky (translated > 0) so it floats above siblings.
-  self.layer.zPosition = translateY > 0 ? 100 : 0;
+  self.layer.zPosition = fabs(translateY) > 0.1 ? 100 : 0;
 }
 
 @end

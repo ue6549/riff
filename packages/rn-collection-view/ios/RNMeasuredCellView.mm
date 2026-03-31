@@ -11,6 +11,16 @@
 
 using namespace facebook::react;
 
+#ifndef RNCV_ENABLE_NATIVE_LOGS
+#define RNCV_ENABLE_NATIVE_LOGS 0
+#endif
+
+#if DEBUG && RNCV_ENABLE_NATIVE_LOGS
+  #define RNCV_IOS_MEASURED_LOG(...) NSLog(__VA_ARGS__)
+#else
+  #define RNCV_IOS_MEASURED_LOG(...) ((void)0)
+#endif
+
 @interface RNMeasuredCellView () <RCTRNMeasuredCellViewProtocol>
 @end
 
@@ -52,6 +62,19 @@ using namespace facebook::react;
   if (size.height <= 0) return;
 
   _lastFiredSize = size;
+  const auto props = std::static_pointer_cast<const RNMeasuredCellProps>(_props);
+  const int index = props ? (int)props->index : -1;
+  const char *type = props ? props->type.c_str() : "";
+  const char *kind = props ? props->kind.c_str() : "";
+  const char *cacheKey = props ? props->cacheKey.c_str() : "";
+  RNCV_IOS_MEASURED_LOG(@"[RNCV-IOS-MEASURED] tag:%ld index:%d type:%s kind:%s cacheKey:%s frame=(%.1f,%.1f,%.1f,%.1f) measured=(%.1f,%.1f)",
+                        (long)self.tag,
+                        index,
+                        type,
+                        kind,
+                        cacheKey,
+                        self.frame.origin.x, self.frame.origin.y, self.frame.size.width, self.frame.size.height,
+                        size.width, size.height);
 
   if (_eventEmitter) {
     auto emitter = std::static_pointer_cast<RNMeasuredCellEventEmitter const>(_eventEmitter);

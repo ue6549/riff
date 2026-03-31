@@ -73,16 +73,6 @@ class CollectionViewContainerShadowNode final
   void correctChildPositionsIfNeeded();
 
   /**
-   * Compute scroll offset correction for items above the viewport
-   * that changed height during this layout pass.
-   */
-  Float computeOffsetCorrection(
-      Float scrollY,
-      const std::vector<Float>& oldPositions,
-      const std::vector<Float>& newPositions,
-      size_t childCount) const;
-
-  /**
    * Update component state with new layout results.
    */
   void updateStateIfNeeded();
@@ -91,11 +81,6 @@ class CollectionViewContainerShadowNode final
   // Stored in state for native view to apply as child frames.
   std::vector<Float> correctedPositions_;
   Float correctedContentHeight_ = 0;
-
-  // True when applyMeasurements cascaded position changes this layout pass.
-  // Only then should offset correction run — a render-range shift alone
-  // doesn't mean content moved.
-  bool hadMeasurementDeltas_ = false;
 };
 
 } // namespace facebook::react

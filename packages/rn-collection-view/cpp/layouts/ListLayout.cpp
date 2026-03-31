@@ -3,6 +3,22 @@
 #include <sstream>
 #include <stdexcept>
 
+#ifndef RNCV_ENABLE_NATIVE_LOGS
+#define RNCV_ENABLE_NATIVE_LOGS 0
+#endif
+
+#if DEBUG && RNCV_ENABLE_NATIVE_LOGS
+  #ifdef __APPLE__
+    #include <os/log.h>
+    #define RNCV_LIST_LOG(fmt, ...) os_log_info(os_log_create("com.rncv", "listlayout"), "[RNCV-LIST] " fmt, ##__VA_ARGS__)
+  #else
+    #include <android/log.h>
+    #define RNCV_LIST_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "RNCV-LIST", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_LIST_LOG(fmt, ...) ((void)0)
+#endif
+
 namespace rncv {
 
 using namespace facebook;
@@ -105,61 +121,56 @@ bool ListLayout::applyMeasurements(
     LayoutCache& cache) {
   if (deltas.empty()) return true;
 
-  // For list layout, when heights change, all subsequent items shift by the delta.
-  // Find the earliest affected index, update its height, then shift everything after.
-  int earliestIndex = std::numeric_limits<int>::max();
+  // For a 1D list layout, changing item heights simply shifts everything below them.
+  // Instead of recalculating Y from scratch (which loses section insets and headers),
+  // we accumulate a rolling `aggregateShift` and apply it sequentially.
+
+  // 1. Convert deltas to a fast lookup map: key -> delta height.
+  // d.newValue is the new height. We need to know (new - old) later.
+  std::unordered_map<std::string, double> newHeights;
   for (const auto& d : deltas) {
-    // Update the height in cache.
-    auto attrs = cache.getAttributes(d.key);
-    if (attrs) {
-      auto updated = *attrs;
-      updated.frame.height = d.newValue;
-      updated.sizingState = SizingState::Measured;
-      cache.setAttributes(updated);
-      if (d.index < earliestIndex) earliestIndex = d.index;
-    }
+    newHeights[d.key] = d.newValue;
   }
 
-  if (earliestIndex == std::numeric_limits<int>::max()) return true;
-
-  // Reflow from earliest affected index: read all items in order, recompute Y.
   auto all = cache.getAll();
+  if (all.empty()) return true;
 
-  // Sort by current Y to get layout order (cache getAll returns insertion order).
+  // Sort by strictly increasing Y to process top-to-bottom.
   std::sort(all.begin(), all.end(), [](const LayoutAttributes& a, const LayoutAttributes& b) {
     return a.frame.y < b.frame.y;
   });
 
-  // Find the item spacing by looking at gaps between consecutive items.
-  double spacing = 0;
-  if (all.size() >= 2) {
-    // Spacing = gap between item 0 bottom and item 1 top.
-    spacing = all[1].frame.y - (all[0].frame.y + all[0].frame.height);
-    if (spacing < 0) spacing = 0;
-  }
+  double aggregateShift = 0.0;
 
-  // Find the earliest item in sorted order and reflow from there.
-  double y = -1;
-  for (size_t i = 0; i < all.size(); ++i) {
-    if (all[i].index >= earliestIndex && !all[i].isSupplementary) {
-      if (i == 0) {
-        y = all[i].frame.y; // keep its current Y, it's the first item
-      } else {
-        // Y = previous item's bottom + spacing
-        y = all[i - 1].frame.y + all[i - 1].frame.height + spacing;
+  for (auto& attr : all) {
+    bool changed = false;
+
+    // Apply any accumulated shift from items above us
+    if (aggregateShift != 0.0) {
+      attr.frame.y += aggregateShift;
+      changed = true;
+    }
+
+    // If this item itself has a new measurement, update it and add to rolling shift
+    auto it = newHeights.find(attr.key);
+    if (it != newHeights.end()) {
+      double newHeight = it->second;
+      double heightDiff = newHeight - attr.frame.height;
+      
+      if (heightDiff != 0.0) {
+        attr.frame.height = newHeight;
+        aggregateShift += heightDiff;
+        changed = true;
       }
-      // Reflow from here
-      for (size_t j = i; j < all.size(); ++j) {
-        if (all[j].isSupplementary) continue;
-        if (all[j].frame.y != y) {
-          auto updated = all[j];
-          updated.frame.y = y;
-          cache.setAttributes(updated);
-          all[j].frame.y = y; // keep local copy in sync
-        }
-        y = all[j].frame.y + all[j].frame.height + spacing;
+      if (attr.sizingState != SizingState::Measured) {
+        attr.sizingState = SizingState::Measured;
+        changed = true;
       }
-      break;
+    }
+
+    // Write back to cache if modified
+    if (changed) {
+      cache.setAttributes(attr);
     }
   }
 
@@ -294,6 +305,9 @@ double ListLayout::computeSection(const ListLayoutParams& p,
   const double contentWidth = p.viewportWidth - p.sectionInsetLeft - p.sectionInsetRight;
 
   double y = startY;
+  RNCV_LIST_LOG("computeSection start section=%d p.section=%d prefix=%s itemCount=%d headerH=%.1f footerH=%.1f startY=%.1f keysCount=%zu",
+                sectionIndex, p.section, prefix.c_str(), p.itemCount, p.headerHeight, p.footerHeight,
+                startY, p.keys.size());
 
   // ── Header ────────────────────────────────────────────────────────────────
   if (p.headerHeight > 0) {
@@ -306,6 +320,9 @@ double ListLayout::computeSection(const ListLayoutParams& p,
     _scratch.sizingState      = SizingState::Measured;
     _scratch.isDirty          = false;
     _cache->setAttributes(_scratch);
+    RNCV_LIST_LOG("write key=%s kind=%s section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                  _scratch.key.c_str(), _scratch.supplementaryKind.c_str(), _scratch.section, _scratch.index,
+                  _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
     y += p.headerHeight;
   }
 
@@ -329,6 +346,11 @@ double ListLayout::computeSection(const ListLayoutParams& p,
       _scratch.index  = i;
       _scratch.frame.y = y;
       _cache->setAttributes(_scratch);
+      if (i < 5 || i == p.itemCount - 1) {
+        RNCV_LIST_LOG("write key=%s kind=item section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                      _scratch.key.c_str(), _scratch.section, _scratch.index,
+                      _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
+      }
       y += p.itemHeight + p.itemSpacing;
     }
   } else {
@@ -342,6 +364,11 @@ double ListLayout::computeSection(const ListLayoutParams& p,
       _scratch.frame.y    = y;
       _scratch.frame.height = h;
       _cache->setAttributes(_scratch);
+      if (i < 5 || i == count - 1) {
+        RNCV_LIST_LOG("write key=%s kind=item section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                      _scratch.key.c_str(), _scratch.section, _scratch.index,
+                      _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
+      }
       y += h + p.itemSpacing;
     }
   }
@@ -363,9 +390,13 @@ double ListLayout::computeSection(const ListLayoutParams& p,
     _scratch.sizingState      = SizingState::Measured;
     _scratch.isDirty          = false;
     _cache->setAttributes(_scratch);
+    RNCV_LIST_LOG("write key=%s kind=%s section=%d index=%d frame=(%.1f,%.1f,%.1f,%.1f)",
+                  _scratch.key.c_str(), _scratch.supplementaryKind.c_str(), _scratch.section, _scratch.index,
+                  _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
     y += p.footerHeight;
   }
 
+  RNCV_LIST_LOG("computeSection end section=%d endY=%.1f", sectionIndex, y);
   return y; // Y where next section starts
 }
 
@@ -373,9 +404,11 @@ double ListLayout::computeSection(const ListLayoutParams& p,
 
 void ListLayout::computeSections(const std::vector<ListLayoutParams>& sections) {
   double y = 0.0;
+  RNCV_LIST_LOG("computeSections begin sections=%zu", sections.size());
   for (int s = 0; s < static_cast<int>(sections.size()); ++s) {
     y = computeSection(sections[s], s, y);
   }
+  RNCV_LIST_LOG("computeSections end totalContentHeight=%.1f", y);
 }
 
 // ─── computeSectionFromCache ──────────────────────────────────────────────────

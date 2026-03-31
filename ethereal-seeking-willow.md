@@ -1,336 +1,341 @@
-# Phase 5: JS Integration Plan
+# List Layout Demo + Phase 5 Completion — Working Plan
 
 ## Context
 
-The ShadowNode (Phases 1-4) handles child positioning, content sizing, and scroll offset correction — all within a single Fabric commit cycle. Phase 5 wires everything together: the native `RNCollectionViewContainer` replaces the ScrollView, the ShadowNode reads full LayoutAttributes from the C++ LayoutCache, applies them to cell wrappers via `child->setLayoutMetrics()`, and dead JS measurement code is removed.
-
-## Key Design Decisions
-
-### D1: ShadowNode ↔ LayoutCache bridge via static registry
-ShadowNodes are cloned by Fabric (value semantics) — they can't hold `shared_ptr`. Solution: `CollectionViewModule` registers its `shared_ptr<LayoutCache>` in a static map keyed by integer ID. JS passes `layoutCacheId` as a prop. ShadowNode looks up the cache during `layout()`.
-
-### D2: Three-tier height resolution
-Heights come from three sources, each overriding the last:
-1. **`estimatedHeight`** (single number) — initialize all items. For grid/masonry: `estimatedSize`.
-2. **`heightForItem(index)`** / **`sizeForItem(index)`** — per-item estimates from consumer. For complex layouts: `layoutAttributesForItem(index)`. Called for first ~10-20 items synchronously (first screenful+buffer), then lazily/batched for the rest.
-3. **Yoga actuals** (measured mounted children) — always wins. ShadowNode writes these back to cache.
-
-### D3: Progressive layout cache seeding
-Seeding happens in stages, each enriching the LayoutCache:
-1. **Initialize**: seed all items with `estimatedHeight` (tier 3) — instant, enables first render
-2. **First screenful**: call `heightForItem` for ~10-20 items (tier 2) — synchronous, before first paint
-3. **ShadowNode measures**: Yoga computes actual heights for mounted children (tier 1) — writes back to cache
-4. **Background enrichment**: lazily call `heightForItem` for remaining items, batch updates to cache
-5. **Notify ShadowNode**: `layoutCacheVersion` prop bump triggers Fabric re-commit → ShadowNode recomputes with better data
-- Can batch notifications to avoid excessive re-commits
-- No 10K-element height arrays as props — cache is the shared data structure
-
-### D4: Range computation stays on JS thread via JSI fast path
-Range computation is already C++ (`WindowController`), called from JS via JSI — synchronous result on JS thread. This is the fast path: JS gets the range in the same frame as the scroll event, mounts children immediately, and React batches the commit.
-
-Moving range computation to ShadowNode would add a round-trip (ShadowNode computes → emits event → JS mounts → next commit) for zero benefit. The ShadowNode's job is positioning + content size, not range decisions.
-
-### D5: Three-layer scroll simplification
-- `scrollViewProps`: Key props forwarded as direct props on `RNCollectionViewContainer` (scrollEnabled, bounces, etc.)
-- `ScrollViewComponent` / `renderScrollView`: Not supported in ShadowNode mode (POC limitation — native view owns the scroll). Log warning if provided.
-
-### D6: Eventual consistency for thread safety
-LayoutCache is already mutex-guarded. If ShadowNode reads mid-update, it gets partially correct data — the next `layoutCacheVersion` bump triggers another layout pass. Worst case: one frame with stale estimates (strictly better than current 2-frame JS roundtrip).
-
-### D7: Layout owns wrapper, cell is free (NEW)
-The layout determines what constraints go on the cell wrapper. The consumer's cell component is a normal React component that fills its wrapper — no special styles required.
-
-**Wrapper receives from layout:** frame (x, y, width, height), zIndex, alpha, transform.
-**Cell is unconstrained:** consumer returns a normal component, it fills the wrapper via flex.
-
-**Per layout type:**
-- **List:** wrapper gets `{ x: insetLeft, y: accumulated, width: containerWidth - insets }`. Height = Yoga-measured or layout-estimated.
-- **Grid:** wrapper gets `{ x: columnX, y: rowY, width: columnWidth }`. Same height story.
-- **Masonry:** wrapper gets `{ x: columnX, y: shortestColumnY, width: columnWidth }`. Height = Yoga-measured.
-- **Flow:** wrapper gets `{ x: accumulatedX, y: rowY, width: intrinsic, height: intrinsic }`. Layout reads Yoga measurements to position next item.
-
-### D8: State-based position application (revised from adopt() attempt)
-The ideal approach would be `child->setLayoutMetrics()` (adopt pattern, like ScrollViewShadowNode). However, this **doesn't work** for our use case: on scroll-triggered state updates, Fabric shares (doesn't clone) unchanged children — they're sealed. `setLayoutMetrics()` crashes with "Attempt to mutate a sealed object."
-
-ScrollViewShadowNode gets away with it because its RTL correction only runs on initial mount. We need to reposition on every layout pass including scroll-triggered ones.
-
-**Actual approach:** ShadowNode stores `[x,y,w,h,...]` in state. Native view reads state and applies `child.frame` in `applyPositionsFromState:`. This works reliably because state updates don't require child mutation.
-
-### D9: LayoutAttributes comprehensive + extras map (NEW)
-The C++ `LayoutAttributes` struct covers the full UICollectionView attribute set (frame, transform3D, alpha, zIndex, isHidden, cornerRadius). A `std::unordered_map<std::string, double> extras` field provides an escape hatch for layout-specific data without requiring native releases.
+Phase 5 (JS Integration / ShadowNode) is mostly complete. The remaining work has two tracks:
+1. **List layout demo** — expand `ListDemo` in `LayoutsTab.tsx` to showcase all list layout
+   capabilities, all in the existing "List" sub-tab of the Layouts tab in the FlashList
+   comparison screen. No new files or screens.
+2. **Phase 5 remaining** — 5g (all layout types) and 5j (remove JS wrapper positioning),
+   done after the list demo is solid.
 
 ---
 
-## Completion Status
+## Phase L1 — Re-verify Core List Layout Under ShadowNode
 
-- [x] **5f**: Thread Safety Audit
-- [x] **5a**: Wire ShadowNode to LayoutCache (static registry, three-tier heights, write-back)
-- [x] **5b**: Replace ScrollView with RNCollectionViewContainer
-- [x] **5c**: Connect Render Range + Simplify JS Scroll Handler
-- [x] **5d**: Connect Measure Range
-- [x] **5e**: Remove Dead Code (JS fallback functions, unused imports, stale comments)
-- [x] **5h**: Comprehensive LayoutAttributes + extras map (transform3D, isHidden, extras)
-- [x] **5i**: ~~adopt() attempt~~ → reverted to state-based (sealed children crash). Now applies full frame [x,y,w,h] via state, reads width/x from LayoutCache.
-- [ ] **5g**: Extend to All Layout Types
+ShadowNode overrides all child positions via `applyPositionsFromState`. Features that were
+JS-computed absolute positions before ShadowNode need auditing.
 
----
+### L1.1 — Section insets
+ListLayout writes `frame.x`, `frame.width` using `sectionInsetLeft/Right`, and starts `y` at
+`sectionInsetTop`. ShadowNode reads these frames from LayoutCache.
 
-## Implementation Steps (remaining)
+**Audit:** Verify items in a section with non-zero insets render at the correct x position and
+have the correct width (not full container width). Left/right insets affect `frame.x` and
+`frame.width`; top/bottom insets affect `frame.y` accumulation.
 
-### 5h: Comprehensive LayoutAttributes + extras map
-**Files:** `cpp/LayoutCache.h`, `cpp/LayoutCache.cpp`
+### L1.2 — Item spacing
+ListLayout accumulates `y += itemHeight + itemSpacing`. ShadowNode reads the y directly.
 
-**5h.1: Extend LayoutAttributes struct:**
-```cpp
-struct LayoutAttributes {
-  // Identity
-  std::string key;
-  int         section       = 0;
-  int         index         = -1;
+**Audit:** Confirm visible gap between items matches `itemSpacing` value.
 
-  // Geometry (layout-computed)
-  Rect        frame;                              // x, y, width, height
-  int         zIndex        = 0;
-  double      alpha         = 1.0;
-  bool        isHidden      = false;
+### L1.3 — Multi-section with headers + footers
+Headers and footers are supplementary views — they appear as mounted children in the ShadowNode's
+child list alongside cells. The ShadowNode maps each child by position to a LayoutCache key.
 
-  // Transform (3D — covers rotation, scale, translation)
-  // Stored as a flat 4x4 matrix (column-major, like CATransform3D).
-  // Identity by default. Only non-identity transforms need serialization.
-  std::array<double, 16> transform3D = {
-    1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1
-  };
+**Most likely breakage point:** The child-to-key mapping must correctly skip supplementary
+children (header at start, footer at end) when indexing into the item key space. If the
+ShadowNode treats all children as cells indexed 0..N, headers/footers get wrong positions.
 
-  // Supplementary view metadata
-  bool        isSupplementary = false;
-  std::string supplementaryKind;
+**Audit:** Multi-section list with header + items + footer per section. Verify each element
+renders at its correct Y. Check that section 2's content starts after section 1's footer.
 
-  // Sizing state (three-tier tracking)
-  SizingState sizingState   = SizingState::Placeholder;
-  bool        isDirty       = false;
+### L1.4 — Dynamic item heights
+Three-tier resolution: Yoga > cache > estimate. Self-sizing cells (M4.3 behavior).
 
-  // Window tier
-  WindowTier  tier          = WindowTier::Outside;
+**Audit:** Items with variable subtitle lines should auto-size. After ShadowNode introduction,
+verify Yoga-measured heights still write back to LayoutCache and affect subsequent layout passes.
+Confirm scroll correction fires when a cell height changes from estimate.
 
-  // Sticky behavior
-  bool        isSticky      = false;
+### L1.5 — Sticky headers with push
+The native KVO-based sticky view reads `_naturalY` from the ShadowNode state / LayoutCache.
+If the ShadowNode's repositioning changes the effective Y of a header, `naturalY` must reflect
+the post-repositioned value — otherwise push clamping is computed from a wrong base.
 
-  // Animation state
-  bool        isAnimating   = false;
-
-  // Escape hatch for layout-specific data (no native release needed)
-  std::unordered_map<std::string, double> extras;
-};
-```
-
-**5h.2: Update JSI bridge (`attrsFromJSI`/`attrsToJSI`):**
-- Add `transform3D` serialization (as 16-element JS array, skip if identity)
-- Add `isHidden` field
-- Add `extras` serialization (JS object ↔ map)
-- Backward-compatible: missing fields get defaults
-
-**5h.3: Update SpatialIndex if needed:**
-- SpatialIndex only uses `frame` — no changes needed for new fields
-
-**Verification:** Run Phase 5a test screen — cache bridge still works with new fields at defaults.
-
-### 5i: ShadowNode adopt() — apply layout via child->setLayoutMetrics()
-**Files:**
-- `cpp/CollectionViewContainerShadowNode.cpp` — rewrite `correctChildPositionsIfNeeded()` to use `child->setLayoutMetrics()`
-- `cpp/CollectionViewContainerShadowNode.h` — remove `correctedPositions_` scratch vector
-- `cpp/CollectionViewContainerState.h` — remove `positions` vector from state
-- `ios/RNCollectionViewContainerView.mm` — remove `applyPositionsFromState:`, simplify `layoutSubviews`
-
-**5i.1: Rewrite `correctChildPositionsIfNeeded()`:**
-```cpp
-void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
-  const auto& props = *std::static_pointer_cast<const RNCollectionViewContainerProps>(getProps());
-  auto children = getLayoutableChildNodes(); // returns mutable pointers
-
-  // ... read props (containerWidth, insets, rowSpacing, etc.)
-  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
-
-  Float y = insetTop;
-  for (size_t i = 0; i < children.size(); ++i) {
-    auto* child = children[i];
-    auto metrics = child->getLayoutMetrics();
-    const auto yogaHeight = metrics.frame.size.height;
-    const auto yogaWidth = metrics.frame.size.width;
-
-    // Three-tier height resolution (unchanged logic)
-    Float effectiveHeight = estimatedItemHeight;
-    Float effectiveWidth = itemWidth;
-    Float effectiveX = insetLeft;
-
-    if (cache) {
-      const auto dataIndex = renderRangeStart + static_cast<int32_t>(i);
-      auto cached = cache->getAttributes("item-0-" + std::to_string(dataIndex));
-      if (cached) {
-        if (cached->frame.height > 0) effectiveHeight = cached->frame.height;
-        if (cached->frame.width > 0) effectiveWidth = cached->frame.width;
-        effectiveX = cached->frame.x;  // layout may set non-insetLeft x (grid columns)
-      }
-    }
-
-    // Tier 1: Yoga wins if valid and differs
-    if (yogaHeight > 0 && std::abs(yogaHeight - estimatedItemHeight) > 0.5f) {
-      effectiveHeight = yogaHeight;
-    }
-
-    // Apply layout-computed frame to child's LayoutMetrics
-    metrics.frame.origin = {effectiveX, y};
-    metrics.frame.size = {effectiveWidth, effectiveHeight};
-    child->setLayoutMetrics(metrics);
-
-    y += effectiveHeight + rowSpacing;
-  }
-
-  correctedContentHeight_ = y - rowSpacing + insetBottom;
-
-  // Write-back to cache (unchanged)
-  // ...
-}
-```
-
-**5i.2: Remove positions from state:**
-- Remove `std::vector<Float> positions` from `CollectionViewContainerState`
-- `updateStateIfNeeded()` no longer compares/stores positions — only contentSize, contentOffset, correction, revision
-- Offset correction: use `correctedPositions_` as before for the correction computation within `layout()`, but don't persist to state. OR store old child metrics locally for correction computation.
-
-**5i.3: Simplify native view:**
-- Remove `applyPositionsFromState:` entirely
-- `layoutSubviews` only handles: scroll view frame, content size from state, offset correction
-- Children's frames are set by Fabric automatically from the modified LayoutMetrics
-
-**5i.4: Handle offset correction without positions in state:**
-- The correction algorithm needs old vs new Y positions to compute delta
-- Option A: Store only the correction delta in state (computed during `layout()`). The ShadowNode has access to old child metrics during `layout()` via `getStateData().positions` — but we're removing that.
-- Option B: Compute correction during layout by comparing old `getLayoutMetrics()` of children with new. But children are the NEW children after reconciliation — old ones may be gone.
-- **Best option**: Keep a small `std::vector<Float>` of old Y positions as a member variable on ShadowNode (NOT in state). Populated at end of each layout pass, compared at start of next. This is scratch data, not shared state.
-
-**Verification:**
-- Phase 1: items positioned with correct spacing and insets
-- Phase 3: items have correct width (not extending past screen)
-- Phase 4: scroll offset correction still works
-- Phase 5a: three-tier cache bridge still works
-- Main CollectionView: cells render at correct positions
-
-### 5j: Remove JS cell wrapper positioning
-**Files:** `example/components/CollectionView.tsx`
-
-**5j.1: Simplify cell wrapper styles in `renderCell()`:**
-The wrapper `<View>` currently sets explicit `position: absolute`, `left`, `top`, `width`, `height`. Since the ShadowNode now applies the full frame via `setLayoutMetrics()`, JS no longer needs to compute or set any positioning on the wrapper.
-
-Before:
-```tsx
-const containerStyle = [
-  {
-    position: 'absolute' as const,
-    left,
-    right: useLayoutProtocol ? undefined : sectionInsetRight,
-    top,
-    ...(viewportWidth > 0 ? { width: cellWidth, right: undefined } : {}),
-  },
-  cellHeight != null && !measureOnly && { height: cellHeight },
-];
-```
-
-After:
-```tsx
-const containerStyle = { flex: 1 };
-// or simply no explicit style — the ShadowNode sets the frame
-```
-
-**5j.2: Remove position-related computations from `renderCell()`:**
-- Remove `estimatedTop`, `cellLeft`, `cellWidth`, `cellHeight` calculations
-- Remove `computedPositions` useMemo (positions come from ShadowNode, not JS)
-- Remove `itemPositionsRef` (no longer needed for JS-side position tracking)
-
-**5j.3: Simplify scroll handler:**
-- JS no longer needs `computedPositions` or `itemPositionsRef` for range computation
-- Variable-height range computation uses `nativeLayoutCache.getItemHeights()` → positions computed inline (or move to C++ `computeVariableRanges` to accept cache directly)
-
-**5j.4: Measure-range cells:**
-- Cells in measure range (Activity=hidden, parked at top:-9999) still need to be positioned off-screen
-- ShadowNode distinguishes render-range vs measure-range children: render-range gets layout positions, measure-range gets off-screen position
-- OR: measure-range cells keep their Yoga-computed position (which is relative to parent) and the ShadowNode only overrides render-range children
-
-**Verification:**
-- Consumer cells render correctly with no positioning styles
-- Variable-height cells measure and position correctly
-- Measure-range cells don't flash on screen
-- Scroll handler still computes correct ranges
-
-### 5g: Extend to All Layout Types (after list verified with adopt approach)
-**Files:**
-- `cpp/CollectionViewContainerShadowNode.cpp` — layout-type-aware attribute application
-- `example/components/CollectionView.tsx` — seeding flow for each layout type
-
-The ShadowNode's `correctChildPositionsIfNeeded()` reads full `LayoutAttributes` from cache (not just height). Each layout type writes different attributes:
-
-**5g.1: Grid layout:**
-- LayoutCache entries have `frame.x` = column position, `frame.width` = column width
-- ShadowNode reads `frame.x`, `frame.width` from cache → applies to child LayoutMetrics
-- No special ShadowNode logic — it just trusts the cache's frame
-
-**5g.2: Masonry layout:**
-- Items aren't Y-sorted by index. LayoutCache entries have full frame from `MasonryLayout::compute()`.
-- ShadowNode reads complete frame from cache
-- Height resolution: Yoga > cache > estimate (same three-tier)
-- Range computation: `LayoutCache::getAttributesInRect()` spatial query
-
-**5g.3: Flow layout:**
-- Variable-width + variable-height. Layout needs Yoga measurements first.
-- Two-pass: (1) Yoga measures cells, ShadowNode writes sizes to cache. (2) FlowLayout reads sizes, computes positions, writes back. (3) ShadowNode re-reads positions, applies to children.
-- May require a second layout pass or deferred positioning on next commit.
-
-**5g.4: Custom layouts (layout protocol):**
-- Consumer's JS layout writes full `LayoutAttributes` to LayoutCache via JSI
-- ShadowNode reads them during `layout()` — same as built-in layouts
-- `extras` map available for layout-specific data
-
-**5g.5: Applying non-frame attributes:**
-- `zIndex`: set on child LayoutMetrics or handled by native view (UIView.layer.zPosition)
-- `alpha`: applied by native view (UIView.alpha) from a new state field or LayoutCache read
-- `transform3D`: applied by native view (CATransform3D) from LayoutCache
-- `isHidden`: DisplayType::None on child LayoutMetrics
-
-**5g.6: Verification per layout type:**
-- Grid: uniform + variable-height grid, scroll + insert/remove
-- Masonry: 2-3 columns, variable heights, scroll + insert/remove
-- Flow: mixed-width items, wrapping, scroll
-- Each verified against existing test screens before moving on
+**Audit:** Multi-section sticky headers with push. Verify that header N is pushed up exactly
+when header N+1 arrives at the top. If there's an offset error, naturalY is stale.
 
 ---
 
-## Verification Plan
+## Phase L2 — Expanded ListDemo: Identity + Animation + Core Features
 
-### Per-step verification:
-- **5h**: Run Phase 5a test — cache bridge works with new fields at defaults
-- **5i**: Run all Phase 1-5a test screens — items positioned correctly by Fabric, no `applyPositionsFromState`, scroll correction works
-- **5j**: Run main CollectionView — cells render correctly without explicit positioning styles
-- **5g**: Per-layout-type verification (grid, masonry, flow)
+**Target file:** `LayoutsTab.tsx`, `ListDemo` component only. No new files.
 
-### End-to-end:
-- Fixed-height list: 1000 items, scroll smoothly, no jumps
-- Variable-height list: items measure correctly on first mount, no 2-frame jump
-- Scroll correction: insert/remove items above viewport, content stays stable
-- Performance: HUD shows no regression vs current implementation
-- Consumer cells: no special positioning styles required — just normal React components
+Expand from current (single section, 50 items, minimal header) to 3 sections × ~30 items.
 
-## Critical Files
-- `packages/rn-collection-view/cpp/CollectionViewContainerShadowNode.h/.cpp`
-- `packages/rn-collection-view/cpp/CollectionViewModule.h/.cpp`
-- `packages/rn-collection-view/cpp/LayoutCache.h/.cpp`
-- `packages/rn-collection-view/cpp/CollectionViewContainerState.h`
-- `packages/rn-collection-view/src/specs/RNCollectionViewContainerNativeComponent.ts`
-- `packages/rn-collection-view/example/components/CollectionView.tsx`
-- `packages/rn-collection-view/ios/RNCollectionViewContainerView.mm`
+### Section 1 — "Sticky Identity"
+- **Header:** Animated shimmer gradient (Animated.loop, LinearGradient-style) + millisecond
+  counter (`setInterval` at 100ms, displayed as `ticks × 100 ms`). Sticky.
+- **Footer:** Same treatment — shimmer + millisecond counter. Sticky (not just header).
+- **Items:** Fixed height, colored left border.
+- **What this proves:** The header and footer are the same React component instance,
+  repositioned natively. The timer is continuous through all scroll positions. FlashList:
+  no sticky footer. Its sticky header behavior is re-rendered on recycle in some paths.
 
-## Existing utilities to reuse
-- `LayoutCache::getAttributes(key)` / `setAttributes(attrs)` — for ShadowNode read/write
-- `LayoutCache::getAttributesInRect()` — for complex layout range computation
-- `ListLayout::compute()` — unchanged, still seeds the cache from JS
-- `WindowController::computeRanges()` / `computeVariableRanges()` / `applyBudget()` / `computeMeasureRange()` — still called from JS via JSI
-- `child->setLayoutMetrics()` — Fabric API for modifying child layout (used by ScrollViewShadowNode)
-- `getLayoutableChildNodes()` — returns mutable child pointers via const_cast (standard Fabric pattern)
+### Section 2 — "Cell Animation Identity"
+- **Header:** Timer. Sticky.
+- **Items:** Variable heights (1–3 lines of subtitle text — Yoga intrinsic sizing). Some items
+  (every 4th) have an animated shimmer `<Animated.View>` as their background.
+- **What this proves:** Scroll section 2 cells completely out of the render window (Activity=hidden
+  eviction), then scroll back. The shimmer on animated cells continues from where it left off —
+  not from frame 0. FlashList: recycled cell gets a fresh mount, animation restarts.
+- **Callout:** "Shimmer on item #N restarted?" — label each animated cell with a mount counter
+  incremented in `useEffect` (mount count should stay at 1 within the render window).
+
+### Section 3 — "Insets + Spacing"
+- **Larger insets:** `top: 24, bottom: 24, left: 16, right: 16` — visually obvious
+- **Larger item spacing:** 16px — visually obvious
+- **Items:** Simple cells with a visible inset ruler annotation (thin lines showing the inset region)
+- **What this proves:** Section insets and item spacing are C++ layout engine outputs applied by
+  ShadowNode — not JS-computed.
+
+### Controls Bar (above the CollectionView, within ListDemo)
+
+**Scroll-to-item buttons:**
+- "→ Top" → `scrollToItem('list-0', { animated: true, position: 'top' })`
+- "→ #42"  → `scrollToItem('list-42', { animated: true, position: 'nearest' })`
+- "→ Bot"  → `scrollToItem(lastKey, { animated: true, position: 'bottom' })`
+
+**Mutation buttons:**
+- "+Insert" → insert 3 items at start of section 1 (above viewport if scrolled down)
+- "×Delete" → delete first 3 items from section 1
+- "↕Resize" → toggle item 10's subtitle between 1 line and 4 lines (triggers height change)
+- Toggle: `[MVC: ON] / [MVC: OFF]` — maintainVisibleContentPosition
+
+**Demonstration flow for MVC:** Scroll to item 30+. Toggle MVC. Insert or delete above viewport.
+- MVC ON: scroll position corrects, viewport stays on same items. No jump.
+- MVC OFF: viewport position is naive, content shifts under the user.
+
+### Updated callout bullets for List sub-tab
+
+```
+🟢 FlashList: Core use case — FlatList replacement. Sticky headers (basic, no push on some paths).
+🔴 FlashList: No sticky footer support.
+🔴 FlashList: Animation state lost on recycle — shimmer restarts, mount counter increments on scroll.
+🔴 FlashList: No scrollToItem by stable key; no per-mutation scroll position control.
+🔵 Riff: Sticky header + footer — same view instance repositioned natively (timer is proof).
+🔵 Riff: Cell animation state preserved via Activity=hidden within render window.
+🔵 Riff: Section insets + item spacing — C++ layout engine, sub-ms. ShadowNode applies from cache.
+🔵 Riff: scrollToItem(key, position). Insert/delete/resize with maintainVisibleContentPosition toggle.
+```
+
+---
+
+## Phase L3 — Proper Decoration Views
+
+**Research added to PLAN.md (R1.12).** Summary:
+
+Current `renderSectionBackground` is an ad-hoc workaround — consumer injects absolute-positioned
+Views into the ScrollView slot. True UICollectionView decoration views are:
+- Registered on the **layout** (`layout.registerDecoration(kind, Component)`)
+- Layout emits `LayoutAttributes` for them (key: `deco-<kind>-<section>`)
+- Windowed by framework like cells
+- Z-ordered by `zIndex` field (typically behind cells)
+- Arbitrary kinds: `sectionBackground`, `separator`, custom
+
+**Built-in ListLayout kinds:**
+- `sectionBackground` — full section rect (header top → footer bottom + insets). Opt-in.
+- `separator` — hairline between items with configurable `separatorInset`. Opt-in.
+
+**Consumer API:**
+```typescript
+const listLayout = list({
+  showSectionBackground: true,
+  showSeparators: true,
+  separatorInset: { left: 16, right: 0 },
+});
+
+<CollectionView
+  decorationRenderers={{
+    sectionBackground: (attrs) => <AnimatedShimmerBg />,
+    separator:         (attrs) => <View style={separatorStyle} />,
+  }}
+/>
+```
+
+**Demo:** Once implemented, ListDemo section 1 gets animated shimmer `sectionBackground`.
+Section 2/3 gets `separator` with varying insets. `DecorationsTab` migrates too.
+
+**Implementation steps (to discuss before starting):**
+- L3.1: `LayoutAttributes`: add `isDecoration`, `decorationKind` fields
+- L3.2: `ListLayout`: emit `sectionBackground` + `separator` LayoutAttributes when opted-in
+- L3.3: `CollectionView.tsx`: read decorations from LayoutCache, render before cells, separate budget
+- L3.4: Deprecate `renderSectionBackground`
+
+---
+
+## Phase L4 — Scroll-to-item
+
+**API:** `collectionViewRef.scrollToItem(key: string, options: { animated: boolean, position: 'top' | 'center' | 'bottom' | 'nearest' })`
+
+**Implementation:**
+- JSI call: `nativeMod.getItemFrame(layoutCacheId, key)` → `{ x, y, width, height }` (synchronous)
+- JS computes `targetOffset`:
+  - `top`: `frame.y - sectionInsetTop`
+  - `bottom`: `frame.y + frame.height - viewportHeight`
+  - `center`: `frame.y + frame.height/2 - viewportHeight/2`
+  - `nearest`: if already fully visible → no-op; else whichever of top/bottom requires less scroll
+- Native call: `nativeMod.scrollTo(layoutCacheId, { x: 0, y: targetOffset, animated })`
+  → `[scrollView setContentOffset:{0, targetOffset} animated:animated]`
+
+---
+
+## Phase L5 — Mutations + maintainVisibleContentPosition
+
+Uses existing Snapshot API (F1.2) for insert/delete and `maintainVisibleContentPosition` prop.
+
+**L5.1:** Wire mutation buttons to snapshot operations on ListDemo data.
+**L5.2:** `maintainVisibleContentPosition` toggle — prop already exists on CV. Toggling it
+demonstrates the before/after behavior visually with the same mutation applied.
+
+---
+
+## Phase 5 Remaining (after L1–L5)
+
+### 5g — Extend ShadowNode to all layout types
+
+ShadowNode currently handles list layout. Grid, masonry, flow need the same path:
+the ShadowNode reads full LayoutAttributes from LayoutCache regardless of layout type —
+no layout-specific logic in ShadowNode.
+
+**5g.1 Grid:** Reads `frame.x` (column position), `frame.width` (column width) from cache.
+ShadowNode logic: same as list — iterate children, apply full frame from cache.
+
+**5g.2 Masonry:** Items are NOT y-sorted by index (shortest-column fills). LayoutCache has
+full frames from `MasonryLayout::compute()`. ShadowNode reads complete frame per key.
+Range computation: `LayoutCache::getAttributesInRect()` spatial query (already exists).
+
+**5g.3 Flow:** Variable width + height. Two-pass:
+  1. Yoga measures cell widths (first pass).
+  2. ShadowNode writes measured sizes back to LayoutCache.
+  3. FlowLayout recomputes positions with real sizes.
+  4. ShadowNode re-reads positions on next commit.
+
+**5g.4 Custom layouts (layout protocol):** Consumer's TS layout writes full `LayoutAttributes`
+via JSI. ShadowNode reads them — no change needed.
+
+**5g.5 Non-frame attributes:** `zIndex`, `alpha`, `transform3D`, `isHidden` — applied by native
+view from LayoutCache read (not from state). Requires native view to read LayoutCache on layout.
+
+**Verification per layout type:** grid, masonry, flow each have existing test screens.
+Run them. Verify correct positions, widths, scrolling, insert/remove.
+
+### 5j — Remove JS cell wrapper positioning
+
+Once ShadowNode reliably provides all frames:
+- Remove `position: 'absolute'`, `left`, `top`, `width`, `height` from cell wrapper style
+- Cell wrapper becomes `{ flex: 1 }` — fills frame set by ShadowNode
+- Remove `computedPositions` useMemo from CollectionView.tsx
+- Remove `itemPositionsRef`
+- Measure-range cells: ShadowNode assigns off-screen position for them specifically
+
+---
+
+## Active Work: MVC (maintainVisibleContentPosition) Fix
+
+Offset correction (`correctionY`) was always 0 despite visible row jumping. Two root causes
+identified and fixed. Build is pending a clean Xcode compile to verify.
+
+### Root Cause 1 (FIXED): scrollY always 0
+`LayoutCache::setScrollOffset()` was never called. Fixed by wiring it from
+`scrollViewDidScroll:` in the native view before the throttle check, and after applying
+offset correction. Uses a thin `layoutCacheForId()` free function to avoid heavy transitive deps.
+
+### Root Cause 2 (FIXED): Wrong anchor in correction search
+Children in `correctedPositions_` are in JSX mount order (headers before cells), not Y order.
+Old sequential break-on-first search picked a header at y=2219 as "first visible" when scrolled
+to y=491. Fixed by scanning ALL children and picking minimum-Y whose bottom > scrollY.
+Key-based anchor lookup (by stable cache key) added to handle windowed insert/delete.
+
+### Build error (FIXED): 'CollectionViewModule.h' file not found in ObjC++ context
+That header drags in heavy transitive deps that fail in ObjC++. Created `LayoutCacheRegistry.h`
+(cpp/ — thin forward-decl header) and a free-function implementation in `CollectionViewModule.cpp`.
+The ObjC++ view file now forward-declares `layoutCacheForId` inline (avoids header search path issue).
+
+### Files changed this session
+- `cpp/CollectionViewContainerShadowNode.h` — added `correctedKeys_`, updated `computeOffsetCorrection` sig
+- `cpp/CollectionViewContainerShadowNode.cpp` — min-Y anchor scan, key-based lookup, pass keys to correction
+- `cpp/CollectionViewContainerState.h` — added `std::vector<std::string> keys`
+- `cpp/LayoutCacheRegistry.h` — NEW thin header (forward-declares layoutCacheForId)
+- `cpp/CollectionViewModule.cpp` — added `layoutCacheForId` free function impl
+- `ios/RNCollectionViewContainerView.mm` — cache `_layoutCacheId`, write scrollOffset to LayoutCache,
+  inline C++ forward-decl instead of header import
+- `src/types/protocol.ts` — added `itemKeys?` to SectionInfo
+- `src/layouts/list.ts` — store/use stable item keys per section
+- `example/components/CollectionView.tsx` — pass itemKeys via layoutContext, stable cacheKey for renderCell
+
+### Next step: clean build + verify
+1. Clean build in Xcode (`Cmd+Shift+K` → `Cmd+B`)
+2. Scroll list, trigger insert/resize/delete
+3. Check logs for: `applying offset correction=XX.X scrollY=YYY.Y` (non-zero values)
+4. Re-silence native logs after verification (`RNCV_ENABLE_NATIVE_LOGS = 0`)
+
+---
+
+## Execution Order
+
+```
+L1 (re-verify ShadowNode path: insets, spacing, multi-section, dynamic height, sticky)
+  ↓  [fix any breakage found]
+L2 (expand ListDemo: 3 sections, shimmer+timer identity, cell animation, controls bar) ✅ DONE
+  ↓  [bug fixes also done: childCountChanged guard in C++ + post-prepare rAF cache check]
+MVC offset correction fix ✅ DONE (pending build verification)
+  ↓
+L3 (proper decoration views: LayoutAttributes + ListLayout + CollectionView render)
+  ↓
+L4 (scrollToItem: JSI frame read + native setContentOffset)
+  ↓
+L5 (mutation buttons + MVC toggle wired into ListDemo)
+  ↓
+5g (ShadowNode → all layout types: grid, masonry, flow, custom)
+  ↓
+5j (remove JS cell wrapper positioning)
+```
+
+---
+
+## Key Files
+
+- `packages/rn-collection-view/example/screens/comparison/LayoutsTab.tsx` — ListDemo lives here
+- `packages/rn-collection-view/example/components/CollectionView.tsx` — main component
+- `packages/rn-collection-view/cpp/layouts/ListLayout.h/.cpp` — C++ list layout
+- `packages/rn-collection-view/cpp/LayoutCache.h/.cpp` — cache + LayoutAttributes struct
+- `packages/rn-collection-view/cpp/CollectionViewContainerShadowNode.cpp` — ShadowNode positioning
+- `packages/rn-collection-view/cpp/CollectionViewModule.h/.cpp` — TurboModule (scroll JSI calls)
+- `packages/rn-collection-view/ios/RNCollectionViewContainerView.mm` — native view
+- `packages/rn-collection-view/ios/RNScrollCoordinatedViewView.mm` — sticky view KVO
+
+---
+
+## Phase 5 Completion Status (recap)
+
+- [x] 5f Thread Safety Audit
+- [x] 5a Wire ShadowNode to LayoutCache
+- [x] 5b Replace ScrollView with RNCollectionViewContainer
+- [x] 5c Connect Render Range + Simplify JS Scroll Handler
+- [x] 5d Connect Measure Range
+- [x] 5e Remove Dead Code
+- [x] 5h Comprehensive LayoutAttributes + extras map
+- [x] 5i State-based position application (adopt reverted — sealed children crash)
+- [ ] 5g Extend to all layout types
+- [ ] 5j Remove JS cell wrapper positioning
+
+---
+
+## FlashList Differentiators Summary
+
+| Capability | Riff | FlashList |
+|---|---|---|
+| Sticky footer | ✅ | ❌ none |
+| Sticky push (UIKit-correct) | ✅ | ❌ basic only |
+| View identity preservation (timer) | ✅ | ❌ recycles = re-creates |
+| Cell animation state in window | ✅ Activity=hidden | ❌ lost on recycle |
+| Dynamic height, zero layout shift | ✅ ShadowNode same commit | ❌ JS correction loop |
+| Decoration views (arbitrary kinds) | planned L3 | ❌ none |
+| Separators (layout-driven) | planned L3 | basic, not layout-driven |
+| scrollToItem by stable key | planned L4 | index only |
+| Insert/delete with scroll stability | ✅ MVC prop | ❌ no per-mutation control |
+| Custom layouts (carousel, radial) | ✅ | ❌ list only |
+| State bleed | ❌ clean by default | ✅ broken by default |
+| C++ window controller on UI thread | ✅ | ❌ JS |
+| Memory pressure adaptation | ✅ | ❌ |

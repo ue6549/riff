@@ -57,12 +57,13 @@ const Activity = (React as any).Activity as
   | React.ComponentType<{ mode: 'visible' | 'hidden'; children: React.ReactNode }>
   | undefined;
 
-import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
-import { RiffSnapshot } from './CollectionSnapshot';
+import NativeCollectionViewModule from './NativeCollectionViewModule';
+import RNMeasuredCell from './RNMeasuredCellNativeComponent';
 import RNScrollCoordinatedView from './RNScrollCoordinatedViewNativeComponent';
 import RNCollectionViewContainer from './RNCollectionViewContainerNativeComponent';
-import type { CollectionViewLayout, LayoutContext } from 'riff/src/types/protocol';
-import { list as listLayout } from 'riff/src/layouts/list';
+import { RiffSnapshot } from './CollectionSnapshot';
+import type { CollectionViewLayout, LayoutContext } from '@riff/types/protocol';
+import { list as listLayout } from '@riff/layouts/list';
 
 // ─── JSI module types ─────────────────────────────────────────────────────────
 
@@ -79,6 +80,12 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getItemHeights(section: number, count: number): number[];
     getTotalContentSize(): { width: number; height: number };
     version(): number;
+    /** MVC: snapshot anchor before prepare() rewrites positions. Reads scroll offset from LayoutCache. */
+    snapshotAnchor(): void;
+    /** MVC: compare anchor's new Y after prepare(). Stores pending correction. */
+    computeCorrection(): number;
+    /** MVC: consume and clear pending correction (called by native view). */
+    consumePendingCorrection(): number;
   };
   metrics: {
     startFrameTimer(): void;
@@ -155,6 +162,7 @@ export interface SectionConfig<T> {
     height: number;
     sticky?: boolean;
   };
+  insets?: { top?: number; bottom?: number; left?: number; right?: number };
 }
 
 export interface SectionedRenderItemInfo<T> {
@@ -221,6 +229,8 @@ export interface RiffProps<T = unknown> {
    */
   renderItem: (info: any) => React.ReactElement | null;
   keyExtractor?: (item: T, ...args: any[]) => string;
+  /** Like FlatList's extraData — pass any value here to force re-renders when it changes. */
+  extraData?: unknown;
 
   /** Fixed item height. Use this when all cells have the same known height. */
   itemHeight?: number;
@@ -391,6 +401,14 @@ export interface RiffProps<T = unknown> {
    * Defaults to Dimensions.get('window').height.
    */
   initialHeight?: number;
+
+  /**
+   * When true, adjusts the scroll offset whenever items above the viewport
+   * are inserted, deleted, or resized — so visible content stays in place.
+   * Correction is computed in JS via LayoutCache snapshot-compare.
+   * Default false (opt-in).
+   */
+  maintainVisibleContentPosition?: boolean;
 }
 
 // ─── Internal types ───────────────────────────────────────────────────────────
@@ -461,6 +479,23 @@ interface FlattenResult<T> {
   sectionStartFlatIndices:   number[];
   /** Pre-populated heights for supplementary views with declared height. */
   declaredHeights:           Map<string, number>;
+  keyToFlatIndex:            Map<string, number>;
+}
+
+const RNCV_DEBUG_LOGS = false;
+
+function rncvLog(tag: string, payload: Record<string, unknown>) {
+  if (!__DEV__ || !RNCV_DEBUG_LOGS) return;
+  // Print a single serialized line so Metro doesn't collapse payload to "Object".
+  const serialized = JSON.stringify(payload, (_key, value) =>
+    value === undefined ? '__undefined__' : value
+  );
+  console.log(`[${tag}] ${serialized}`);
+}
+
+function rncvVerboseLog(...args: any[]) {
+  if (!__DEV__ || !RNCV_DEBUG_LOGS) return;
+  console.log(...args);
 }
 
 function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
@@ -469,6 +504,7 @@ function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
   const stickyFooterFlatIndices: number[]      = [];
   const sectionStartFlatIndices: number[]      = [];
   const declaredHeights                        = new Map<string, number>();
+  const keyToFlatIndex                         = new Map<string, number>();
 
   for (let si = 0; si < sections.length; si++) {
     const s = sections[si]!;
@@ -478,22 +514,65 @@ function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
       const fi = flatData.length;
       if (s.header.sticky) stickyHeaderFlatIndices.push(fi);
       declaredHeights.set(`__h_${s.key}`, s.header.height);
+      keyToFlatIndex.set(`item-${si}-header`, fi);
       flatData.push({ _kind: 'header', sectionIndex: si });
+      rncvLog('RNCV-JS-FLAT', {
+        op: 'push-header',
+        sectionIndex: si,
+        sectionKey: s.key,
+        flatIndex: fi,
+        cacheKey: `item-${si}-header`,
+        sticky: !!s.header.sticky,
+        declaredHeight: s.header.height,
+      });
     }
 
     for (let ii = 0; ii < s.data.length; ii++) {
+      const fi = flatData.length;
+      keyToFlatIndex.set(`item-${si}-${ii}`, fi);
       flatData.push({ _kind: 'item', sectionIndex: si, item: s.data[ii]!, itemIndex: ii });
+      if (ii < 3 || ii === s.data.length - 1) {
+        rncvLog('RNCV-JS-FLAT', {
+          op: 'push-item',
+          sectionIndex: si,
+          sectionKey: s.key,
+          itemIndex: ii,
+          flatIndex: fi,
+          cacheKey: `item-${si}-${ii}`,
+        });
+      }
     }
 
     if (s.footer) {
       const fi = flatData.length;
       if (s.footer.sticky) stickyFooterFlatIndices.push(fi);
       declaredHeights.set(`__f_${s.key}`, s.footer.height);
+      keyToFlatIndex.set(`item-${si}-footer`, fi);
       flatData.push({ _kind: 'footer', sectionIndex: si });
+      rncvLog('RNCV-JS-FLAT', {
+        op: 'push-footer',
+        sectionIndex: si,
+        sectionKey: s.key,
+        flatIndex: fi,
+        cacheKey: `item-${si}-footer`,
+        sticky: !!s.footer.sticky,
+        declaredHeight: s.footer.height,
+      });
     }
   }
 
-  return { flatData, stickyHeaderFlatIndices, stickyFooterFlatIndices, sectionStartFlatIndices, declaredHeights };
+  rncvLog('RNCV-JS-FLAT', {
+    op: 'summary',
+    sectionCount: sections.length,
+    flatCount: flatData.length,
+    stickyHeaderFlatIndices,
+    stickyFooterFlatIndices,
+    sectionStartFlatIndices,
+    keyToFlatIndexSize: keyToFlatIndex.size,
+    keyToFlatIndexSample: Array.from(keyToFlatIndex.entries()).slice(0, 16),
+  });
+
+  return { flatData, stickyHeaderFlatIndices, stickyFooterFlatIndices, sectionStartFlatIndices, declaredHeights, keyToFlatIndex };
 }
 
 /** Flat-mode key extractor for sectioned items. */
@@ -504,10 +583,38 @@ function sectionedKeyExtractor<T>(
   flatIndex: number,
 ): string {
   const sk = sections[fi.sectionIndex]?.key ?? String(fi.sectionIndex);
-  if (fi._kind === 'header') return `__h_${sk}`;
-  if (fi._kind === 'footer') return `__f_${sk}`;
+  if (fi._kind === 'header') {
+    const out = `__h_${sk}`;
+    rncvLog('RNCV-JS-KEY', {
+      kind: fi._kind,
+      sectionIndex: fi.sectionIndex,
+      flatIndex,
+      reactKey: out,
+    });
+    return out;
+  }
+  if (fi._kind === 'footer') {
+    const out = `__f_${sk}`;
+    rncvLog('RNCV-JS-KEY', {
+      kind: fi._kind,
+      sectionIndex: fi.sectionIndex,
+      flatIndex,
+      reactKey: out,
+    });
+    return out;
+  }
   const raw = userKE ? userKE(fi.item, fi.sectionIndex, fi.itemIndex) : String(flatIndex);
-  return `${sk}:${raw}`;
+  const out = `${sk}:${raw}`;
+  if (fi.itemIndex < 3) {
+    rncvLog('RNCV-JS-KEY', {
+      kind: fi._kind,
+      sectionIndex: fi.sectionIndex,
+      itemIndex: fi.itemIndex,
+      flatIndex,
+      reactKey: out,
+    });
+  }
+  return out;
 }
 
 // ─── Cell wrapper ─────────────────────────────────────────────────────────────
@@ -627,10 +734,12 @@ const MemoizedCellContent = React.memo(function MemoizedCellContent({
   item,
   index,
   renderItem,
+  extraData: _extraData,
 }: {
   item: any;
   index: number;
   renderItem: (info: any) => React.ReactElement | null;
+  extraData?: unknown;
 }) {
   return renderItem({ item, index });
 });
@@ -665,6 +774,7 @@ export function Riff<T = unknown>({
   stickyHeaderIndices: propStickyHeaderIndices,
   stickyFooterIndices: propStickyFooterIndices,
   stickyMode = 'push',
+  extraData,
   renderSectionBackground,
   ScrollViewComponent,
   scrollViewProps,
@@ -674,6 +784,7 @@ export function Riff<T = unknown>({
   onContainerSizeChange,
   initialWidth,
   initialHeight,
+  maintainVisibleContentPosition = false,
 }: RiffProps<T>) {
 
   // ── Section flattening ──────────────────────────────────────────────────────
@@ -682,10 +793,39 @@ export function Riff<T = unknown>({
 
   const isSectioned = !!propSections;
 
-  const flattenResult = useMemo(
-    () => propSections ? flattenSections(propSections) : null,
-    [propSections],
-  );
+  const flattenResult = useMemo(() => {
+    if (!propSections) return null;
+    const result = flattenSections(propSections);
+    // Add stable key → flat index mappings alongside positional ones.
+    // Cache keys for list items are now stable when keyExtractor is present,
+    // so keyToFlatIndex.get(attr.key) must resolve to the correct flat index.
+    if (propKeyExtractor) {
+      for (let si = 0; si < propSections.length; si++) {
+        const s = propSections[si]!;
+        for (let ii = 0; ii < s.data.length; ii++) {
+          const stableKey = `${s.key}:${propKeyExtractor(s.data[ii]!, ii)}`;
+          const positionalKey = `item-${si}-${ii}`;
+          const fi = result.keyToFlatIndex.get(positionalKey);
+          if (fi !== undefined) {
+            result.keyToFlatIndex.set(stableKey, fi);
+          }
+        }
+      }
+    }
+    return result;
+  }, [propSections, propKeyExtractor]);
+
+  useEffect(() => {
+    if (!isSectioned || !flattenResult) return;
+    rncvLog('RNCV-JS-FLAT', {
+      op: 'useMemo-result',
+      flatCount: flattenResult.flatData.length,
+      stickyHeaders: flattenResult.stickyHeaderFlatIndices,
+      stickyFooters: flattenResult.stickyFooterFlatIndices,
+      sectionStartFlatIndices: flattenResult.sectionStartFlatIndices,
+      keyToFlatIndexSize: flattenResult.keyToFlatIndex.size,
+    });
+  }, [isSectioned, flattenResult]);
 
   // In sectioned mode, wrap the consumer's renderItem to dispatch
   // headers/footers to their section render functions.
@@ -699,7 +839,19 @@ export function Riff<T = unknown>({
 
   const sectionedKeyExtractorCb = useCallback((item: any, index: number) => {
     if (!propSections) return propKeyExtractor ? propKeyExtractor(item, index) : String(index);
-    return sectionedKeyExtractor(propSections, propKeyExtractor, item as FlatItem<T>, index);
+    const fi = item as FlatItem<T>;
+    const k = sectionedKeyExtractor(propSections, propKeyExtractor, fi, index);
+    if (fi._kind === 'header' || fi._kind === 'footer' || (fi._kind === 'item' && fi.itemIndex < 2)) {
+      rncvLog('RNCV-JS-KEY', {
+        op: 'sectionedKeyExtractorCb',
+        flatIndex: index,
+        kind: fi._kind,
+        sectionIndex: fi.sectionIndex,
+        itemIndex: (fi as any).itemIndex,
+        reactKey: k,
+      });
+    }
+    return k;
   }, [propSections, propKeyExtractor]);
 
   // Effective values used by the rest of the component.
@@ -712,6 +864,10 @@ export function Riff<T = unknown>({
     ? flattenResult!.stickyHeaderFlatIndices
     : (propStickyHeaderIndices ?? []);
   const hasStickyHeaders = stickyHeaderFlatIndices.length > 0;
+  const stickyFooterFlatIndices = isSectioned
+    ? flattenResult!.stickyFooterFlatIndices
+    : (propStickyFooterIndices ?? []);
+  const hasStickyFooters = stickyFooterFlatIndices.length > 0;
 
   // ── Core state ──────────────────────────────────────────────────────────────
   // Seed viewport dimensions so the layout protocol can run on frame 1.
@@ -822,7 +978,15 @@ export function Riff<T = unknown>({
     return attr ? attr.frame.height : undefined;
   });
   measuredHeightForItemRef.current = (index: number, section: number): number | undefined => {
-    const attr = nativeLayoutCache.getAttributes(`item-${section}-${index}`);
+    // Use the same identity key that list.ts writes to the cache when keyExtractor is set.
+    // Positional keys (item-S-I) always miss for identity-keyed lists, causing every
+    // prepare() call to fall back to estimates and producing false measurement deltas.
+    const sec = propSections?.[section];
+    const item = sec?.data[index];
+    const key = (sec && propKeyExtractor && item !== undefined)
+      ? `${sec.key}:${propKeyExtractor(item, index)}`
+      : `item-${section}-${index}`;
+    const attr = nativeLayoutCache.getAttributes(key);
     return attr ? attr.frame.height : undefined;
   };
 
@@ -835,7 +999,10 @@ export function Riff<T = unknown>({
       sections: propSections
         ? propSections.map(s => ({
             itemCount: s.data.length,
-            insets: undefined,
+            insets: s.insets,
+            itemKeys: propKeyExtractor
+              ? s.data.map((item, ii) => `${s.key}:${propKeyExtractor!(item, ii)}`)
+              : undefined,
             supplementaryItems: [
               ...(s.header ? [{
                 kind: 'header' as const,
@@ -855,32 +1022,69 @@ export function Riff<T = unknown>({
           }))
         : [{
             itemCount: data.length,
+            supplementaryItems: [],
             insets: {
               top: sectionInsetTop,
               bottom: sectionInsetBottom,
               left: sectionInsetLeft,
               right: sectionInsetRight,
             },
-            supplementaryItems: [],
           }],
       measuredHeightForItem: (index: number, section: number) =>
         measuredHeightForItemRef.current(index, section),
     };
-  }, [viewportWidth, viewportHeight, propSections, data.length,
+  }, [viewportWidth, viewportHeight, propSections, propKeyExtractor, data.length,
       sectionInsetTop, sectionInsetBottom, sectionInsetLeft, sectionInsetRight]);
 
   // Prepare the layout when context changes (data, container size).
-  // Seeds the layout cache with positions for all items.
-  // IMPORTANT: after prepare(), sync lastCacheVersionRef with the cache version.
-  // prepare() clears and repopulates the cache, incrementing version by N.
-  // Without this sync, the scroll handler would detect a version change on the
-  // next tick, bump layoutCacheVersion, and trigger another prepare() — creating
-  // an infinite cascade of cache clears that races with the ShadowNode.
+  // Cache clearing is handled internally by each layout engine (e.g. list.ts)
+  // using its own data-shape fingerprint — NOT here in the generic component.
+  useMemo(() => {
+    if (!layoutContext) return;
+    // MVC: snapshot anchor BEFORE prepare() overwrites all positions in the cache.
+    // Only when maintainVisibleContentPosition is enabled. The anchor is the item
+    // with the smallest Y >= current scrollY — the first fully-visible item.
+    if (maintainVisibleContentPosition) {
+      nativeLayoutCache.snapshotAnchor();
+    }
+    effectiveLayout.prepare(layoutContext);
+    // NOTE: computeCorrection() is NOT called here. It runs in native updateState:
+    // AFTER Yoga has measured new items via applyMeasurements. Calling it here
+    // (pre-Yoga) would produce corrections based on estimate heights, not actual.
+    // Sync version ref so scroll handler doesn't re-trigger.
+    lastCacheVersionRef.current = nativeLayoutCache.version();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveLayout, layoutContext]);
+
+  // After each layout preparation, the ShadowNode may write Yoga-measured heights
+  // to the LayoutCache in the Fabric commit that follows. This bumps the native
+  // cache version beyond what prepare() wrote. Without a scroll event, the scroll
+  // handler never detects the bump, so stickyConfigMap and layoutContentSize hold
+  // stale estimate-based values (e.g. sticky headers appear at wrong positions).
+  //
+  // Fix: schedule a post-frame check. By the next rAF the ShadowNode will have
+  // processed the commit, so any new Yoga measurements are already in the cache.
+  //
+  // Also triggered by extraData changes: a resize passes new extraData, which
+  // causes a Fabric commit → applyMeasurements bumps the cache version. Without
+  // this, naturalY stays stale until the 100ms polling timer fires, causing
+  // sticky views to be offset by the height delta during that window.
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const nv = nativeLayoutCache.version();
+      if (nv !== lastCacheVersionRef.current) {
+        lastCacheVersionRef.current = nv;
+        setLayoutCacheVersion(v => v + 1);
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutContext, extraData]);
+
+  // Read content size — updates when layoutCacheVersion changes (measurements
+  // shift item positions) WITHOUT re-calling prepare().
   const layoutContentSize = useMemo(() => {
     if (!layoutContext) return null;
-    effectiveLayout.prepare(layoutContext);
-    // Sync version ref so scroll handler doesn't re-trigger prepare.
-    lastCacheVersionRef.current = nativeLayoutCache.version();
     return effectiveLayout.contentSize();
   }, [effectiveLayout, layoutContext, layoutCacheVersion]);
 
@@ -933,19 +1137,30 @@ export function Riff<T = unknown>({
       setRenderRange({ first: 0, last: -1 });
     } else {
       let minIdx = Infinity, maxIdx = -Infinity;
+      let missedKeys = [];
       for (const attr of attrs) {
-        if (attr.index < minIdx) minIdx = attr.index;
-        if (attr.index > maxIdx) maxIdx = attr.index;
+        const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(attr.key) ?? -1) : attr.index;
+        if (fi === -1) {
+          missedKeys.push(attr.key);
+          continue;
+        }
+        if (fi < minIdx) minIdx = fi;
+        if (fi > maxIdx) maxIdx = fi;
       }
-      const render = { first: minIdx, last: maxIdx };
+      
+      if (missedKeys.length > 0) rncvVerboseLog(`[RNCVX] scrollY=${scrollY} MISSING KEYS (first 3):`, missedKeys.slice(0, 3));
+      rncvVerboseLog(`[RNCVX] scrollY=${scrollY} sectioned=${isSectioned} C++_attr_count=${attrs.length} -> max_fi=${maxIdx} min_fi=${minIdx}`);
+      const render = { first: minIdx === Infinity ? 0 : minIdx, last: maxIdx === -Infinity ? -1 : maxIdx };
 
       const visAttrs = effectiveLayout.attributesForElements({
         x: 0, y: scrollY, width: viewportWidth, height: viewportHeight,
       });
       let visFirst = Infinity, visLast = -Infinity;
       for (const a of visAttrs) {
-        if (a.index < visFirst) visFirst = a.index;
-        if (a.index > visLast) visLast = a.index;
+        const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(a.key) ?? -1) : a.index;
+        if (fi === -1) continue;
+        if (fi < visFirst) visFirst = fi;
+        if (fi > visLast) visLast = fi;
       }
       const visible = { first: visFirst === Infinity ? 0 : visFirst, last: visLast === -Infinity ? -1 : visLast };
 
@@ -1132,8 +1347,10 @@ export function Riff<T = unknown>({
 
       let rFirst = Infinity, rLast = -Infinity;
       for (const a of attrs) {
-        if (a.index < rFirst) rFirst = a.index;
-        if (a.index > rLast) rLast = a.index;
+        const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(a.key) ?? -1) : a.index;
+        if (fi === -1) continue;
+        if (fi < rFirst) rFirst = fi;
+        if (fi > rLast) rLast = fi;
       }
       const newR = { first: rFirst === Infinity ? 0 : rFirst, last: rLast === -Infinity ? -1 : rLast };
 
@@ -1142,8 +1359,10 @@ export function Riff<T = unknown>({
       });
       let vFirst = Infinity, vLast = -Infinity;
       for (const a of visAttrs) {
-        if (a.index < vFirst) vFirst = a.index;
-        if (a.index > vLast) vLast = a.index;
+        const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(a.key) ?? -1) : a.index;
+        if (fi === -1) continue;
+        if (fi < vFirst) vFirst = fi;
+        if (fi > vLast) vLast = fi;
       }
       const newV = { first: vFirst === Infinity ? 0 : vFirst, last: vLast === -Infinity ? -1 : vLast };
 
@@ -1215,34 +1434,82 @@ export function Riff<T = unknown>({
     },
   };
 
-  // ── Sticky header config for ScrollCoordinatedView ──────────────────────────
-  // Build a map: flatIndex → { naturalY, boundaryY, headerHeight, behavior }
+  // ── Sticky supplementary config for ScrollCoordinatedView ───────────────────
+  // Build a map: flatIndex → { kind, naturalY, boundaryY, sizeHeight }
   // Each sticky cell is wrapped in RNScrollCoordinatedView in renderCell.
   // The native component handles the transform on the UI thread.
   // MUST be defined before renderCell / scrollContent IIFE that consumes it.
 
   const stickyConfigMap = useMemo(() => {
-    if (!hasStickyHeaders) return null;
-    const map = new Map<number, { naturalY: number; boundaryY: number; headerHeight: number }>();
+    if (!hasStickyHeaders && !hasStickyFooters) return null;
+    const map = new Map<number, { kind: 'header' | 'footer'; naturalY: number; boundaryY: number; sizeHeight: number }>();
 
-    for (let i = 0; i < stickyHeaderFlatIndices.length; i++) {
-      const fi = stickyHeaderFlatIndices[i]!;
-      const attr = effectiveLayout.attributesForItem(fi, 0);
+    const allSticky = [
+      ...stickyHeaderFlatIndices.map(fi => ({ fi, kind: 'header' as const })),
+      ...stickyFooterFlatIndices.map(fi => ({ fi, kind: 'footer' as const })),
+    ].sort((a, b) => a.fi - b.fi);
+
+    for (let i = 0; i < allSticky.length; i++) {
+      const { fi, kind: stickyKind } = allSticky[i]!;
+      const fiDesc = isSectioned ? flattenResult?.flatData[fi] : null;
+      
+      let attr = null;
+      if (isSectioned && fiDesc?._kind === 'header') {
+        attr = nativeMod.layoutCache.getAttributes(`item-${fiDesc.sectionIndex}-header`);
+      } else if (isSectioned && fiDesc?._kind === 'footer') {
+        attr = nativeMod.layoutCache.getAttributes(`item-${fiDesc.sectionIndex}-footer`);
+      } else {
+        attr = effectiveLayout.attributesForItem(isSectioned ? ((fiDesc as any)?.itemIndex ?? fi) : fi, isSectioned ? (fiDesc?.sectionIndex ?? 0) : 0);
+      }
+      
       const naturalY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
-      const headerHeight = attr ? attr.frame.height : effectiveItemHeight;
+      const sizeHeight = attr ? attr.frame.height : effectiveItemHeight;
 
-      const nextFi = stickyHeaderFlatIndices[i + 1];
+      // Push boundary differs by kind:
+      // - Header: next section start — the next header pushes this one away from viewport top.
+      // - Footer: current section start — footer shouldn't be pulled above its own section.
       let boundaryY = 999999;
-      if (nextFi !== undefined) {
-        const nextAttr = effectiveLayout.attributesForItem(nextFi, 0);
-        boundaryY = nextAttr ? nextAttr.frame.y : sectionInsetTop + nextFi * stride;
+      if (isSectioned && typeof fiDesc?.sectionIndex === 'number') {
+        if (stickyKind === 'footer') {
+          // Footer boundary = section's own header Y (or first item Y if no header).
+          const sectionHeader = nativeMod.layoutCache.getAttributes(`item-${fiDesc.sectionIndex}-header`);
+          if (sectionHeader) {
+            boundaryY = sectionHeader.frame.y;
+          } else {
+            const firstItem = effectiveLayout.attributesForItem(0, fiDesc.sectionIndex);
+            if (firstItem) boundaryY = firstItem.frame.y;
+          }
+        } else {
+          // Header boundary = next section start.
+          const nextSection = fiDesc.sectionIndex + 1;
+          if (propSections && nextSection < propSections.length) {
+            const nextHeader = nativeMod.layoutCache.getAttributes(`item-${nextSection}-header`);
+            if (nextHeader) {
+              boundaryY = nextHeader.frame.y;
+            } else {
+              const nextFirst = effectiveLayout.attributesForItem(0, nextSection);
+              if (nextFirst) boundaryY = nextFirst.frame.y;
+            }
+          }
+        }
       }
 
-      map.set(fi, { naturalY, boundaryY, headerHeight });
+      rncvVerboseLog(`[RNCVX-STICKY] kind=${stickyKind} sIdx=${fiDesc?.sectionIndex} naturalY=${naturalY} boundaryY=${boundaryY} attrOk=${!!attr} fi=${fi}`);
+      rncvLog('RNCV-JS-STICKY', {
+        op: 'stickyConfigMap-entry',
+        fi,
+        sectionIndex: fiDesc?.sectionIndex,
+        kind: stickyKind,
+        attrHit: !!attr,
+        naturalY,
+        boundaryY,
+        headerHeight: sizeHeight,
+      });
+      map.set(fi, { kind: stickyKind, naturalY, boundaryY, sizeHeight });
     }
     return map;
-  }, [hasStickyHeaders, stickyHeaderFlatIndices, effectiveLayout,
-      effectiveItemHeight, sectionInsetTop, stride,
+  }, [hasStickyHeaders, hasStickyFooters, stickyHeaderFlatIndices, stickyFooterFlatIndices,
+      effectiveLayout, effectiveItemHeight, sectionInsetTop, stride, isSectioned, flattenResult, propSections,
       // eslint-disable-next-line react-hooks/exhaustive-deps
       layoutCacheVersion]);
 
@@ -1259,6 +1526,33 @@ export function Riff<T = unknown>({
   const renderCell = (item: T, index: number, measureOnly = false) => {
     const key  = keyExtractor ? keyExtractor(item, index) : String(index);
 
+    const fiDesc = isSectioned ? flattenResult?.flatData[index] : null;
+    const sk = fiDesc ? fiDesc.sectionIndex : 0;
+    const ik = fiDesc && fiDesc._kind === 'item' ? fiDesc.itemIndex : index;
+    
+    let cacheKey: string;
+    if (fiDesc?._kind === 'header') {
+      cacheKey = `item-${sk}-header`;
+    } else if (fiDesc?._kind === 'footer') {
+      cacheKey = `item-${sk}-footer`;
+    } else if (effectiveLayout.type !== 'list') {
+      cacheKey = `${effectiveLayout.type}-${index}`;
+    } else {
+      // Use stable key from layoutContext when keyExtractor is available.
+      const sectionKeys = layoutContext?.sections[sk]?.itemKeys;
+      cacheKey = sectionKeys?.[ik] ?? `item-${sk}-${ik}`;
+    }
+    rncvLog('RNCV-JS-CELL', {
+      op: 'derive-cell-key',
+      index,
+      measureOnly,
+      layoutType: effectiveLayout.type,
+      kind: fiDesc?._kind,
+      sectionIndex: fiDesc?.sectionIndex,
+      itemIndex: (fiDesc as any)?.itemIndex,
+      cacheKey,
+    });
+
     // Render-range cells are Activity=visible. Measure-range cells use
     // Activity=hidden so Fabric computes their Yoga layout without painting.
     // ShadowNode measures all children via Yoga and writes heights to LayoutCache.
@@ -1269,23 +1563,48 @@ export function Riff<T = unknown>({
     let estimatedTop: number;
     let cellLeft = sectionInsetLeft;
     let cellWidth = itemWidth;
-    let cellHeight: number | undefined = !isVariableHeight && !measureOnly ? effectiveItemHeight : undefined;
 
-    const attr = effectiveLayout.attributesForItem(index, 0);
+    let attr = null;
+    if (isSectioned) {
+      if (fiDesc?._kind === 'header') {
+        attr = nativeMod.layoutCache.getAttributes(`item-${fiDesc.sectionIndex}-header`);
+      } else if (fiDesc?._kind === 'footer') {
+        attr = nativeMod.layoutCache.getAttributes(`item-${fiDesc.sectionIndex}-footer`);
+      } else {
+        attr = effectiveLayout.attributesForItem((fiDesc as any)?.itemIndex ?? index, fiDesc?.sectionIndex ?? 0);
+      }
+    } else {
+      attr = effectiveLayout.attributesForItem(index, 0);
+    }
+
     if (attr) {
       estimatedTop = attr.frame.y;
       cellLeft = attr.frame.x;
       cellWidth = attr.frame.width;
-      if (attr.frame.height > 0) {
-        cellHeight = attr.frame.height;
-      }
     } else {
       estimatedTop = sectionInsetTop + index * stride;
     }
+    rncvLog('RNCV-JS-CELL', {
+      op: 'layout-attr',
+      index,
+      measureOnly,
+      kind: fiDesc?._kind,
+      sectionIndex: fiDesc?.sectionIndex,
+      cacheKey,
+      attrHit: !!attr,
+      attrY: attr?.frame?.y,
+      attrH: attr?.frame?.height,
+      estimatedTop,
+      cellLeft,
+      cellWidth,
+    });
 
     const top  = (measureOnly && !useRealPosition) ? -9999 : estimatedTop;
     const left = (measureOnly && !useRealPosition) ? -9999 : cellLeft;
 
+    // No explicit height — Yoga measures from content. The ShadowNode reads
+    // Yoga's measured height, compares with the LayoutCache estimate, and
+    // cascades position corrections if they differ (zero-frame correction).
     const containerStyle = [
       {
         position: 'absolute' as const,
@@ -1293,17 +1612,26 @@ export function Riff<T = unknown>({
         top,
         ...(viewportWidth > 0 ? { width: cellWidth } : {}),
       },
-      cellHeight != null && !measureOnly && { height: cellHeight },
     ];
 
     // ShadowNode measures via Yoga — no RNMeasuredCell wrapping needed.
     const content = (
       <CellWrapper mode={mode}>
-        <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} />
+        <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} extraData={extraData} />
       </CellWrapper>
     );
 
     const stickyConfig = stickyConfigMap?.get(index);
+    rncvLog('RNCV-JS-CELL', {
+      op: 'render-branch',
+      index,
+      measureOnly,
+      kind: fiDesc?._kind,
+      sectionIndex: fiDesc?.sectionIndex,
+      cacheKey,
+      stickyConfig: !!stickyConfig,
+      branch: stickyConfig && !measureOnly ? 'RNScrollCoordinatedView' : 'RNMeasuredCell',
+    });
 
     if (stickyConfig && !measureOnly) {
       // RNScrollCoordinatedView IS the cell container — its transform must be
@@ -1317,8 +1645,13 @@ export function Riff<T = unknown>({
           behavior={stickyMode}
           naturalY={stickyConfig.naturalY}
           boundaryY={stickyConfig.boundaryY}
-          headerHeight={stickyConfig.headerHeight}
+          headerHeight={stickyConfig.sizeHeight}
           enabled={true}
+          type="supplementary"
+          kind={stickyConfig.kind}
+          index={index}
+          cacheKey={cacheKey}
+          isMeasureOnly={measureOnly}
         >
           {content}
         </RNScrollCoordinatedView>
@@ -1326,9 +1659,16 @@ export function Riff<T = unknown>({
     }
 
     return (
-      <View key={key} collapsable={false} style={containerStyle}>
+      <RNMeasuredCell 
+        key={key} 
+        style={containerStyle}
+        type="cell"
+        index={index}
+        cacheKey={cacheKey}
+        isMeasureOnly={measureOnly}
+      >
         {content}
-      </View>
+      </RNMeasuredCell>
     );
   };
 
@@ -1346,6 +1686,13 @@ export function Riff<T = unknown>({
   const STICKY_BUFFER_BEFORE = 1;
   const STICKY_BUFFER_AFTER  = 2;
 
+  // In ShadowNode mode, the `cells` array no longer needs to be contiguous.
+  // The C++ layer explicitly identifies each child by its `index` prop.
+  // We can safely prepend sticky headers and skip them in the main loop!
+  
+  let effFirst = 0;
+  let effLast = -1;
+
   const stickyIndexSet = useMemo(
     () => stickyConfigMap ? new Set(stickyConfigMap.keys()) : null,
     [stickyConfigMap],
@@ -1353,80 +1700,113 @@ export function Riff<T = unknown>({
 
   let mountedStickySet: Set<number> | null = null;
   let stickyHeaderCells: React.ReactElement[] | null = null;
+  let stickyFooterCells: React.ReactElement[] | null = null;
 
-  if (stickyConfigMap && stickyIndexSet && stickyHeaderFlatIndices.length > 0) {
-    // Find the active sticky: last one whose position ≤ scroll top.
+  if (stickyConfigMap && stickyIndexSet && (stickyHeaderFlatIndices.length > 0 || stickyFooterFlatIndices.length > 0)) {
     const scrollY = prevScrollYRef.current;
-    let activeSlot = 0;
-    for (let i = stickyHeaderFlatIndices.length - 1; i >= 0; i--) {
-      const fi = stickyHeaderFlatIndices[i]!;
-      const attr = effectiveLayout.attributesForItem(fi, 0);
-      const posY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
-      if (posY <= scrollY) {
-        activeSlot = i;
-        break;
+    const vpH = viewportHeightRef.current || viewportHeight;
+
+    mountedStickySet = new Set<number>();
+
+    if (stickyHeaderFlatIndices.length > 0) {
+      // Active header: last one whose naturalY ≤ scrollY
+      let activeSlot = 0;
+      for (let i = stickyHeaderFlatIndices.length - 1; i >= 0; i--) {
+        const fi = stickyHeaderFlatIndices[i]!;
+        const sd = isSectioned ? flattenResult?.flatData[fi] : null;
+        const attr = (isSectioned && sd?._kind === 'header')
+          ? nativeMod.layoutCache.getAttributes(`item-${sd.sectionIndex}-header`)
+          : effectiveLayout.attributesForItem(isSectioned ? ((sd as any)?.itemIndex ?? fi) : fi, isSectioned ? (sd?.sectionIndex ?? 0) : 0);
+        const posY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
+        if (posY <= scrollY) { activeSlot = i; break; }
+      }
+
+      const first = Math.max(0, activeSlot - STICKY_BUFFER_BEFORE);
+      const last  = Math.min(stickyHeaderFlatIndices.length - 1, activeSlot + STICKY_BUFFER_AFTER);
+      stickyHeaderCells = [];
+      for (let s = first; s <= last; s++) {
+        const fi = stickyHeaderFlatIndices[s]!;
+        if (!data[fi]) continue;
+        mountedStickySet.add(fi);
+        stickyHeaderCells.push(renderCell(data[fi]!, fi, false));
       }
     }
 
-    const first = Math.max(0, activeSlot - STICKY_BUFFER_BEFORE);
-    const last  = Math.min(stickyHeaderFlatIndices.length - 1, activeSlot + STICKY_BUFFER_AFTER);
+    if (stickyFooterFlatIndices.length > 0) {
+      // Active footer: last one whose naturalY ≤ (scrollY + vpH - footerH)
+      let activeSlot = 0;
+      for (let i = stickyFooterFlatIndices.length - 1; i >= 0; i--) {
+        const fi = stickyFooterFlatIndices[i]!;
+        const sd = isSectioned ? flattenResult?.flatData[fi] : null;
+        const attr = (isSectioned && sd?._kind === 'footer')
+          ? nativeMod.layoutCache.getAttributes(`item-${sd.sectionIndex}-footer`)
+          : effectiveLayout.attributesForItem(isSectioned ? ((sd as any)?.itemIndex ?? fi) : fi, isSectioned ? (sd?.sectionIndex ?? 0) : 0);
+        const posY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
+        const h = attr ? attr.frame.height : effectiveItemHeight;
+        if (posY <= (scrollY + vpH - h)) { activeSlot = i; break; }
+      }
 
-    mountedStickySet = new Set<number>();
-    stickyHeaderCells = [];
-    for (let s = first; s <= last; s++) {
-      const fi = stickyHeaderFlatIndices[s]!;
-      if (!data[fi]) continue;
-      mountedStickySet.add(fi);
-      stickyHeaderCells.push(renderCell(data[fi]!, fi, false));
+      const first = Math.max(0, activeSlot - STICKY_BUFFER_BEFORE);
+      const last  = Math.min(stickyFooterFlatIndices.length - 1, activeSlot + STICKY_BUFFER_AFTER);
+      stickyFooterCells = [];
+      for (let s = first; s <= last; s++) {
+        const fi = stickyFooterFlatIndices[s]!;
+        if (!data[fi]) continue;
+        mountedStickySet.add(fi);
+        stickyFooterCells.push(renderCell(data[fi]!, fi, false));
+      }
     }
   }
 
   const scrollContent = (() => {
-    // Cells are rendered as direct children of RNCollectionViewContainer
-    // (no wrapper View). The ShadowNode needs to see each cell as a direct
-    // child so it can match them to LayoutCache entries and apply Yoga
-    // measurement deltas. Content height comes from state.contentSize
-    // (computed by ShadowNode from the cache), not from a wrapper View.
-
     if (!viewportWidth && rr !== null) return null;
 
     let cells: React.ReactElement[];
 
     if (rr === null) {
-      // Before the layout effect fires: render initialNumToRender items.
-      // With seeded viewport dimensions, prepare() has already run so
-      // renderCell reads real positions from attributesForItem().
-      // useLayoutEffect fires before paint and sets the real range.
-      const n = Math.min(initialNumToRender, itemCount);
-      cells = [];
-      for (let i = 0; i < n; i++) {
-        // Skip sticky headers — they're rendered permanently above.
-        if (mountedStickySet?.has(i)) continue;
-        cells.push(renderCell(data[i]!, i, false));
-      }
-    } else if (!isVariableHeight || measureRange.last < measureRange.first) {
-      // Fixed height or measure range not yet set: render range only.
-      cells = [];
-      for (let i = rr.first; i <= rr.last; i++) {
-        if (mountedStickySet?.has(i)) continue;
-        cells.push(renderCell(data[i]!, i, false));
-      }
-    } else {
-      // Variable height with active measure range.
-      // measureRange is always a superset of renderRange (set in the same batch).
-      // The union guard handles any edge case where they diverge momentarily.
-      const effFirst = Math.min(rr.first, measureRange.first);
-      const effLast  = Math.max(rr.last,  measureRange.last);
+      effFirst = 0;
+      effLast = Math.min(initialNumToRender, itemCount) - 1;
+      effLast = Math.min(effLast, data.length - 1);
       cells = [];
       for (let i = effFirst; i <= effLast; i++) {
         if (mountedStickySet?.has(i)) continue;
-        // measureOnly = outside the (urgent) render range — park off-screen.
+        if (!data[i]) continue;
+        cells.push(renderCell(data[i]!, i, false));
+      }
+    } else if (!isVariableHeight || measureRange.last < measureRange.first) {
+      effFirst = rr.first;
+      effLast = Math.min(rr.last, data.length - 1);
+      cells = [];
+      for (let i = effFirst; i <= effLast; i++) {
+        if (mountedStickySet?.has(i)) continue;
+        if (!data[i]) continue;
+        cells.push(renderCell(data[i]!, i, false));
+      }
+    } else {
+      effFirst = Math.min(rr.first, measureRange.first);
+      effLast  = Math.max(rr.last,  measureRange.last);
+      effLast  = Math.min(effLast, data.length - 1);
+      cells = [];
+      for (let i = effFirst; i <= effLast; i++) {
+        if (mountedStickySet?.has(i)) continue;
+        if (!data[i]) continue;
         const measureOnly = i < rr.first || i > rr.last;
         cells.push(renderCell(data[i]!, i, measureOnly));
       }
     }
+    rncvLog('RNCV-JS-RANGE', {
+      op: 'scrollContent',
+      rr,
+      measureRange,
+      effFirst,
+      effLast,
+      cellsCount: cells.length,
+      stickyCellsCount: (stickyHeaderCells?.length ?? 0) + (stickyFooterCells?.length ?? 0),
+      mountedStickyIndices: mountedStickySet ? Array.from(mountedStickySet.values()) : [],
+      isVariableHeight,
+    });
 
-    return <>{stickyHeaderCells}{cells}</>;
+    return <>{stickyHeaderCells}{stickyFooterCells}{cells}</>;
   })();
 
   // ── P5.1: HUD snapshot ───────────────────────────────────────────────────────
@@ -1514,15 +1894,15 @@ export function Riff<T = unknown>({
     : null;
 
 
-  if (renderScrollView || ScrollViewComponent) {
+  if (__DEV__ && (renderScrollView || ScrollViewComponent)) {
     console.warn(
       'CollectionView: ScrollViewComponent and renderScrollView are not supported ' +
       'in ShadowNode mode. The native RNCollectionViewContainer owns the scroll view.',
     );
   }
 
-  const renderRangeStart = rr?.first ?? 0;
-  const renderRangeEnd   = rr?.last ?? -1;
+  const renderRangeStart = effFirst;
+  const renderRangeEnd   = effLast;
 
   return (
     <View style={[{ flex: 1 }, style]} onLayout={onContainerLayout}>

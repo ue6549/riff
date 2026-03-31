@@ -1,6 +1,7 @@
 #include "LayoutCache.h"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 namespace rncv {
@@ -149,6 +150,65 @@ void LayoutCache::setScrollOffset(double x, double y) {
 Point LayoutCache::getScrollOffset() const {
   std::lock_guard<std::mutex> lock(_mutex);
   return _scrollOffset;
+}
+
+// ─── MVC correction ──────────────────────────────────────────────────────────
+
+void LayoutCache::snapshotAnchor() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  const double scrollY = _scrollOffset.y;
+  // Find item with smallest Y that starts at or below scrollY.
+  // If none, fall back to item whose bottom exceeds scrollY (partially visible).
+  std::string bestKey;
+  double bestY = std::numeric_limits<double>::max();
+  bool found = false;
+  for (const auto& [key, attrs] : _map) {
+    const double y = attrs.frame.y;
+    if (y >= scrollY && y < bestY) {
+      bestKey = key; bestY = y; found = true;
+    }
+  }
+  if (!found) {
+    // Fallback: topmost item partially visible (bottom > scrollY)
+    for (const auto& [key, attrs] : _map) {
+      const double y = attrs.frame.y;
+      const double bottom = y + attrs.frame.height;
+      if (bottom > scrollY && y < bestY) {
+        bestKey = key; bestY = y; found = true;
+      }
+    }
+  }
+  if (found) {
+    _anchorKey = std::move(bestKey);
+    _anchorY   = bestY;
+    _hasAnchor = true;
+  } else {
+    _hasAnchor = false;
+  }
+}
+
+double LayoutCache::computeCorrection() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (!_hasAnchor) return 0;
+  _hasAnchor = false; // one-shot
+  auto it = _map.find(_anchorKey);
+  if (it == _map.end()) {
+    // Anchor was deleted — no correction
+    return 0;
+  }
+  const double correction = it->second.frame.y - _anchorY;
+  _pendingCorrectionY   = correction;
+  _hasPendingCorrection = true;
+  return correction;
+}
+
+double LayoutCache::consumePendingCorrection() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (!_hasPendingCorrection) return 0;
+  const double correction = _pendingCorrectionY;
+  _pendingCorrectionY   = 0;
+  _hasPendingCorrection = false;
+  return correction;
 }
 
 // ─── JSI conversion helpers ───────────────────────────────────────────────────
@@ -435,6 +495,31 @@ void LayoutCache::installJSIBindings(Runtime& rt, Object& target) {
       PropNameID::forAscii(rt, "version"), 0,
       [this](Runtime& rt, const Value&, const Value*, size_t) -> Value {
         return Value(static_cast<double>(version()));
+      }));
+
+  // snapshotAnchor() → undefined
+  target.setProperty(rt, "snapshotAnchor",
+    Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "snapshotAnchor"), 0,
+      [this](Runtime& rt, const Value&, const Value*, size_t) -> Value {
+        snapshotAnchor();
+        return Value::undefined();
+      }));
+
+  // computeCorrection() → number
+  target.setProperty(rt, "computeCorrection",
+    Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "computeCorrection"), 0,
+      [this](Runtime& rt, const Value&, const Value*, size_t) -> Value {
+        return Value(computeCorrection());
+      }));
+
+  // consumePendingCorrection() → number
+  target.setProperty(rt, "consumePendingCorrection",
+    Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "consumePendingCorrection"), 0,
+      [this](Runtime& rt, const Value&, const Value*, size_t) -> Value {
+        return Value(consumePendingCorrection());
       }));
 }
 

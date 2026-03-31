@@ -111,6 +111,8 @@ export interface SectionInfo {
   readonly insets?: Insets;
   /** Supplementary views registered for this section. */
   readonly supplementaryItems: readonly SupplementaryInfo[];
+  /** Stable identity keys per item (from keyExtractor). Layout engines use as cache keys. */
+  readonly itemKeys?: readonly string[];
 }
 
 /** Supplementary view metadata for layout computation. */

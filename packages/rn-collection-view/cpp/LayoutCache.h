@@ -127,6 +127,25 @@ public:
   void setScrollOffset(double x, double y);
   Point getScrollOffset() const;
 
+  // ── MVC (maintainVisibleContentPosition) correction ───────────────────
+  // Three-step API called from the JS prepare() useMemo:
+  //   1. snapshotAnchor()          — before prepare() rewrites positions
+  //   2. computeCorrection()      — after prepare() writes new positions
+  //   3. consumePendingCorrection() — called by native view in updateState:
+
+  /// Record the anchor item: smallest-Y item at or below the current scroll
+  /// offset (reads _scrollOffset internally — written by native view on every
+  /// scroll frame). Call BEFORE prepare() so old positions are still in cache.
+  void snapshotAnchor();
+
+  /// Compare anchor's new Y to snapshotted Y. Store result as pending correction.
+  /// Call AFTER prepare() writes new positions. Returns the correction delta.
+  double computeCorrection();
+
+  /// Return and atomically clear the pending correction. Called once by the
+  /// native view in updateState: to adjust UIScrollView.contentOffset.
+  double consumePendingCorrection();
+
   // ── Versioning ────────────────────────────────────────────────────────────
 
   uint64_t version() const;
@@ -160,6 +179,13 @@ private:
   mutable std::mutex                                _mutex;
   SpatialIndex                                      _index;   // M1.4
   Point                                             _scrollOffset{0, 0};
+
+  // MVC anchor snapshot state (guarded by _mutex)
+  std::string _anchorKey;
+  double      _anchorY             = 0;
+  bool        _hasAnchor           = false;
+  double      _pendingCorrectionY  = 0;
+  bool        _hasPendingCorrection = false;
 
   // Internal helpers (call with lock held)
   void _setAttributesLocked(const LayoutAttributes& attrs);

@@ -22,7 +22,7 @@
  *   enabled      — when false, no transform is applied (passthrough)
  */
 import type { ViewProps } from 'react-native';
-import type { WithDefault, Float } from 'react-native/Libraries/Types/CodegenTypes';
+import type { WithDefault, Float, Int32 } from 'react-native/Libraries/Types/CodegenTypes';
 import codegenNativeComponent from 'react-native/Libraries/Utilities/codegenNativeComponent';
 
 interface NativeProps extends ViewProps {
@@ -31,6 +31,11 @@ interface NativeProps extends ViewProps {
   boundaryY?: Float;
   headerHeight?: Float;
   enabled?: WithDefault<boolean, true>;
+  type?: string;
+  kind?: string;
+  index?: Int32;
+  cacheKey?: string;
+  isMeasureOnly?: boolean;
 }
 
 export default codegenNativeComponent<NativeProps>('RNScrollCoordinatedView');

@@ -11,7 +11,7 @@
  * content subtree, which is exactly what we want to capture.
  */
 import type { ViewProps } from 'react-native';
-import type { DirectEventHandler, Float } from 'react-native/Libraries/Types/CodegenTypes';
+import type { DirectEventHandler, Float, Int32 } from 'react-native/Libraries/Types/CodegenTypes';
 import codegenNativeComponent from 'react-native/Libraries/Utilities/codegenNativeComponent';
 
 type OnMeasuredEvent = Readonly<{
@@ -21,6 +21,11 @@ type OnMeasuredEvent = Readonly<{
 
 interface NativeProps extends ViewProps {
   onMeasured?: DirectEventHandler<OnMeasuredEvent>;
+  type?: string;
+  kind?: string;
+  index?: Int32;
+  cacheKey?: string;
+  isMeasureOnly?: boolean;
 }
 
 export default codegenNativeComponent<NativeProps>('RNMeasuredCell');

@@ -31,10 +31,18 @@ const nativeMod = NativeCollectionViewModule as unknown as {
   };
 };
 
+const RNCV_LAYOUT_DEBUG_LOGS = false;
+const listDebugLog = (...args: any[]) => {
+  if (!__DEV__ || !RNCV_LAYOUT_DEBUG_LOGS) return;
+  console.log(...args);
+};
+
 class ListLayout implements CollectionViewLayout {
   readonly type = 'list';
   private readonly delegate: ListLayoutDelegate;
   private lastContext: LayoutContext | null = null;
+  private _lastFingerprint: string = '';
+  private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: ListLayoutDelegate) {
     this.delegate = delegate;
@@ -108,17 +116,31 @@ class ListLayout implements CollectionViewLayout {
       if (itemHeights) {
         params.itemHeights = itemHeights;
       }
+      if (sec.itemKeys) {
+        params.keys = sec.itemKeys;
+      }
 
       return params;
     });
 
-    nativeMod.layoutCache.clear();
+    this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
 
-    if (sectionParams.length === 1) {
-      nativeMod.listLayout.computeListLayout(sectionParams[0]!);
-    } else {
-      nativeMod.listLayout.computeSections(sectionParams);
+    listDebugLog(`[RNCVX-LIST] Sending to C++ nativeMod.listLayout.computeSections:`, sectionParams.map(s => ({ headerHeight: s.headerHeight, footerHeight: s.footerHeight, itemCount: s.itemCount })));
+
+    // Build a fingerprint of the data shape. Only clear + recompute when it changes.
+    // This preserves Yoga-measured heights across measurement-triggered re-renders.
+    const fp = `${context.containerWidth}|${sectionParams.map(s => `${s.itemCount},${s.headerHeight},${s.footerHeight}`).join(';')}`;
+    if (fp !== this._lastFingerprint) {
+      nativeMod.layoutCache.clear();
+      this._lastFingerprint = fp;
     }
+
+    nativeMod.listLayout.computeSections(sectionParams);
+
+    // Verification: immediately check if header was stored
+    const headerCheck = nativeMod.layoutCache.getAttributes('item-0-header');
+    const totalSize = nativeMod.layoutCache.getTotalContentSize();
+    listDebugLog(`[RNCVX-LIST-VERIFY] After computeSections: item-0-header=${!!headerCheck} y=${headerCheck?.frame?.y} h=${headerCheck?.frame?.height} totalContentH=${totalSize?.height}`);
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
@@ -126,13 +148,13 @@ class ListLayout implements CollectionViewLayout {
   }
 
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    // Key format matches C++ ListLayout: "item-{section}-{index}" or custom keys
-    const key = `item-${section}-${index}`;
+    const sectionKeys = this.lastSectionKeys[section];
+    const key = sectionKeys?.[index] ?? `item-${section}-${index}`;
     return nativeMod.layoutCache.getAttributes(key);
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    const key = `${kind}-${section}`;
+    const key = `item-${section}-${kind}`;
     return nativeMod.layoutCache.getAttributes(key);
   }
 

@@ -1010,6 +1010,88 @@ Test insertion, removal, and resize of items at various positions across all lay
 
 ---
 
+### R1.12 — Proper Decoration Views (UICollectionView-style)
+
+The current `renderSectionBackground` prop is a **consumer-injected** React component wrapped into
+the ScrollView's `renderScrollView` slot. It is architecturally incorrect: the consumer is manually
+positioning absolute Views inside the scroll container, computing section frames in JS, and injecting
+them through a scroll container hook. This is a workaround, not a first-class feature.
+
+**How UICollectionView decoration views actually work:**
+
+UICollectionView decoration views are **layout artifacts** — they have no data source involvement
+whatsoever. The layout owns them entirely:
+1. Consumer calls `layout.register(MyView.self, forDecorationViewOfKind: "sectionBackground")`
+2. Layout's `layoutAttributesForElements(in:)` returns decoration LayoutAttributes alongside cell attributes
+3. UICollectionView creates/reuses the view automatically from the registered class
+4. The view is positioned and z-ordered by the framework — the consumer never touches it
+
+Key properties of true decoration views:
+- **Registered on the layout**, not the collection view — layout decides when/where they appear
+- **Identified by `elementKind` string** — arbitrary kinds, not just one "background" concept
+- **No data** — layout provides frame, zIndex, alpha, transform. No `cellForItemAt`.
+- **Layout-driven frame** — layout computes it from section geometry; consumer does not compute positions
+- **Windowed by framework** — enter/leave render window like cells; not always mounted
+- **Z-order** — typically `zIndex < 0` (behind cells), but configurable per kind
+- **Examples:** section background, inter-item separator, grid rule line, watermark, floating section label, corner badge
+
+**How the current `renderSectionBackground` differs:**
+
+| | `renderSectionBackground` (current) | Proper decoration views |
+|---|---|---|
+| Who positions | Consumer computes JS frame, injects via `renderScrollView` | Layout writes LayoutAttributes; CV framework positions |
+| Registration | Prop on CollectionView | `layout.registerDecoration(kind, Component)` |
+| Arbitrary kinds | No — single "section background" concept | Yes — any `elementKind` string |
+| Frame source | JS consumer | LayoutCache (written by layout engine) |
+| Windowing | Not windowed — consumer decides mount | Same render-window lifecycle as cells |
+| Z-order | Ad-hoc | `zIndex` field in LayoutAttributes |
+
+**Design (to implement in F2.4 or a new F2.5):**
+
+**LayoutCache changes:**
+- `LayoutAttributes`: add `isDecoration: bool`, `decorationKind: string`
+- Key convention: `deco-<kind>-<section>[-<index>]` — section-level or item-level decorations
+- `getDecorationAttributes(kind, section)` / `getAllDecorations()` query methods
+
+**Layout engine changes (ListLayout):**
+- `sectionBackground` kind: emitted per section with frame = `{ x: 0, y: sectionTop, width: containerWidth, height: sectionHeight }` (full section rect including header, items, footer, insets). Opt-in: `showSectionBackground: true` on list config.
+- `separator` kind: emitted between items. Frame = `{ x: separatorInset.left, y: itemBottom, width: contentWidth - insets, height: StyleSheet.hairlineWidth }`. Opt-in: `showSeparators: true`, `separatorInset: {left, right}`.
+- Both emitted only when opted in — no overhead for consumers who don't use them.
+
+**CollectionView render path:**
+- New prop: `decorationRenderers: Record<string, (attrs: LayoutAttributes) => ReactElement>`
+- CV reads all decoration attributes from LayoutCache (same JSI call as cells)
+- Decorations rendered before cells in the React tree (natural z-order: decorations behind)
+- Decorations participate in the same render window (evicted when far from viewport)
+- Budget: separate from cell budget — default 40 (decorations are simple, lightweight)
+
+**Consumer API:**
+```typescript
+// Register on layout config
+const listLayout = list({
+  estimatedItemHeight: 72,
+  showSectionBackground: true,   // emits deco-background-<N> per section
+  showSeparators: true,          // emits deco-separator-<N>-<i> between items
+  separatorInset: { left: 16, right: 0 },
+});
+
+// Provide renderers on CollectionView
+<CollectionView
+  layout={listLayout}
+  decorationRenderers={{
+    sectionBackground: (attrs) => <AnimatedShimmer style={StyleSheet.absoluteFill} />,
+    separator: (attrs) => <View style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: '#333' }} />,
+  }}
+/>
+```
+
+**Migration:** `renderSectionBackground` deprecated → replace with `decorationRenderers.sectionBackground`.
+`DecorationsTab` and `ListDemo` updated to use the new API once implemented.
+
+**Deps:** F2.1, M1.5 (multi-section layout), ShadowNode Phase 5 (positions from cache)
+
+---
+
 ## Phase DOC — Documentation
 
 ### DOC.1 — Solution document (HLD, LLD, optimizations)
@@ -1100,6 +1182,8 @@ DOCS:         DOC.1 (solution document) + DOC.2 (ShadowNode architecture writeup
 ## Research Backlog
 
 - [ ] **R1: Hexagonal architecture review** — Audit the current layout engine ↔ LayoutCache ↔ ShadowNode ↔ native view boundaries. Ensure we have clean ports/adapters: LayoutEngine protocol (contract-first), LayoutCache as the shared port, ShadowNode as a layout-agnostic consumer. Verify no layer reaches into another's internals. Document the contract boundaries.
+
+- [ ] **Sticky supplementary view animations during MVC** — Section headers/footers that are actively sticking show a minor flicker during insert/delete mutations. Regular cells have LayoutAnimation support but supplementary views don't transition smoothly when their positions shift during MVC correction. Investigate adding LayoutAnimation or CATransaction-based animation for sticky view transform updates during mutations.
 
 ### R1 Deep Dive: Frame Application Architecture — Option 1 vs Current Approach
 
