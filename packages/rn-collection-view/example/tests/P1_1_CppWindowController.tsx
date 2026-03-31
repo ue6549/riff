@@ -25,7 +25,7 @@ import {
   View,
 } from 'react-native';
 import { Riff } from '../components/CollectionView';
-import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
+import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
 
 // ─── JSI access ──────────────────────────────────────────────────────────────
 

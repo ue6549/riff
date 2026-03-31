@@ -19,7 +19,7 @@
 import React, {useState, useCallback, useEffect} from 'react';
 import {StyleSheet, Text, TouchableOpacity, View} from 'react-native';
 import RNCollectionViewContainer from '../components/RNCollectionViewContainerNativeComponent';
-import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
+import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
 
 const nativeMod = NativeCollectionViewModule as unknown as {
   layoutCacheId: number;

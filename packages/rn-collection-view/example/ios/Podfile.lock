@@ -2631,7 +2631,7 @@ DEPENDENCIES:
   - ReactAppDependencyProvider (from `build/generated/ios/ReactAppDependencyProvider`)
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../node_modules/react-native/ReactCommon`)
-  - RNCollectionView (from `../node_modules/riff`)
+  - RNCollectionView (from `../..`)
   - SocketRocket (~> 0.7.1)
   - Yoga (from `../node_modules/react-native/ReactCommon/yoga`)
 
@@ -2797,7 +2797,7 @@ EXTERNAL SOURCES:
   ReactCommon:
     :path: "../node_modules/react-native/ReactCommon"
   RNCollectionView:
-    :path: "../node_modules/riff"
+    :path: "../.."
   Yoga:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
@@ -2808,7 +2808,7 @@ SPEC CHECKSUMS:
   FBLazyVector: 82d1d7996af4c5850242966eb81e73f9a6dfab1e
   fmt: a40bb5bd0294ea969aaaba240a927bd33d878cdd
   glog: 5683914934d5b6e4240e497e0f4a3b42d1854183
-  hermes-engine: 82bb8f534c6dbc814a839b369fbe602446f92f8e
+  hermes-engine: 2bee5887fb5cfa4a9944f10db0b243d06daa8676
   RCT-Folly: 846fda9475e61ec7bcbf8a3fe81edfcaeb090669
   RCTDeprecation: 9da1d0cf93db23ca8b41e8efe9ae558fd9c0077f
   RCTRequired: 92a63c7041031a131fa5206eb082d53f95729b79
@@ -2882,7 +2882,7 @@ SPEC CHECKSUMS:
   ReactCommon: 5901ef412ae35cc727b9584d4f7e3e1f7f17c251
   RNCollectionView: e73292f44fd52a7b9fe217392b56c890a1dc7ab5
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
-  Yoga: 19371ad8ad69b080bfe3bd28bb8ddf6aa0aa0eac
+  Yoga: b669e79fa0f8d3f6f5e35372345f54b99e06b13c
 
 PODFILE CHECKSUM: f637cf0ae2994820eb677aeb58a1a1ba8277c617
 

@@ -8,7 +8,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Riff } from '../../components/CollectionView';
-import { list } from 'riff/src/layouts';
+import { list } from '@riff/layouts';
 import { useFPS } from '../../utils/useMetrics';
 
 // ── Scenarios ─────────────────────────────────────────────────────────────────

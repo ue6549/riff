@@ -25,7 +25,7 @@ import {
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Riff } from '../../components/CollectionView';
-import { grid } from 'riff/src/layouts';
+import { grid } from '@riff/layouts';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 

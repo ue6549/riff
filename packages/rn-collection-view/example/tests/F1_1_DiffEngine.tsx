@@ -22,7 +22,7 @@
  */
 import React, { useMemo } from 'react';
 import { TestScreen, TestResult } from './shared';
-import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
+import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
 
 // ─── JSI access ──────────────────────────────────────────────────────────────
 

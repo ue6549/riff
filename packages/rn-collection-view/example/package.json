@@ -3,14 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "NODE_OPTIONS=--preserve-symlinks react-native run-android",
-    "ios": "NODE_OPTIONS=--preserve-symlinks react-native run-ios",
-    "pods": "yarn check:riff-link && (cd ios && bundle exec pod install)",
-    "sync:riff": "rm -rf node_modules/riff && yarn install && yarn check:riff-link",
-    "check:riff-link": "node ./scripts/check-riff-link.js",
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "pods": "cd ios && bundle exec pod install",
     "lint": "eslint .",
-    "postinstall": "yarn check:riff-link",
-    "start": "NODE_OPTIONS=--preserve-symlinks react-native start",
+    "start": "react-native start --port 8082",
     "test": "jest"
   },
   "dependencies": {
@@ -18,8 +15,7 @@
     "@shopify/flash-list": "^2.3.0",
     "react": "19.2.0",
     "react-native": "0.83.4",
-    "react-native-safe-area-context": "^5.5.2",
-    "riff": "link:../"
+    "react-native-safe-area-context": "^5.5.2"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

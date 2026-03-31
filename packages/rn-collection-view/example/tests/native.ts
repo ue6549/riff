@@ -2,8 +2,8 @@
  * Typed accessor for the C++ JSI objects exposed by the native module.
  * Import `native` in every test screen instead of casting inline.
  */
-import type { LayoutAttributes, Rect, Size } from 'riff/src/types';
-import NativeCollectionViewModule from 'riff/src/specs/NativeCollectionViewModule';
+import type { LayoutAttributes, Rect, Size } from '@riff/types';
+import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
 
 type NativeModule = {
   ping(): string;

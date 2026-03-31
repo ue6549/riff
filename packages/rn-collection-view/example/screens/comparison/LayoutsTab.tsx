@@ -18,10 +18,10 @@
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, Animated, Easing } from 'react-native';
 import { Riff as CollectionView } from '../../components/CollectionView';
-import { list } from '../../../src/layouts/list';
-import { grid } from '../../../src/layouts/grid';
-import { masonry } from '../../../src/layouts/masonry';
-import { flow } from '../../../src/layouts/flow';
+import { list } from '@riff/layouts/list';
+import { grid } from '@riff/layouts/grid';
+import { masonry } from '@riff/layouts/masonry';
+import { flow } from '@riff/layouts/flow';
 import { CircularList } from '../../components/CircularList';
 import { Carousel3D } from '../../components/Carousel3D';
 
@@ -31,17 +31,39 @@ const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d'
 
 // ── List data ────────────────────────────────────────────────────────────────
 
-const LIST_COUNT = 500;
-type ListItem = { id: string; color: string; num: number; subtitle: string };
-const LIST_DATA: ListItem[] = Array.from({ length: LIST_COUNT }, (_, i) => {
+type ListItem = { id: string; color: string; num: number; subtitle: string; animated?: boolean };
+
+// S0 — Sticky Identity: variable heights, mutation target
+const S0_DATA: ListItem[] = Array.from({ length: 25 }, (_, i) => {
   const lineCount = (i % 3) + 1;
-  const subtitle = Array(lineCount).fill('This is a dynamically sized text line that proves Yoga intrinsic measurement works perfectly.').join('\n');
+  const subtitle = Array(lineCount)
+    .fill('Mutation target — variable height for scroll testing.')
+    .join('\n');
+  return { id: `s0-${i}`, color: COLORS[i % COLORS.length]!, num: i, subtitle };
+});
+
+// S1 — Cell Animation Identity: variable heights, every 4th has animated shimmer
+const S1_DATA: ListItem[] = Array.from({ length: 25 }, (_, i) => {
+  const lineCount = (i % 3) + 1;
+  const subtitle = Array(lineCount)
+    .fill('Variable height line — Yoga intrinsic measurement.')
+    .join('\n');
   return {
-    id: `list-${i}`,
+    id: `s1-${i}`,
     color: COLORS[i % COLORS.length]!,
     num: i,
     subtitle,
+    animated: i % 4 === 0,
   };
+});
+
+// S2 — Insets + Spacing: variable heights, annotated with inset values
+const S2_DATA: ListItem[] = Array.from({ length: 20 }, (_, i) => {
+  const lineCount = (i % 3) + 1;
+  const subtitle = Array(lineCount)
+    .fill('insets: top 24  bot 24  left 16  right 16  •  spacing: 8px (global)')
+    .join('\n');
+  return { id: `s2-${i}`, color: COLORS[i % COLORS.length]!, num: i, subtitle };
 });
 
 // ── Grid data ────────────────────────────────────────────────────────────────
@@ -112,95 +134,268 @@ const CAROUSEL_DATA: CarouselItem[] = Array.from({ length: CAROUSEL_COUNT }, (_,
   color: COLORS[i % COLORS.length]!,
 }));
 
-// ── List layout config ──────────────────────────────────────────────────────
+// ── List: shared components ──────────────────────────────────────────────────
 
-// ── Supplemental Animated Components ──────────────────────────────────────────
-
-function AnimatedSectionBackground({ sectionIndex }: { sectionIndex: number }) {
-  const anim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(anim, { toValue: 1, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(anim, { toValue: 0, duration: 2000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      ])
-    ).start();
-  }, []);
-
-  const opacity = anim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.05, 0.15]
-  });
-
-  return <Animated.View style={[StyleSheet.absoluteFill, { backgroundColor: COLORS[sectionIndex % COLORS.length]!, opacity }]} />;
+/** Counts ms since mount. If this view is never remounted, it never resets. */
+function LiveTimer({ style }: { style?: object }) {
+  const mountTime = useRef(Date.now()).current;
+  return (
+    <Text style={[{ fontVariant: ['tabular-nums'] as any }, style]}>
+      ⏱ mounted @{mountTime % 100000}
+    </Text>
+  );
 }
 
-function AnimatedTimerHeader({ title, color }: { title: string, color: string }) {
-  const [ticks, setTicks] = useState(0);
+/** Shimmer sweep + LiveTimer. For S0 header and footer. Identity proof. */
+function ShimmerTimerHeader({ label, color }: { label: string; color: string }) {
+  const shimmerX = useRef(new Animated.Value(-120)).current;
   useEffect(() => {
-    const int = setInterval(() => setTicks(t => t + 1), 100);
-    return () => clearInterval(int);
-  }, []);
-  
+    Animated.loop(
+      Animated.timing(shimmerX, { toValue: 500, duration: 1800, easing: Easing.linear, useNativeDriver: true })
+    ).start();
+  }, [shimmerX]);
   return (
-    <View style={{ height: 50, backgroundColor: color, justifyContent: 'center', paddingHorizontal: 16 }}>
-      <Text style={{ color: '#fff', fontWeight: 'bold' }}>{title}  |  Ticks Native State: {ticks}</Text>
+    <View style={{ height: 56, backgroundColor: color, justifyContent: 'center', paddingHorizontal: 16, overflow: 'hidden' }}>
+      <Animated.View style={{
+        ...StyleSheet.absoluteFillObject,
+        width: 100,
+        backgroundColor: 'rgba(255,255,255,0.22)',
+        transform: [{ translateX: shimmerX }],
+      }} />
+      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{label}</Text>
+      <LiveTimer style={{ color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 }} />
     </View>
   );
 }
 
-function AnimatedTimerFooter({ title }: { title: string }) {
+/** Timer + "STICKY FOOTER — Riff only" badge. */
+function ShimmerTimerFooter({ color }: { color: string }) {
   return (
-    <View style={{ height: 30, backgroundColor: '#111', justifyContent: 'center', alignItems: 'center' }}>
-      <Text style={{ color: '#aaa', fontSize: 12, fontWeight: 'bold' }}>{title}</Text>
+    <View style={{ height: 40, backgroundColor: '#0e0e1a', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, justifyContent: 'space-between' }}>
+      <View style={{ backgroundColor: color, borderRadius: 4, paddingHorizontal: 8, paddingVertical: 3 }}>
+        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700', letterSpacing: 0.3 }}>STICKY FOOTER — Riff only</Text>
+      </View>
+      <LiveTimer style={{ color: '#aaa', fontSize: 11 }} />
     </View>
+  );
+}
+
+/** Simple timer header for S1/S2. */
+function SectionTimerHeader({ label, color }: { label: string; color: string }) {
+  return (
+    <View style={{ height: 50, backgroundColor: color, justifyContent: 'center', paddingHorizontal: 16 }}>
+      <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>{label}</Text>
+      <LiveTimer style={{ color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 }} />
+    </View>
+  );
+}
+
+/**
+ * S1 animated cell: shimmer background + mount counter.
+ * Mount counter stays at 1 as long as the component is never unmounted.
+ * If it goes to 2+, the cell was recycled/remounted (FlashList behavior).
+ */
+function AnimatedIdentityCell({ item }: { item: ListItem }) {
+  const mountCountRef = useRef(0);
+  const [mounts, setMounts] = useState(0);
+  useEffect(() => {
+    mountCountRef.current += 1;
+    setMounts(mountCountRef.current);
+  }, []);
+
+  const shimmerX = useRef(new Animated.Value(-80)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(shimmerX, { toValue: 400, duration: 1600, easing: Easing.linear, useNativeDriver: true })
+    ).start();
+  }, [shimmerX]);
+
+  const mountsOk = mounts <= 1;
+  return (
+    <View style={{ backgroundColor: '#1a1a2e', borderLeftWidth: 4, borderLeftColor: item.color, paddingHorizontal: 16, paddingVertical: 12, overflow: 'hidden' }}>
+      <Animated.View style={{
+        ...StyleSheet.absoluteFillObject,
+        width: 80,
+        backgroundColor: 'rgba(255,255,255,0.07)',
+        transform: [{ translateX: shimmerX }],
+      }} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Item {item.num} ✦</Text>
+        <View style={{ backgroundColor: mountsOk ? '#14532d' : '#7f1d1d', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
+          <Text style={{ color: mountsOk ? '#4ade80' : '#f87171', fontSize: 10, fontWeight: '700' }}>
+            Mounts: {mounts}
+          </Text>
+        </View>
+      </View>
+      <Text style={{ color: '#aaa', fontSize: 13, marginTop: 4 }}>{item.subtitle}</Text>
+    </View>
+  );
+}
+
+/** Small control button for the controls bar. */
+function CtrlBtn({ label, onPress, disabled, active }: {
+  label: string; onPress?: () => void; disabled?: boolean; active?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={{
+        paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6,
+        backgroundColor: disabled ? '#1a1a1a' : active ? '#1e3a1e' : '#2a2a2a',
+        opacity: disabled ? 0.4 : 1,
+      }}
+    >
+      <Text style={{ color: disabled ? '#444' : active ? '#4ade80' : '#ccc', fontSize: 11, fontWeight: '600' }}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
 // ── List layout config ──────────────────────────────────────────────────────
 
 function ListDemo() {
+  // S0 data is mutable — insert / delete / resize act on it
+  const [s0Items, setS0Items] = useState<ListItem[]>(S0_DATA);
+  const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());
+  const [mvcEnabled, setMvcEnabled] = useState(false);
+  const insertCounter = useRef(S0_DATA.length);
+
   const listLayout = useMemo(() => list({
     estimatedItemHeight: 72,
     itemSpacing: 8,
-    stickyMode: 'push',
   }), []);
 
-  const sections = useMemo(() => [{
-    key: 'section-0',
-    data: LIST_DATA.slice(0, 50),
-    header: {
-      render: () => (
-        <View style={{ height: 50, backgroundColor: '#e94560', justifyContent: 'center', paddingHorizontal: 16 }}>
-          <Text style={{ color: '#fff', fontSize: 18, fontWeight: 'bold' }}>Section 1</Text>
-        </View>
-      ),
-      height: 50,
-      sticky: true,
+  // ── Mutation handlers ──────────────────────────────────────────────────────
+
+  const handleInsert = useCallback(() => {
+    const newItems: ListItem[] = Array.from({ length: 3 }, () => {
+      const idx = insertCounter.current++;
+      return {
+        id: `s0-ins-${idx}`,
+        color: COLORS[idx % COLORS.length]!,
+        num: idx,
+        subtitle: 'Inserted above — scroll down first to see MVC in action (L5).',
+      };
+    });
+    setS0Items(prev => [...newItems, ...prev]);
+  }, []);
+
+  const handleDelete = useCallback(() => {
+    setS0Items(prev => prev.length >= 3 ? prev.slice(3) : prev);
+  }, []);
+
+  const toggleResize = useCallback((id: string) => {
+    setResizedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const resizeS0First = useCallback(() => {
+    if (s0Items.length > 0) toggleResize(s0Items[0]!.id);
+  }, [s0Items, toggleResize]);
+
+  const resizeS1First = useCallback(() => toggleResize('s1-0'), [toggleResize]);
+  const resizeS2Last  = useCallback(() => toggleResize('s2-19'), [toggleResize]);
+
+  // ── Sections ───────────────────────────────────────────────────────────────
+
+  const sections = useMemo(() => [
+    {
+      key: 'sticky-identity',
+      data: s0Items,
+      header: {
+        render: () => <ShimmerTimerHeader label="S0 — Sticky Identity" color="#e63946" />,
+        height: 56,
+        sticky: true,
+      },
+      footer: {
+        render: () => <ShimmerTimerFooter color="#e63946" />,
+        height: 40,
+        sticky: true,
+      },
+      insets: { top: 8, bottom: 8, left: 0, right: 0 },
     },
-    footer: {
-      render: () => <AnimatedTimerFooter title="Section 1 Footer" />,
-      height: 30,
-      sticky: true,
+    {
+      key: 'cell-animation',
+      data: S1_DATA,
+      header: {
+        render: () => <SectionTimerHeader label="S1 — Cell Animation Identity" color="#2a9d8f" />,
+        height: 50,
+        sticky: true,
+      },
+      insets: { top: 8, bottom: 8, left: 0, right: 0 },
     },
-    insets: { top: 8, bottom: 8, left: 0, right: 0 },
-  }], []);
+    {
+      key: 'insets-spacing',
+      data: S2_DATA,
+      header: {
+        render: () => <SectionTimerHeader label="S2 — Insets + Spacing" color="#6a4c93" />,
+        height: 50,
+        sticky: true,
+      },
+      insets: { top: 24, bottom: 24, left: 16, right: 16 },
+    },
+  ], [s0Items]);
+
+  // ── renderItem ─────────────────────────────────────────────────────────────
+
+  const keyExtractor = useCallback((item: ListItem) => item.id, []);
+
+  const RESIZE_SUBTITLE = 'Resized to tall.\nLine 2 — height change triggers layout invalidation.\nLine 3 — ShadowNode corrects downstream positions in same commit.\nLine 4 — no scroll jump.';
+
+  const renderItem = useCallback(({ item, sectionIndex }: { item: ListItem; sectionIndex: number; itemIndex: number }) => {
+    const isResized = resizedIds.has(item.id);
+    const subtitle = isResized ? RESIZE_SUBTITLE : item.subtitle;
+
+    if (sectionIndex === 1 && item.animated && !isResized) {
+      return <AnimatedIdentityCell item={item} />;
+    }
+
+    const textColor = sectionIndex === 2 ? '#c4b5fd' : '#aaa';
+    return (
+      <View style={{ backgroundColor: '#1a1a2e', borderLeftWidth: 4, borderLeftColor: item.color, paddingHorizontal: 16, paddingVertical: 12 }}>
+        <Text style={{ color: '#fff', fontSize: 15, fontWeight: '700' }}>Item {item.num}</Text>
+        <Text style={{ color: textColor, fontSize: 13, marginTop: 4 }}>{subtitle}</Text>
+      </View>
+    );
+  }, [resizedIds]);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <CollectionView
-      sections={sections}
-      layout={listLayout}
-      estimatedItemHeight={72}
-      scrollViewProps={{ style: { backgroundColor: '#2a2a3e' }, indicatorStyle: 'white' }}
-      keyExtractor={useCallback((item: ListItem) => item.id, [])}
-      renderItem={useCallback(({ item }: { item: ListItem }) => (
-        <View style={{ backgroundColor: '#1a1a2e', borderLeftWidth: 4, borderLeftColor: item.color, paddingHorizontal: 16, paddingVertical: 12 }}>
-          <Text style={{ color: '#fff', fontSize: 16, fontWeight: 'bold' }}>Item {item.num}</Text>
-          <Text style={{ color: '#aaa', fontSize: 13, marginTop: 4 }}>{item.subtitle}</Text>
-        </View>
-      ), [])}
-    />
+    <View style={S.flex}>
+      {/* Controls bar */}
+      <View style={S.ctrlBar}>
+        <CtrlBtn label="→ Top" disabled />
+        <CtrlBtn label="→ #42" disabled />
+        <CtrlBtn label="→ Bot" disabled />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="+Insert" onPress={handleInsert} />
+        <CtrlBtn label="×Delete" onPress={handleDelete} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="↕S0[0]" onPress={resizeS0First} active={s0Items.length > 0 && resizedIds.has(s0Items[0]!.id)} />
+        <CtrlBtn label="↕S1[0]" onPress={resizeS1First} active={resizedIds.has('s1-0')} />
+        <CtrlBtn label="↕S2[-1]" onPress={resizeS2Last} active={resizedIds.has('s2-19')} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
+      </View>
+
+      <CollectionView
+        sections={sections}
+        layout={listLayout}
+        stickyMode="push"
+        estimatedItemHeight={72}
+        extraData={resizedIds}
+        scrollViewProps={{ style: { backgroundColor: '#2a2a3e' }, indicatorStyle: 'white' }}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        maintainVisibleContentPosition={mvcEnabled}
+      />
+    </View>
   );
 }
 
@@ -312,9 +507,11 @@ type Bullet = { type: 'green' | 'amber' | 'red' | 'blue'; text: string };
 
 const CALLOUTS: Record<SubTab, Bullet[]> = {
   list: [
-    { type: 'green', text: 'FlashList: Core use case. FlatList replacement with recycling.' },
-    { type: 'blue', text: 'Engine: C++ ListLayout via JSI → ShadowNode applies positions from LayoutCache.' },
-    { type: 'blue', text: 'Default layout: when no layout prop is given, Riff auto-creates a ListLayout.' },
+    { type: 'green', text: 'S0: Header + footer timers survive all scroll — same view instance repositioned natively, never remounted. FlashList: no sticky footer.' },
+    { type: 'red', text: 'FlashList: Recycled cell re-mounts → shimmer restarts from frame 0, mount counter increments. No sticky footer support.' },
+    { type: 'blue', text: 'S1: Shimmer continues from same phase after scroll-away (Activity=hidden preserves state). Mount counter badge stays green at 1.' },
+    { type: 'blue', text: 'S2: Per-section insets (top/bot 24, left/right 16) from C++ ListLayout. Item spacing is 8px global.' },
+    { type: 'blue', text: 'Controls: +Insert/×Delete/↕Resize mutate S0 data. Scroll-to (L4) and MVC (L5) not yet wired.' },
   ],
   grid: [
     { type: 'green', text: 'FlashList: numColumns prop provides similar fixed-column grid layout.' },
@@ -354,6 +551,7 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
 
 export default function LayoutsTab() {
   const [subTab, setSubTab] = useState<SubTab>('list');
+  const [calloutsOpen, setCalloutsOpen] = useState(false);
 
   const circularKey = useCallback((item: CircularItem) => String(item.id), []);
   const carouselKey = useCallback((item: CarouselItem) => String(item.id), []);
@@ -369,7 +567,7 @@ export default function LayoutsTab() {
             <Pressable
               key={t.key}
               style={[S.pickBtn, subTab === t.key && S.pickBtnActive]}
-              onPress={() => setSubTab(t.key)}
+              onPress={() => { setSubTab(t.key); setCalloutsOpen(false); }}
             >
               <Text style={[S.pickText, subTab === t.key && S.pickTextActive]}>
                 {t.label}
@@ -379,15 +577,22 @@ export default function LayoutsTab() {
         </ScrollView>
       </View>
 
-      <View style={S.bulletsContainer}>
-        {bullets.map((b, i) => (
-          <View key={i} style={[S.bullet, S[`bullet_${b.type}` as keyof typeof S] as any]}>
-            <Text style={[S.bulletText, S[`bulletText_${b.type}` as keyof typeof S] as any]}>
-              {b.text}
-            </Text>
-          </View>
-        ))}
-      </View>
+      <Pressable style={S.calloutsToggle} onPress={() => setCalloutsOpen(o => !o)}>
+        <Text style={S.calloutsToggleText}>ℹ {bullets.length} notes</Text>
+        <Text style={S.calloutsToggleChevron}>{calloutsOpen ? '▲' : '▼'}</Text>
+      </Pressable>
+
+      {calloutsOpen && (
+        <View style={S.bulletsContainer}>
+          {bullets.map((b, i) => (
+            <View key={i} style={[S.bullet, S[`bullet_${b.type}` as keyof typeof S] as any]}>
+              <Text style={[S.bulletText, S[`bulletText_${b.type}` as keyof typeof S] as any]}>
+                {b.text}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
 
       <View style={S.content}>
         {subTab === 'list' && <ListDemo />}
@@ -437,7 +642,11 @@ const S = StyleSheet.create({
   pickText: { fontSize: 10, fontWeight: '600', color: '#555' },
   pickTextActive: { color: '#4ade80' },
 
-  bulletsContainer: { paddingHorizontal: 8, gap: 4, marginBottom: 6 },
+  calloutsToggle: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 5, backgroundColor: '#111' },
+  calloutsToggleText: { fontSize: 11, color: '#555' },
+  calloutsToggleChevron: { fontSize: 9, color: '#444' },
+
+  bulletsContainer: { paddingHorizontal: 8, gap: 4, paddingBottom: 6, backgroundColor: '#0a0a0a' },
   bullet: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   bulletText: { fontSize: 11, lineHeight: 16 },
   bullet_green: { backgroundColor: '#1a2a1a' },
@@ -450,6 +659,9 @@ const S = StyleSheet.create({
   bulletText_blue: { color: '#93c5fd' },
 
   content: { flex: 1 },
+
+  ctrlBar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 8, paddingVertical: 7, backgroundColor: '#111', alignItems: 'center' },
+  ctrlDivider: { width: 1, height: 18, backgroundColor: '#333', marginHorizontal: 2 },
 
   listCell: { minHeight: 72, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16,
               borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(255,255,255,0.08)',
