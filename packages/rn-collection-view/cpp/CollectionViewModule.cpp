@@ -78,6 +78,42 @@ std::shared_ptr<rncv::LayoutCache> layoutCacheForId(int32_t cacheId) {
   return CollectionViewModule::getLayoutCacheForId(cacheId);
 }
 
+// ── Scroll handler registry ───────────────────────────────────────────────────
+// Container views register a callback so JS (nativeMod.scrollTo) can trigger
+// programmatic scrolling without direct coupling to the native view class.
+
+using ScrollHandler = std::function<void(double x, double y, bool animated)>;
+
+static std::unordered_map<int32_t, ScrollHandler>& scrollHandlerRegistry() {
+  static std::unordered_map<int32_t, ScrollHandler> reg;
+  return reg;
+}
+static std::mutex& scrollHandlerMutex() {
+  static std::mutex m;
+  return m;
+}
+
+void registerScrollHandler(int32_t cacheId, ScrollHandler handler) {
+  std::lock_guard<std::mutex> lock(scrollHandlerMutex());
+  scrollHandlerRegistry()[cacheId] = std::move(handler);
+}
+
+void unregisterScrollHandler(int32_t cacheId) {
+  std::lock_guard<std::mutex> lock(scrollHandlerMutex());
+  scrollHandlerRegistry().erase(cacheId);
+}
+
+void invokeScrollHandler(int32_t cacheId, double x, double y, bool animated) {
+  ScrollHandler handler;
+  {
+    std::lock_guard<std::mutex> lock(scrollHandlerMutex());
+    auto it = scrollHandlerRegistry().find(cacheId);
+    if (it == scrollHandlerRegistry().end()) return;
+    handler = it->second;
+  }
+  handler(x, y, animated);
+}
+
 // ── Constructor ──────────────────────────────────────────────────────────────
 
 CollectionViewModule::CollectionViewModule(
@@ -409,6 +445,22 @@ Value CollectionViewModule::get(Runtime& rt, const PropNameID& name) {
   if (prop == "masonryLayout")    return getMasonryLayoutObject(rt);
   if (prop == "gridLayout")       return getGridLayoutObject(rt);
   if (prop == "flowLayout")       return getFlowLayoutObject(rt);
+
+  // scrollTo(cacheId, x, y, animated) — triggers programmatic scroll on the
+  // native container view via the scroll handler registry.
+  if (prop == "scrollTo") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "scrollTo"), 4,
+      [](Runtime&, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 3) return Value::undefined();
+        const int32_t cacheId = static_cast<int32_t>(args[0].asNumber());
+        const double  x       = args[1].asNumber();
+        const double  y       = args[2].asNumber();
+        const bool    animated = count > 3 ? args[3].getBool() : true;
+        invokeScrollHandler(cacheId, x, y, animated);
+        return Value::undefined();
+      });
+  }
 
   return Value::undefined();
 }

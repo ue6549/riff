@@ -4,12 +4,16 @@
 #import "CollectionViewContainerComponentDescriptor.h"
 #import "CollectionViewContainerShadowNode.h"
 
-// Forward-declare layoutCacheForId to avoid pulling in CollectionViewModule's heavy deps.
+// Forward-declare registry helpers to avoid pulling in CollectionViewModule's heavy deps.
 #include <memory>
 #include <cstdint>
+#include <functional>
 namespace rncv { class LayoutCache; }
 namespace facebook::react {
   std::shared_ptr<rncv::LayoutCache> layoutCacheForId(int32_t cacheId);
+  using ScrollHandler = std::function<void(double x, double y, bool animated)>;
+  void registerScrollHandler(int32_t cacheId, ScrollHandler handler);
+  void unregisterScrollHandler(int32_t cacheId);
 }
 
 // Codegen-generated helpers (props protocol, event emitter types).
@@ -126,7 +130,24 @@ static os_log_t rncvLog(void) {
   _scrollView.contentInset = UIEdgeInsetsZero;
   _scrollView.scrollIndicatorInsets = UIEdgeInsetsZero;
   _contentView.frame = CGRectZero;
+  if (_layoutCacheId != 0) {
+    facebook::react::unregisterScrollHandler(_layoutCacheId);
+    _layoutCacheId = 0;
+  }
   RNCV_LOG("prepareForRecycle — reset for reuse");
+}
+
+// ── Programmatic scroll ─────────────────────────────────────────────────────
+
+- (void)_scrollToX:(double)x y:(double)y animated:(BOOL)animated
+{
+  CGFloat maxY = MAX(0.0, _scrollView.contentSize.height - _scrollView.bounds.size.height);
+  CGFloat maxX = MAX(0.0, _scrollView.contentSize.width  - _scrollView.bounds.size.width);
+  CGPoint target = CGPointMake(
+    MAX(0.0, MIN((CGFloat)x, maxX)),
+    MAX(0.0, MIN((CGFloat)y, maxY))
+  );
+  [_scrollView setContentOffset:target animated:animated];
 }
 
 // ── Child management ────────────────────────────────────────────────────────
@@ -171,7 +192,26 @@ static os_log_t rncvLog(void) {
     _scrollEventMinInterval = newProps.scrollEventThrottle / 1000.0;
   }
 
-  _layoutCacheId = newProps.layoutCacheId;
+  // Register scroll handler when layoutCacheId is assigned.
+  // The handler is invoked from JS (nativeMod.scrollTo) via the scroll handler
+  // registry, dispatching to the main thread to call setContentOffset:.
+  if (newProps.layoutCacheId != 0 && newProps.layoutCacheId != _layoutCacheId) {
+    if (_layoutCacheId != 0) {
+      facebook::react::unregisterScrollHandler(_layoutCacheId);
+    }
+    _layoutCacheId = newProps.layoutCacheId;
+    __weak RNCollectionViewContainerView *weakSelf = self;
+    facebook::react::registerScrollHandler(_layoutCacheId,
+        [weakSelf](double x, double y, bool animated) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            RNCollectionViewContainerView *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            [strongSelf _scrollToX:x y:y animated:animated];
+          });
+        });
+  } else {
+    _layoutCacheId = newProps.layoutCacheId;
+  }
 }
 
 // ── State ───────────────────────────────────────────────────────────────────

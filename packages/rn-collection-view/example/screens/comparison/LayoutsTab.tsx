@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, Animated, Easing } from 'react-native';
-import { Riff as CollectionView } from '../../components/CollectionView';
+import { Riff as CollectionView, type RiffHandle } from '../../components/CollectionView';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { masonry } from '@riff/layouts/masonry';
@@ -261,6 +261,7 @@ function ListDemo() {
   const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const insertCounter = useRef(S0_DATA.length);
+  const cvRef = useRef<RiffHandle>(null);
 
   const listLayout = useMemo(() => list({
     estimatedItemHeight: 72,
@@ -370,9 +371,9 @@ function ListDemo() {
     <View style={S.flex}>
       {/* Controls bar */}
       <View style={S.ctrlBar}>
-        <CtrlBtn label="→ Top" disabled />
-        <CtrlBtn label="→ #42" disabled />
-        <CtrlBtn label="→ Bot" disabled />
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
+        <CtrlBtn label="→ #42" onPress={() => cvRef.current?.scrollToItem('cell-animation:s1-17', { position: 'center' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('insets-spacing:s2-19', { position: 'bottom' })} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+Insert" onPress={handleInsert} />
         <CtrlBtn label="×Delete" onPress={handleDelete} />
@@ -385,6 +386,7 @@ function ListDemo() {
       </View>
 
       <CollectionView
+        handle={cvRef}
         sections={sections}
         layout={listLayout}
         stickyMode="push"
@@ -511,7 +513,7 @@ const CALLOUTS: Record<SubTab, Bullet[]> = {
     { type: 'red', text: 'FlashList: Recycled cell re-mounts → shimmer restarts from frame 0, mount counter increments. No sticky footer support.' },
     { type: 'blue', text: 'S1: Shimmer continues from same phase after scroll-away (Activity=hidden preserves state). Mount counter badge stays green at 1.' },
     { type: 'blue', text: 'S2: Per-section insets (top/bot 24, left/right 16) from C++ ListLayout. Item spacing is 8px global.' },
-    { type: 'blue', text: 'Controls: +Insert/×Delete/↕Resize mutate S0 data. Scroll-to (L4) and MVC (L5) not yet wired.' },
+    { type: 'blue', text: 'Controls: +Insert/×Delete/↕Resize mutate S0 data with MVC toggle. →Top/→#42/→Bot scroll to items by stable key.' },
   ],
   grid: [
     { type: 'green', text: 'FlashList: numColumns prop provides similar fixed-column grid layout.' },

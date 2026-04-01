@@ -72,6 +72,8 @@ type NativeWindowState = { render: NativeRange; visible: NativeRange };
 
 const nativeMod = NativeCollectionViewModule as unknown as {
   layoutCacheId: number;
+  /** Programmatic scroll. Invokes the scroll handler registered by the container view. */
+  scrollTo(cacheId: number, x: number, y: number, animated: boolean): void;
   layoutCache: {
     clear(): void;
     setAttributes(attrs: object): void;
@@ -185,7 +187,34 @@ export interface SectionedRenderItemInfo<T> {
  *   snap.appendItems(newItems);
  *   ref.current.apply(snap);   // diff + LayoutAnimation + startTransition
  */
+export interface ScrollToItemOptions {
+  /** Whether to animate the scroll. Default: true. */
+  animated?: boolean;
+  /**
+   * Where to position the target item relative to the viewport.
+   * 'nearest' is a no-op if the item is already fully visible.
+   * Default: 'top'.
+   */
+  position?: 'top' | 'center' | 'bottom' | 'nearest';
+}
+
+export interface ScrollToOffsetOptions {
+  x?: number;
+  y: number;
+  animated?: boolean;
+}
+
 export interface RiffHandle<T = unknown> {
+  /**
+   * Scroll to the item with the given cache key.
+   * Key format for sectioned mode: `${sectionKey}:${keyExtractor(item)}`.
+   * Uses LayoutCache position — approximate for items not yet Yoga-measured.
+   */
+  scrollToItem(key: string, options?: ScrollToItemOptions): void;
+
+  /** Scroll to an absolute content offset. */
+  scrollToOffset(options: ScrollToOffsetOptions): void;
+
   /**
    * Create a snapshot seeded with the current data array and key extractor.
    * Record mutations on it, then pass to apply().
@@ -879,6 +908,11 @@ export function Riff<T = unknown>({
   const seedH = initialHeight ?? Dimensions.get('window').height;
   const viewportWidthRef  = useRef(seedW);
   const viewportHeightRef = useRef(seedH);
+  // contentHeightRef mirrors contentHeight state. useImperativeHandle closes over
+  // its deps once — a ref lets scrollToItem read the current value without
+  // requiring contentHeight in the deps array (which would recreate the handle
+  // on every layout pass).
+  const contentHeightRef  = useRef(0);
   const [viewportWidth,  setViewportWidth]  = useState(seedW);
   const [viewportHeight, setViewportHeight] = useState(seedH);
   const [contentHeight,  setContentHeight]  = useState(0);
@@ -1118,6 +1152,7 @@ export function Riff<T = unknown>({
     nativeMod.signpost.begin(1);
     try {
 
+    contentHeightRef.current = layoutContentHeight;
     setContentHeight(layoutContentHeight);
 
     if (itemCount === 0) {
@@ -1227,6 +1262,39 @@ export function Riff<T = unknown>({
   // ── F1.2: Imperative handle ───────────────────────────────────────────────────
 
   useImperativeHandle(handle, () => ({
+    scrollToItem: (key: string, options?: ScrollToItemOptions) => {
+      // Key format: "sectionKey:itemId" (e.g. "cell-animation:s1-17").
+      // C++ ListLayout stores entries under these same stable keys when
+      // keyExtractor is provided (via layoutContext.sections[s].itemKeys).
+      const attrs = nativeLayoutCache.getAttributes(key);
+      if (!attrs) return;
+      const itemY = attrs.frame.y as number;
+      const itemH = attrs.frame.height as number;
+      const vpH   = viewportHeightRef.current;
+      // Use ref, not state: useImperativeHandle closes over deps once and
+      // contentHeight is not in the dep array — the ref always has the live value.
+      const maxY  = Math.max(0, contentHeightRef.current - vpH);
+
+      let targetY: number;
+      const position = options?.position ?? 'top';
+      if (position === 'top') {
+        targetY = itemY;
+      } else if (position === 'bottom') {
+        targetY = itemY - vpH + itemH;
+      } else if (position === 'center') {
+        targetY = itemY - (vpH - itemH) / 2;
+      } else { // 'nearest'
+        const scrollY = nativeMod.windowController.getScrollPosition().y;
+        if (itemY >= scrollY && itemY + itemH <= scrollY + vpH) return; // fully visible
+        targetY = itemY < scrollY ? itemY : itemY - vpH + itemH;
+      }
+      nativeMod.scrollTo(layoutCacheId, 0, Math.max(0, Math.min(targetY, maxY)), options?.animated ?? true);
+    },
+
+    scrollToOffset: ({ x = 0, y, animated = true }: ScrollToOffsetOptions) => {
+      nativeMod.scrollTo(layoutCacheId, x, y, animated);
+    },
+
     snapshot: () => new RiffSnapshot(data, keyExtractor),
 
     apply: (snap: RiffSnapshot<T>, animated = true) => {
@@ -1304,6 +1372,7 @@ export function Riff<T = unknown>({
 
       // Seed content height from estimates so scroll view has a size.
       const estContent = sectionInsetTop + itemCount * stride - itemSpacing + sectionInsetBottom;
+      contentHeightRef.current = estContent;
       setContentHeight(estContent);
     }
   }, [itemCount, stride, budgetStride, renderMultiplier, sectionInsetTop, sectionInsetBottom, itemSpacing, effectiveMountedWindowSize]);
