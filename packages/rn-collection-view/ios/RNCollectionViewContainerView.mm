@@ -132,6 +132,7 @@ static os_log_t rncvLog(void) {
   _contentView.frame = CGRectZero;
   if (_layoutCacheId != 0) {
     facebook::react::unregisterScrollHandler(_layoutCacheId);
+    _layoutCacheId = 0;
   }
   RNCV_LOG("prepareForRecycle — reset for reuse");
 }

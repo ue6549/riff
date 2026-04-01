@@ -109,7 +109,7 @@ void invokeScrollHandler(int32_t cacheId, double x, double y, bool animated) {
     std::lock_guard<std::mutex> lock(scrollHandlerMutex());
     auto it = scrollHandlerRegistry().find(cacheId);
     if (it == scrollHandlerRegistry().end()) return;
-    handler = it->second; // copy to call outside lock
+    handler = it->second;
   }
   handler(x, y, animated);
 }

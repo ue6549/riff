@@ -908,6 +908,11 @@ export function Riff<T = unknown>({
   const seedH = initialHeight ?? Dimensions.get('window').height;
   const viewportWidthRef  = useRef(seedW);
   const viewportHeightRef = useRef(seedH);
+  // contentHeightRef mirrors contentHeight state. useImperativeHandle closes over
+  // its deps once — a ref lets scrollToItem read the current value without
+  // requiring contentHeight in the deps array (which would recreate the handle
+  // on every layout pass).
+  const contentHeightRef  = useRef(0);
   const [viewportWidth,  setViewportWidth]  = useState(seedW);
   const [viewportHeight, setViewportHeight] = useState(seedH);
   const [contentHeight,  setContentHeight]  = useState(0);
@@ -1147,6 +1152,7 @@ export function Riff<T = unknown>({
     nativeMod.signpost.begin(1);
     try {
 
+    contentHeightRef.current = layoutContentHeight;
     setContentHeight(layoutContentHeight);
 
     if (itemCount === 0) {
@@ -1257,12 +1263,17 @@ export function Riff<T = unknown>({
 
   useImperativeHandle(handle, () => ({
     scrollToItem: (key: string, options?: ScrollToItemOptions) => {
+      // Key format: "sectionKey:itemId" (e.g. "cell-animation:s1-17").
+      // C++ ListLayout stores entries under these same stable keys when
+      // keyExtractor is provided (via layoutContext.sections[s].itemKeys).
       const attrs = nativeLayoutCache.getAttributes(key);
       if (!attrs) return;
       const itemY = attrs.frame.y as number;
       const itemH = attrs.frame.height as number;
       const vpH   = viewportHeightRef.current;
-      const maxY  = Math.max(0, contentHeight - vpH);
+      // Use ref, not state: useImperativeHandle closes over deps once and
+      // contentHeight is not in the dep array — the ref always has the live value.
+      const maxY  = Math.max(0, contentHeightRef.current - vpH);
 
       let targetY: number;
       const position = options?.position ?? 'top';
@@ -1361,6 +1372,7 @@ export function Riff<T = unknown>({
 
       // Seed content height from estimates so scroll view has a size.
       const estContent = sectionInsetTop + itemCount * stride - itemSpacing + sectionInsetBottom;
+      contentHeightRef.current = estContent;
       setContentHeight(estContent);
     }
   }, [itemCount, stride, budgetStride, renderMultiplier, sectionInsetTop, sectionInsetBottom, itemSpacing, effectiveMountedWindowSize]);
