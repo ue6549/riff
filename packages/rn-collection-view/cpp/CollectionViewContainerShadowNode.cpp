@@ -263,9 +263,15 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
       }
     }
 
-    // TODO: Check width delta for Flow layout (ContentDimension::Both/Width).
-    // For now, width deltas are deferred — flow layout handles them via
-    // applyMeasurements full re-layout.
+    // Check width delta (for Width — horizontal list — and Both — flow layout).
+    if (contentDim == rncv::ContentDimension::Width ||
+        contentDim == rncv::ContentDimension::Both) {
+      Float cachedWidth = correctedPositions_[i * 4 + 2];
+      if (yogaWidth > 0 && std::abs(yogaWidth - cachedWidth) > 0.5f) {
+        deltas.push_back({key, dataIndex, cachedWidth, yogaWidth});
+        correctedPositions_[i * 4 + 2] = yogaWidth;
+      }
+    }
   }
 
   // ── Phase 3: Apply deltas via layout engine ────────────────────────────
@@ -351,19 +357,26 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     }
   }
 
-  // ── Phase 4: Compute content height from cache ─────────────────────────
+  // ── Phase 4: Compute content size from cache ──────────────────────────────
+  // For vertical (Height): contentSize = {containerWidth, correctedContentHeight_}.
+  // For horizontal (Width): contentSize = {correctedContentWidth_, containerHeight}.
 
   if (cache) {
-    auto contentSize = cache->getTotalContentSize();
-    correctedContentHeight_ = static_cast<Float>(contentSize.height);
+    auto cs = cache->getTotalContentSize();
+    correctedContentHeight_ = static_cast<Float>(cs.height);
+    correctedContentWidth_  = static_cast<Float>(cs.width);
   } else {
     // Fallback: compute from positions.
+    Float maxRight  = 0;
     Float maxBottom = 0;
     for (size_t i = 0; i < children.size(); ++i) {
+      Float right  = correctedPositions_[i * 4 + 0] + correctedPositions_[i * 4 + 2];
       Float bottom = correctedPositions_[i * 4 + 1] + correctedPositions_[i * 4 + 3];
+      if (right  > maxRight)  maxRight  = right;
       if (bottom > maxBottom) maxBottom = bottom;
     }
     correctedContentHeight_ = maxBottom;
+    correctedContentWidth_  = maxRight;
   }
 }
 
@@ -371,8 +384,17 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
 void CollectionViewContainerShadowNode::updateStateIfNeeded() {
   auto state = getStateData();
 
-  const auto containerWidth = getLayoutMetrics().frame.size.width;
-  auto contentSize = Size{containerWidth, correctedContentHeight_};
+  const auto& props =
+      *std::static_pointer_cast<const RNCollectionViewContainerProps>(getProps());
+  const auto containerWidth  = getLayoutMetrics().frame.size.width;
+  const auto containerHeight = getLayoutMetrics().frame.size.height;
+
+  // For horizontal layouts, content scrolls along X: width = computed, height = viewport.
+  // For vertical layouts, content scrolls along Y: width = viewport, height = computed.
+  const bool isHorizontal = props.horizontal;
+  auto contentSize = isHorizontal
+      ? Size{correctedContentWidth_, containerHeight}
+      : Size{containerWidth, correctedContentHeight_};
 
   // Compute content bounding rect from corrected positions.
   auto contentBoundingRect = Rect{};

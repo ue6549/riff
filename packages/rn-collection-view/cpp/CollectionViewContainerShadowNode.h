@@ -81,6 +81,7 @@ class CollectionViewContainerShadowNode final
   // Stored in state for native view to apply as child frames.
   std::vector<Float> correctedPositions_;
   Float correctedContentHeight_ = 0;
+  Float correctedContentWidth_  = 0;  // populated for horizontal layouts (ContentDimension::Width)
 };
 
 } // namespace facebook::react

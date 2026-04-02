@@ -73,6 +73,9 @@ static os_log_t rncvLog(void) {
   // LayoutCache registry ID — cached from props for scroll offset wiring.
   int32_t _layoutCacheId;
 
+  // Scroll axis — when YES, UIScrollView scrolls horizontally.
+  BOOL _horizontal;
+
 }
 
 // ── Fabric registration ─────────────────────────────────────────────────────
@@ -184,9 +187,11 @@ static os_log_t rncvLog(void) {
       *std::static_pointer_cast<const RNCollectionViewContainerProps>(props);
 
   // Forward scroll-related props to internal UIScrollView.
+  _horizontal = newProps.horizontal;
   _scrollView.scrollEnabled = newProps.scrollEnabled;
   _scrollView.bounces = newProps.bounces;
-  _scrollView.showsVerticalScrollIndicator = newProps.showsVerticalScrollIndicator;
+  _scrollView.showsVerticalScrollIndicator = newProps.showsVerticalScrollIndicator && !newProps.horizontal;
+  _scrollView.showsHorizontalScrollIndicator = newProps.horizontal;
 
   if (newProps.scrollEventThrottle > 0) {
     _scrollEventMinInterval = newProps.scrollEventThrottle / 1000.0;
@@ -334,9 +339,15 @@ static os_log_t rncvLog(void) {
   // the correct naturalY and produces the right sticky transform.
   if (std::abs(_pendingMVCCorrection) > 0.5) {
     CGPoint offset = _scrollView.contentOffset;
-    RNCV_LOG("applying MVC correction=%.1f oldY=%.1f newY=%.1f",
-             _pendingMVCCorrection, offset.y, offset.y + _pendingMVCCorrection);
-    offset.y += (CGFloat)_pendingMVCCorrection;
+    if (_horizontal) {
+      RNCV_LOG("applying MVC correction=%.1f oldX=%.1f newX=%.1f",
+               _pendingMVCCorrection, offset.x, offset.x + _pendingMVCCorrection);
+      offset.x += (CGFloat)_pendingMVCCorrection;
+    } else {
+      RNCV_LOG("applying MVC correction=%.1f oldY=%.1f newY=%.1f",
+               _pendingMVCCorrection, offset.y, offset.y + _pendingMVCCorrection);
+      offset.y += (CGFloat)_pendingMVCCorrection;
+    }
     _applyingCorrection = YES;
     [_scrollView setContentOffset:offset animated:NO];
     _applyingCorrection = NO;

@@ -32,6 +32,13 @@ export interface CollectionViewLayout {
   readonly type: string;
 
   /**
+   * When true, the layout scrolls horizontally (primary axis = X).
+   * CollectionView uses this to orient its scroll handler and render window query.
+   * Defaults to false (vertical scroll).
+   */
+  readonly horizontal?: boolean;
+
+  /**
    * Called before any queries. Compute and cache positions.
    * For C++ layouts: calls into JSI. For TS layouts: runs in JS.
    */
@@ -147,8 +154,16 @@ export interface InvalidationScope {
  * Header/footer sizing follows the same pattern as item sizing.
  */
 export interface ListLayoutDelegate {
+  /**
+   * When true, items flow horizontally (primary axis = X).
+   * `itemHeight` is repurposed as item size along the scroll axis.
+   * Container height minus insets determines the cross-axis (Y) item size.
+   */
+  horizontal?: boolean;
+
   // ── Item sizing (one of these) ──
-  /** Fixed height for all items, or a function of container width. Fast path — no measurement needed. */
+  /** Fixed height for all items, or a function of container width. Fast path — no measurement needed.
+   *  In horizontal mode: item size along the scroll axis (X). */
   itemHeight?: number | ((containerWidth: number) => number);
   /** Estimated height for variable-height items. Items will be measured after render. */
   estimatedItemHeight?: number;

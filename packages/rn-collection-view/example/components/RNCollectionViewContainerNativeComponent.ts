@@ -45,6 +45,7 @@ interface NativeProps extends ViewProps {
   renderRangeStart?: Int32;
   renderRangeEnd?: Int32;
   maintainVisibleContentPosition?: WithDefault<boolean, true>;
+  horizontal?: WithDefault<boolean, false>;
   scrollEnabled?: WithDefault<boolean, true>;
   bounces?: WithDefault<boolean, true>;
   showsVerticalScrollIndicator?: WithDefault<boolean, true>;

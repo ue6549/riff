@@ -22,6 +22,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getAttributes(key: string): LayoutAttributes | null;
     getTotalContentSize(): Size;
     clear(): void;
+    setHorizontal(horizontal: boolean): void;
   };
   listLayout: {
     computeListLayout(params: Record<string, unknown>): void;
@@ -39,6 +40,7 @@ const listDebugLog = (...args: any[]) => {
 
 class ListLayout implements CollectionViewLayout {
   readonly type = 'list';
+  readonly horizontal: boolean;
   readonly delegate: ListLayoutDelegate;
   private lastContext: LayoutContext | null = null;
   private _lastFingerprint: string = '';
@@ -46,11 +48,16 @@ class ListLayout implements CollectionViewLayout {
 
   constructor(delegate: ListLayoutDelegate) {
     this.delegate = delegate;
+    this.horizontal = delegate.horizontal ?? false;
   }
 
   prepare(context: LayoutContext): void {
     this.lastContext = context;
     const d = this.delegate;
+    const H = this.horizontal;
+
+    // Inform LayoutCache of scroll axis for MVC anchor computation.
+    nativeMod.layoutCache.setHorizontal(H);
 
     // Build section params for C++ layout engine
     const sectionParams = context.sections.map((sec, sIdx) => {
@@ -103,6 +110,8 @@ class ListLayout implements CollectionViewLayout {
         itemCount: sec.itemCount,
         itemHeight: (typeof d.itemHeight === 'function' ? d.itemHeight(context.containerWidth) : d.itemHeight) ?? d.estimatedItemHeight ?? 44,
         viewportWidth: context.containerWidth,
+        viewportHeight: context.containerHeight,
+        horizontal: H,
         sectionInsetTop: sec.insets?.top ?? 0,
         sectionInsetBottom: sec.insets?.bottom ?? 0,
         sectionInsetLeft: sec.insets?.left ?? 0,
@@ -137,7 +146,8 @@ class ListLayout implements CollectionViewLayout {
 
     // Build a fingerprint of the data shape. Only clear + recompute when it changes.
     // This preserves Yoga-measured heights across measurement-triggered re-renders.
-    const fp = `${context.containerWidth}|${sectionParams.map(s => `${s.itemCount},${s.headerHeight},${s.footerHeight},${s.emitSeparators},${s.emitSectionBackground}`).join(';')}`;
+    // Include both dimensions in fingerprint: horizontal list invalidates on height change, vertical on width.
+    const fp = `${context.containerWidth}x${context.containerHeight}|${sectionParams.map(s => `${s.itemCount},${s.headerHeight},${s.footerHeight},${s.emitSeparators},${s.emitSectionBackground}`).join(';')}`;
     if (fp !== this._lastFingerprint) {
       nativeMod.layoutCache.clear();
       this._lastFingerprint = fp;
@@ -171,8 +181,10 @@ class ListLayout implements CollectionViewLayout {
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {
-    // List layout invalidates when container width changes
-    return Math.abs(oldBounds.width - newBounds.width) > 0.5;
+    // Vertical list invalidates when width changes; horizontal when height changes.
+    return this.horizontal
+      ? Math.abs(oldBounds.height - newBounds.height) > 0.5
+      : Math.abs(oldBounds.width  - newBounds.width)  > 0.5;
   }
 
   invalidationScope(_oldBounds: Rect, _newBounds: Rect): InvalidationScope {

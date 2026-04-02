@@ -61,6 +61,13 @@ struct ListLayoutParams {
   // section's header. Sits outside the section background frame.
   // Analogous to NSCollectionLayoutSection.interSectionSpacing.
   double sectionSpacing = 0;
+
+  // --- Horizontal mode ---
+  // When true, items advance along X instead of Y.
+  // viewportHeight provides the cross-axis container size needed to compute item heights.
+  // itemHeight is repurposed as item size along the scroll axis (X).
+  bool   horizontal     = false;
+  double viewportHeight = 0;
 };
 
 // ─── ListLayout ───────────────────────────────────────────────────────────────
@@ -116,7 +123,7 @@ public:
       LayoutCache& cache) override;
 
   ContentDimension contentDeterminedDimension() const override {
-    return ContentDimension::Height;
+    return _horizontal ? ContentDimension::Width : ContentDimension::Height;
   }
 
   // ── JSI ─────────────────────────────────────────────────────────────────
@@ -134,6 +141,7 @@ public:
 
 private:
   std::shared_ptr<LayoutCache> _cache;
+  bool _horizontal = false;  // set by computeSections(); drives contentDeterminedDimension() and applyMeasurements()
 
   // Reusable attribute — mutated and copied into cache each iteration.
   // Avoids per-item allocation in the hot loop.

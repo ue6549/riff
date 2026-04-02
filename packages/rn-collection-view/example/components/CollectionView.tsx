@@ -950,8 +950,9 @@ export function Riff<T = unknown>({
   // Previous range for O(1) change detection — compared by value, not string.
   const prevRenderRef = useRef<Range | null>(null);
 
-  // Velocity tracking for M3.4 adaptive window (px/ms, positive = down).
+  // Velocity tracking for M3.4 adaptive window (px/ms, positive = down/right).
   const prevScrollYRef   = useRef(0);
+  const prevScrollXRef   = useRef(0);  // for horizontal layouts
   const prevScrollTimeRef = useRef(0);
   const velocityRef      = useRef(0);
 
@@ -1057,7 +1058,7 @@ export function Riff<T = unknown>({
     return {
       containerWidth: viewportWidth,
       containerHeight: viewportHeight,
-      scrollOffset: { x: 0, y: prevScrollYRef.current },
+      scrollOffset: { x: prevScrollXRef.current, y: prevScrollYRef.current },
       sections: propSections
         ? propSections.map(s => ({
             itemCount: s.data.length,
@@ -1188,19 +1189,24 @@ export function Riff<T = unknown>({
 
     // Query the layout for items in the render window (spatial query).
     const scrollY = prevScrollYRef.current;
+    const scrollX = prevScrollXRef.current;
+    const isHoriz = effectiveLayout.horizontal ?? false;
     const speed = Math.abs(velocityRef.current);
     const leadBoost = Math.min(4, speed) * renderMultiplier;
     const leadMult = renderMultiplier + leadBoost;
     const trailMult = Math.max(0.25, renderMultiplier - leadBoost * 0.5);
-    const goingDown = velocityRef.current >= 0;
-    const abovePad = (goingDown ? trailMult : leadMult) * viewportHeight;
-    const belowPad = (goingDown ? leadMult : trailMult) * viewportHeight;
+    const goingForward = velocityRef.current >= 0;
 
-    const attrs = effectiveLayout.attributesForElements({
+    const attrs = effectiveLayout.attributesForElements(isHoriz ? {
+      x: scrollX - (goingForward ? trailMult : leadMult) * viewportWidth,
+      y: 0,
+      width: viewportWidth * (leadMult + trailMult),
+      height: viewportHeight,
+    } : {
       x: 0,
-      y: scrollY - abovePad,
+      y: scrollY - (goingForward ? trailMult : leadMult) * viewportHeight,
       width: viewportWidth,
-      height: viewportHeight + abovePad + belowPad,
+      height: viewportHeight * (leadMult + trailMult),
     });
 
     if (attrs.length === 0) {
@@ -1222,9 +1228,10 @@ export function Riff<T = unknown>({
       rncvVerboseLog(`[RNCVX] scrollY=${scrollY} sectioned=${isSectioned} C++_attr_count=${attrs.length} -> max_fi=${maxIdx} min_fi=${minIdx}`);
       const render = { first: minIdx === Infinity ? 0 : minIdx, last: maxIdx === -Infinity ? -1 : maxIdx };
 
-      const visAttrs = effectiveLayout.attributesForElements({
-        x: 0, y: scrollY, width: viewportWidth, height: viewportHeight,
-      });
+      const visAttrs = effectiveLayout.attributesForElements(isHoriz
+        ? { x: scrollX, y: 0, width: viewportWidth, height: viewportHeight }
+        : { x: 0, y: scrollY, width: viewportWidth, height: viewportHeight }
+      );
       let visFirst = Infinity, visLast = -Infinity;
       for (const a of visAttrs) {
         const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(a.key) ?? -1) : a.index;
@@ -1419,18 +1426,23 @@ export function Riff<T = unknown>({
       nativeMod.signpost.begin(0);
       const { contentOffset, layoutMeasurement } = e.nativeEvent;
       const scrollY = contentOffset.y;
+      const scrollX = contentOffset.x;
       const vpH     = layoutMeasurement.height || viewportHeight;
+      const isHorizontal = effectiveLayout.horizontal ?? false;
 
       // Update velocity estimate (px/ms). Ignore readings with stale timestamps
       // (> 100ms gap means the user paused, velocity should reset toward 0).
       const now = Date.now();
       const dt  = now - prevScrollTimeRef.current;
+      const prevPrimary = isHorizontal ? prevScrollXRef.current : prevScrollYRef.current;
+      const curPrimary  = isHorizontal ? scrollX : scrollY;
       if (dt > 0 && dt <= 100) {
-        velocityRef.current = (scrollY - prevScrollYRef.current) / dt;
+        velocityRef.current = (curPrimary - prevPrimary) / dt;
       } else if (dt > 100) {
         velocityRef.current = 0;
       }
       prevScrollYRef.current  = scrollY;
+      prevScrollXRef.current  = scrollX;
       prevScrollTimeRef.current = now;
 
       // Check if ShadowNode wrote new measurements to LayoutCache.
@@ -1441,18 +1453,27 @@ export function Riff<T = unknown>({
         setLayoutCacheVersion(v => v + 1);
       }
 
-      // Spatial query for render range — works for all layout types.
+      // Spatial query for render range — works for all layout types, both axes.
       const speed = Math.abs(velocityRef.current);
       const leadBoost = Math.min(4, speed) * renderMultiplier;
       const leadMult = renderMultiplier + leadBoost;
       const trailMult = Math.max(0.25, renderMultiplier - leadBoost * 0.5);
-      const goingDown = velocityRef.current >= 0;
-      const abovePad = (goingDown ? trailMult : leadMult) * vpH;
-      const belowPad = (goingDown ? leadMult : trailMult) * vpH;
+      const goingForward = velocityRef.current >= 0;
+      const vpW = layoutMeasurement.width || viewportWidth;
 
-      const attrs = effectiveLayout.attributesForElements({
-        x: 0, y: scrollY - abovePad, width: viewportWidth, height: vpH + abovePad + belowPad,
-      });
+      const renderRect = isHorizontal ? {
+        x: scrollX - (goingForward ? trailMult : leadMult) * vpW,
+        y: 0,
+        width: vpW + (leadMult + trailMult) * vpW,
+        height: vpH,
+      } : {
+        x: 0,
+        y: scrollY - (goingForward ? trailMult : leadMult) * vpH,
+        width: viewportWidth,
+        height: vpH + (leadMult + trailMult) * vpH,
+      };
+
+      const attrs = effectiveLayout.attributesForElements(renderRect);
 
       let rFirst = Infinity, rLast = -Infinity;
       for (const a of attrs) {
@@ -1463,9 +1484,10 @@ export function Riff<T = unknown>({
       }
       const newR = { first: rFirst === Infinity ? 0 : rFirst, last: rLast === -Infinity ? -1 : rLast };
 
-      const visAttrs = effectiveLayout.attributesForElements({
-        x: 0, y: scrollY, width: viewportWidth, height: vpH,
-      });
+      const visRect = isHorizontal
+        ? { x: scrollX, y: 0, width: vpW, height: vpH }
+        : { x: 0, y: scrollY, width: viewportWidth, height: vpH };
+      const visAttrs = effectiveLayout.attributesForElements(visRect);
       let vFirst = Infinity, vLast = -Infinity;
       for (const a of visAttrs) {
         const fi = isSectioned ? (flattenResult?.keyToFlatIndex?.get(a.key) ?? -1) : a.index;
@@ -2107,6 +2129,7 @@ export function Riff<T = unknown>({
         sectionInsetRight={sectionInsetRight}
         scrollEnabled={scrollViewProps?.scrollEnabled ?? true}
         bounces={scrollViewProps?.bounces ?? true}
+        horizontal={effectiveLayout.horizontal ?? false}
         showsVerticalScrollIndicator={scrollViewProps?.showsVerticalScrollIndicator ?? true}
         scrollEventThrottle={16}
         onScroll={contractProps.onScroll}

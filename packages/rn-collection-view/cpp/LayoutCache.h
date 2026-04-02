@@ -145,6 +145,10 @@ public:
   /// auto-snapshot for size-change mutations).
   void setMVCEnabled(bool enabled);
 
+  /// Set scroll axis. When horizontal=true, MVC correction anchors by X instead of Y.
+  /// Called from JS before prepare() when the list layout is horizontal.
+  void setHorizontal(bool horizontal);
+
   /// Record the anchor item: smallest-Y item at or below the current scroll
   /// offset (reads _scrollOffset internally — written by native view on every
   /// scroll frame). Call BEFORE prepare() so old positions are still in cache.
@@ -200,8 +204,10 @@ private:
   // MVC anchor snapshot state (guarded by _mutex)
   std::string _anchorKey;
   double      _anchorY             = 0;
+  double      _anchorX             = 0;   // used when _horizontal == true
   bool        _hasAnchor           = false;
   bool        _mvcEnabled          = false;
+  bool        _horizontal          = false; // when true, anchor by X; correction on X axis
   double      _pendingCorrectionY  = 0;
   bool        _hasPendingCorrection = false;
 

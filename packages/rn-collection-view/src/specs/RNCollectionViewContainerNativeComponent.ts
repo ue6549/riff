@@ -65,6 +65,9 @@ interface NativeProps extends ViewProps {
   // Scroll offset correction when items above viewport change height.
   maintainVisibleContentPosition?: WithDefault<boolean, true>;
 
+  // Scroll axis — when true, UIScrollView scrolls horizontally.
+  horizontal?: WithDefault<boolean, false>;
+
   // Scroll configuration forwarded to internal UIScrollView.
   scrollEnabled?: WithDefault<boolean, true>;
   bounces?: WithDefault<boolean, true>;
