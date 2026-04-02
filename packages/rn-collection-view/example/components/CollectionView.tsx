@@ -1868,13 +1868,16 @@ export function Riff<T = unknown>({
   let stickyFooterCells: React.ReactElement[] | null = null;
 
   if (stickyConfigMap && stickyIndexSet && (stickyHeaderFlatIndices.length > 0 || stickyFooterFlatIndices.length > 0)) {
-    const scrollY = prevScrollYRef.current;
-    const vpH = viewportHeightRef.current || viewportHeight;
+    const isHoriz = effectiveLayout.horizontal ?? false;
+    const scrollPrimary = isHoriz ? prevScrollXRef.current : prevScrollYRef.current;
+    const vpPrimary = isHoriz
+      ? (viewportWidthRef.current || viewportWidth)
+      : (viewportHeightRef.current || viewportHeight);
 
     mountedStickySet = new Set<number>();
 
     if (stickyHeaderFlatIndices.length > 0) {
-      // Active header: last one whose naturalY ≤ scrollY
+      // Active header: last one whose natural position ≤ scroll offset
       let activeSlot = 0;
       for (let i = stickyHeaderFlatIndices.length - 1; i >= 0; i--) {
         const fi = stickyHeaderFlatIndices[i]!;
@@ -1882,8 +1885,10 @@ export function Riff<T = unknown>({
         const attr = (isSectioned && sd?._kind === 'header')
           ? nativeMod.layoutCache.getAttributes(`item-${sd.sectionIndex}-header`)
           : effectiveLayout.attributesForItem(isSectioned ? ((sd as any)?.itemIndex ?? fi) : fi, isSectioned ? (sd?.sectionIndex ?? 0) : 0);
-        const posY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
-        if (posY <= scrollY) { activeSlot = i; break; }
+        const pos = attr
+          ? (isHoriz ? attr.frame.x : attr.frame.y)
+          : sectionInsetTop + fi * stride;
+        if (pos <= scrollPrimary) { activeSlot = i; break; }
       }
 
       const first = Math.max(0, activeSlot - STICKY_BUFFER_BEFORE);
@@ -1898,7 +1903,7 @@ export function Riff<T = unknown>({
     }
 
     if (stickyFooterFlatIndices.length > 0) {
-      // Active footer: last one whose naturalY ≤ (scrollY + vpH - footerH)
+      // Active footer: last one whose natural position ≤ (scroll + viewport - size)
       let activeSlot = 0;
       for (let i = stickyFooterFlatIndices.length - 1; i >= 0; i--) {
         const fi = stickyFooterFlatIndices[i]!;
@@ -1906,9 +1911,13 @@ export function Riff<T = unknown>({
         const attr = (isSectioned && sd?._kind === 'footer')
           ? nativeMod.layoutCache.getAttributes(`item-${sd.sectionIndex}-footer`)
           : effectiveLayout.attributesForItem(isSectioned ? ((sd as any)?.itemIndex ?? fi) : fi, isSectioned ? (sd?.sectionIndex ?? 0) : 0);
-        const posY = attr ? attr.frame.y : sectionInsetTop + fi * stride;
-        const h = attr ? attr.frame.height : effectiveItemHeight;
-        if (posY <= (scrollY + vpH - h)) { activeSlot = i; break; }
+        const pos = attr
+          ? (isHoriz ? attr.frame.x : attr.frame.y)
+          : sectionInsetTop + fi * stride;
+        const sz = attr
+          ? (isHoriz ? attr.frame.width : attr.frame.height)
+          : effectiveItemHeight;
+        if (pos <= (scrollPrimary + vpPrimary - sz)) { activeSlot = i; break; }
       }
 
       const first = Math.max(0, activeSlot - STICKY_BUFFER_BEFORE);

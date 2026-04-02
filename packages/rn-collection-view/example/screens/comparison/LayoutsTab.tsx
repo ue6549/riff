@@ -865,7 +865,7 @@ export function HorizontalListDemo() {
             <Text style={HS.sectionHeaderCount}>{s.items.length} items</Text>
           </View>
         ),
-        height: 160,  // primary-axis width of header strip
+        height: 80,   // primary-axis width of header strip
         sticky: true,
       },
       footer: {
@@ -875,7 +875,7 @@ export function HorizontalListDemo() {
             <Text style={HS.sectionFooterLabel}>End</Text>
           </View>
         ),
-        height: 60,  // primary-axis width of footer strip
+        height: 50,   // primary-axis width of footer strip
         sticky: true,
       },
       insets: { top: 10, bottom: 10, left: 12, right: 12 },
