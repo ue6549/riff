@@ -218,10 +218,12 @@ Each built-in layout has a C++ implementation in the `cpp/layouts/` directory:
 All layout engines are pure functions: they take parameters and write `LayoutAttributes` into the shared `LayoutCache`. No retained state. Safe to call from any thread (the `LayoutCache` is mutex-guarded).
 
 The `LayoutCache` (`cpp/LayoutCache.h`) is the single source of truth for all positional data:
-- Stores `LayoutAttributes` per item key (frame, sizingState, tier, zIndex, etc.)
+- Stores `LayoutAttributes` per item key (frame, sizingState, tier, zIndex, `isDecoration`, `decorationKind`, etc.)
 - `getAttributesInRect(rect)` spatial query backed by a `SpatialIndex`
 - Thread-safe: all public methods acquire a mutex
 - Versioned: monotonic counter increments on every write, enabling staleness detection without content comparison
+
+**Layout fingerprinting:** JS layout delegates build a data-shape fingerprint (containerWidth + per-section item counts, header/footer heights, decoration flags). The cache is cleared and fully recomputed only when the fingerprint changes. Between renders, incremental `invalidateFrom` / `invalidateSectionsFrom` is used instead. This preserves Yoga-measured heights across measurement-triggered re-renders — a key correctness invariant.
 
 ### TypeScript path for custom layouts
 
@@ -236,10 +238,10 @@ Each built-in layout accepts a configuration object (the options argument to its
 
 | Config | Key fields | Notes |
 |---|---|---|
-| `ListLayoutConfig` | `itemHeight`, `estimatedItemHeight`, `heightForItem`, `itemSpacing`, `stickyMode`, header/footer sizing | Sizing: provide one of `itemHeight` / `estimatedItemHeight` / `heightForItem` |
-| `GridLayoutConfig` | `columns` (mandatory), `rowHeight` or `heightForItem`, `columnSpacing`, `rowSpacing` | `columns` can be `number` or `(containerWidth) => number` for responsive grids |
-| `MasonryLayoutConfig` | `columns` (mandatory), `heightForItem` (mandatory), `columnSpacing`, `rowSpacing` | Both mandatory: masonry is meaningless without column count and variable heights |
-| `FlowLayoutConfig` | `sizeForItem` (mandatory), `itemSpacing`, `lineSpacing` | Returns `{ width, height }` per item |
+| `ListLayoutDelegate` | `itemHeight`, `estimatedItemHeight`, `heightForItem`, `itemSpacing`, `sectionSpacing`, `stickyMode`, header/footer sizing, `separator`, `sectionBackground` | Sizing: provide one of `itemHeight` / `estimatedItemHeight` / `heightForItem`. `sectionSpacing` = gap between sections (outside bg frame). `separator` = layout-driven inter-item separator. `sectionBackground = true` emits a bg decoration. |
+| `GridLayoutDelegate` | `columns` (mandatory), `rowHeight` or `heightForItem`, `columnSpacing`, `rowSpacing` | `columns` can be `number` or `(containerWidth) => number` for responsive grids |
+| `MasonryLayoutDelegate` | `columns` (mandatory), `heightForItem` (mandatory), `columnSpacing`, `rowSpacing` | Both mandatory: masonry is meaningless without column count and variable heights |
+| `FlowLayoutDelegate` | `sizeForItem` (mandatory), `itemSpacing`, `lineSpacing` | Returns `{ width, height }` per item |
 
 All configs support responsive variants: `columns`, `rowHeight`, and `itemHeight` accept functions of `containerWidth`.
 
@@ -250,6 +252,51 @@ The component supports three tiers of complexity:
 - **Tier 1:** Simple props on `CollectionView` (`data`, `renderItem`, `itemHeight`). Default list layout.
 - **Tier 2:** Layout config via factory functions (`list()`, `masonry()`, `grid()`, `flow()`).
 - **Tier 3:** Full `sections` array with supplementary items, custom layout config, section backgrounds.
+
+### Stable Keys End-to-End
+
+Stable item identity flows from JS to C++ to the LayoutCache:
+
+1. **Consumer** provides `keyExtractor` (same as FlatList). For sectioned mode, the section key is the `SectionConfig.key`.
+2. **CollectionView.tsx** builds `itemKeys: string[]` per section and passes them in `LayoutContext.sections[s].itemKeys`.
+3. **JS layout wrapper** (`list.ts`) passes `keys: itemKeys` to C++ `computeSections()`.
+4. **C++ ListLayout** stores each item under its provided key instead of the positional `"item-{section}-{index}"` default.
+5. **Cache key format for scrollToItem:** `"sectionKey:itemId"` (e.g. `"cell-animation:s1-17"`).
+
+**Why stable keys matter:**
+- Incremental `invalidateFrom` / `invalidateSectionsFrom` works correctly when data reorders — the layout engine finds the item by key, not position.
+- `scrollToItem` accepts stable keys, not indices. This means the consumer never needs to know the current index of an item; the key is permanent.
+- Without `keyExtractor`, positional keys are used (`item-0-3`, `grid-5`, etc.). Reordering without keys causes the layout cache to see the same key at a different position, which is incorrect and leads to layout artifacts.
+
+For Grid/Masonry/Flow, keys follow the pattern `"grid-N"` / `"masonry-N"` / `"flow-N"` when no `keyExtractor` is provided. Stable keys are supported but multi-section is not yet available for these layouts.
+
+### Decoration Views
+
+Layout-driven views that belong to the layout engine, not to data. The layout emits `LayoutAttributes` with `isDecoration: true` and `decorationKind: string`. They are windowed, z-ordered, and positioned like cells — but have no React data binding.
+
+**Built-in kinds (ListLayout):**
+- `"sectionBackground"` — covers the items area of a section (after header, before footer). `zIndex: -1`, so it renders behind cells.
+- `"separator"` — a thin horizontal line between consecutive items. `zIndex: 0`. Configurable height, leading/trailing inset.
+
+**UIKit inspiration:** The section background behavior matches `NSCollectionLayoutDecorationItem.background` in `UICollectionViewCompositionalLayout` — it covers the section's content area (items + content insets), not the boundary supplementaries (header/footer). This is the expected behavior from a UIKit perspective: headers/footers float above the background in the Z stack, while the background decorates the content region.
+
+**Why not include header/footer in the background:** Compositional layout's `NSCollectionLayoutDecorationItem` explicitly excludes boundary supplementaries. Riff follows the same convention. A future `contentInsets` API (L3.1) will allow extending the bg frame with negative insets to cover headers/footers if desired.
+
+**Consumer API:**
+```typescript
+list({
+  separator: { color: '#ccc', height: 0.5, insetLeading: 16 },
+  sectionBackground: true,
+  sectionSpacing: 20,
+})
+
+// On <CollectionView>:
+decorationRenderers={{
+  sectionBackground: (sectionIndex, frame) => <AnimatedBg sectionIndex={sectionIndex} frame={frame} />,
+}}
+```
+
+**applyMeasurements and decorations:** When Yoga measures a cell and its height differs from the estimate, `applyMeasurements()` cascades Y-position shifts to all downstream items. Decorations use a shift-based second pass: the section background's Y origin and height are adjusted by tracking `entryShift` (cumulative shift before the section's first item) and `exitShift` (cumulative shift after the section's last item). This preserves the original `sectionInsetTop`/`sectionInsetBottom` padding in the bg frame even after measurement corrections. Decorations are excluded from MVC anchor selection (`_snapshotAnchorLocked` skips entries where `isDecoration == true`).
 
 ---
 
@@ -284,6 +331,27 @@ The scroll container is not hardcoded. Three layers of customization, from simpl
   <CustomScrollContainer {...props}>{children}</CustomScrollContainer>
 )} />
 ```
+
+### scrollToItem / scrollToOffset (L4)
+
+Imperative scroll API exposed via `RiffHandle`:
+
+```typescript
+cvRef.current?.scrollToItem('sectionKey:itemId', { position: 'top' | 'center' | 'bottom' | 'nearest' });
+cvRef.current?.scrollToOffset({ x: 0, y: 400 }, { animated: true });
+```
+
+**3-layer dispatch architecture:**
+1. JS reads the item's frame from `LayoutCache` using the stable key.
+2. Computes target offset for the requested `position` option, clamped to `[0, contentHeight - viewportHeight]`.
+3. Calls C++ JSI `nativeMod.scrollTo({ x, y, animated })`.
+4. C++ looks up the native scroll handler registered for this `layoutCacheId` and calls `_scrollToX:y:animated:` directly on the `UIScrollView`.
+
+**Scroll handler registry:** A static `std::map<int, ScrollHandler>` + mutex in `CollectionViewModule.cpp` decouples JSI from the native view lifecycle. The native `RNCollectionViewContainerView` registers its handler on first state update and unregisters in `prepareForRecycle`. This handles Fabric view recycling: a recycled view with a new `layoutCacheId` re-registers at the correct key.
+
+**`contentHeightRef` pattern:** `useImperativeHandle` deps do not include `contentHeight` (adding it would recreate the handle on every layout pass). Instead, a `contentHeightRef` mirrors the state value — same pattern used for `viewportHeightRef`. The scroll computation reads the ref, not the closure-captured value.
+
+**Key stability:** `scrollToItem` accepts the same stable `"sectionKey:itemId"` key format that the layout engine stores. No index translation needed.
 
 ### Native scroll ownership
 
@@ -378,7 +446,7 @@ Core Fabric ShadowNode APIs (`ConcreteViewShadowNode`, `layout()` override, `Con
 
 **Why:** The async path has a 2-frame gap between Yoga measurement and position correction. Users see a visible jump when cells are first measured. FlashList has the same limitation. The ShadowNode approach reads measurements in the same commit cycle, enabling correct positions from frame 1.
 
-**Status:** Phases 1-3 implemented and working. The ShadowNode reads child heights, runs the layout engine, and writes position arrays into state. The native view applies these positions in `updateState:`. Remaining: Phase 4 (scroll offset correction), Phase 5 (sticky headers), Phase 6 (legacy cleanup).
+**Status:** Phases 1-4 implemented and working. The ShadowNode reads child heights, runs the layout engine, writes position arrays into state, and applies MVC scroll offset correction to keep visible content stable when items above the viewport change height. Remaining: Phase 5 (sticky headers via ShadowNode), Phase 6 (legacy cleanup — remove JS cell wrapper positioning).
 
 ### Approach A: ShadowNode owns scroll container
 
@@ -420,7 +488,7 @@ Core Fabric ShadowNode APIs (`ConcreteViewShadowNode`, `layout()` override, `Con
 
 These are upcoming architectural pieces. Design details live in project memory files; this section is pointers only.
 
-- **Custom ShadowNode for zero-frame measurement (Phases 1-3 complete)** -- The ShadowNode reads Yoga-computed child heights in its `layout()` override, computes positions via the C++ layout engine, and delivers position arrays to the native view via `ConcreteState` — all in the same Fabric commit cycle. Phases 4-6 remain: scroll offset correction, sticky headers, and cleanup of the legacy async measurement path. Full plan in `plan_shadownode_phases.md`. State contract in `arch_state_contract.md`.
+- **Custom ShadowNode for zero-frame measurement (Phases 1-4 complete)** -- The ShadowNode reads Yoga-computed child heights in its `layout()` override, computes positions via the C++ layout engine, delivers position arrays to the native view via `ConcreteState`, and applies MVC scroll offset correction — all in the same Fabric commit cycle. Phase 5 (sticky headers via ShadowNode) and Phase 6 (JS cell wrapper cleanup) remain. Full plan in `plan_shadownode_phases.md`. State contract in `arch_state_contract.md`.
 
 - **View pooling / recycling** -- Future optimization for memory-constrained scenarios. Not architecturally excluded; the current identity-based approach is the default, not the only option.
 

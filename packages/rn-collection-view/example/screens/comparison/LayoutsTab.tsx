@@ -304,7 +304,7 @@ function AnimatedSectionBg({ sectionIndex, frame }: { sectionIndex: number; fram
   );
 }
 
-function ListDemo() {
+export function ListDemo() {
   // S0 data is mutable — insert / delete / resize act on it
   const [s0Items, setS0Items] = useState<ListItem[]>(S0_DATA);
   const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());

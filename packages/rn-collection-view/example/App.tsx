@@ -25,6 +25,7 @@ import {
 // ── Features ──────────────────────────────────────────────────────────────────
 import SalientPoints  from './screens/SalientPoints';
 import Comparison     from './screens/Comparison';
+import RiffDemo       from './screens/RiffDemo';
 
 // ── Phase 1 — Layout Engine ───────────────────────────────────────────────────
 import M1_1_LayoutCache            from './tests/M1_1_LayoutCache';
@@ -112,6 +113,12 @@ const SCREENS: ScreenEntry[] = [
     detail: '8 tabs · Prefetch / Sticky / Decor / Layouts / Perf / Resize / State / Snapshot',
     group: 'Features & Comparison',
     component: Comparison,
+  },
+  {
+    key: 'riff_demo', label: 'Riff Demo',
+    detail: 'List · Grid · Masonry · Flow · all orientations & features',
+    group: 'Features & Comparison',
+    component: RiffDemo,
   },
 
   // ── Phase 1: Layout Engine ────────────────────────────────────────────────

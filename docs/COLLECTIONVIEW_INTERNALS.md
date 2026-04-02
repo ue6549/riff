@@ -130,6 +130,34 @@ const layoutContext: LayoutContext = {
 
 **Item spacing** (`itemSpacing`) is a global param on the `list()` layout delegate — NOT per-section. There is no per-section item spacing in the current architecture.
 
+**Section spacing** (`sectionSpacing`) IS a per-layout param on `ListLayoutDelegate`. It adds a gap after each section's footer (or last item if no footer) before the next section's header. Sits outside the section background frame. Analogous to `NSCollectionLayoutSection.interSectionSpacing`.
+
+**Decoration params** (`emitSeparators`, `emitSectionBackground`, `separatorHeight`, `separatorInsetLeading/Trailing`) are passed from the JS `list()` delegate into the C++ `computeSections()` call. They control which decoration `LayoutAttributes` the engine emits. They are also included in the data-shape fingerprint so toggling them triggers a full cache clear and recompute.
+
+---
+
+## Decoration Rendering Pipeline
+
+Decorations are layout-engine-owned visual entries with `isDecoration: true` in `LayoutAttributes`. They are windowed and z-ordered like cells but carry no React data.
+
+**Query:** `CollectionView.tsx` calls `nativeMod.layoutCache.getAttributesInRect(decoRect)` and filters for `attrs.isDecoration === true`. This only runs when at least one of `decorationRenderers`, `renderSectionBackground`, or `hasSeparators` is truthy, and when `layout.type === 'list'`.
+
+**Z-ordering:**
+- `sectionBackground` entries: `zIndex: -1` → rendered first, behind cells
+- `separator` entries: `zIndex: 0` → rendered after backgrounds, between item layers
+- Cells: `zIndex: 1+` (from `LayoutAttributes.zIndex`)
+
+**Rendering:**
+- Separators: flat `<View>` with `backgroundColor` from `listDelegate.separator.color`. Width is `frame.width - insetLeading - insetTrailing`.
+- Section backgrounds: consumer-provided render function via `decorationRenderers.sectionBackground(sectionIndex, frame)` or legacy `renderSectionBackground` prop.
+- Custom decoration kinds: `decorationRenderers[decorationKind](sectionIndex, frame)` for extensibility.
+
+**Frame semantics:** The section background frame covers the items area only — from `sectionInsetTop` below the header to `sectionInsetBottom` above the footer. This matches `NSCollectionLayoutDecorationItem.background` in `UICollectionViewCompositionalLayout`. Headers/footers float above the background in Z and sit outside the bg rect.
+
+**applyMeasurements:** Decoration entries are skipped in the primary item-shift loop. A second pass updates bg frames using `entryShift` / `exitShift` per section (cumulative shift before/after each section's items). This preserves inset padding in the bg frame after Yoga measurement corrections.
+
+**MVC anchor exclusion:** `_snapshotAnchorLocked()` in `LayoutCache.cpp` skips entries where `isDecoration == true`. Without this, a section background (large frame, low Y) would be selected as the MVC anchor, causing incorrect scroll offset corrections on insert/delete.
+
 ---
 
 ## Mutation API
@@ -167,17 +195,38 @@ setSections(prev => [{
 
 ---
 
+## scrollToItem / scrollToOffset
+
+Exposed via `RiffHandle` (useImperativeHandle):
+
+```typescript
+const ref = useRef<RiffHandle<MyItem>>(null);
+<Riff handle={ref} ... />
+
+ref.current?.scrollToItem('sectionKey:itemId', { position: 'top' | 'center' | 'bottom' | 'nearest', animated: true });
+ref.current?.scrollToOffset({ x: 0, y: 400 }, { animated: true });
+```
+
+**Key format:** Same stable key used by the layout cache — `"sectionKey:itemId"` (e.g. `"cell-animation:s1-17"`). This is the concatenation of `SectionConfig.key` and the item key from `keyExtractor`. No index needed.
+
+**`contentHeightRef` pattern:** `useImperativeHandle` doesn't include `contentHeight` in its deps array — adding it would recreate the handle on every layout pass (O(cells) re-render). Instead, a `contentHeightRef` ref mirrors the `contentHeight` state value. The scroll offset clamping reads `contentHeightRef.current`, not the stale closure. Same pattern as `viewportHeightRef`.
+
+**Dispatch:** JS computes target offset → calls `nativeMod.scrollTo({ x, y, animated })` → C++ looks up the registered scroll handler for this `layoutCacheId` → calls `_scrollToX:y:animated:` on the `UIScrollView`.
+
+---
+
 ## Key Type Locations
 
 | Type | File | ~Line |
 |---|---|---|
 | `SectionConfig<T>` | `CollectionView.tsx` | 146 |
 | `RiffProps<T>` | `CollectionView.tsx` | 201 |
-| `RiffHandle<T>` | `CollectionView.tsx` | 179 |
+| `RiffHandle<T>` (incl. `scrollToItem`/`scrollToOffset`) | `CollectionView.tsx` | 179 |
 | `SectionedRenderItemInfo<T>` | `CollectionView.tsx` | 161 |
 | `CollectionViewLayout` | `src/types/protocol.ts` | — |
 | `LayoutContext` | `src/types/protocol.ts` | — |
-| `ListLayoutDelegate` | `src/types/protocol.ts` | — |
+| `ListLayoutDelegate` (incl. `separator`, `sectionBackground`, `sectionSpacing`) | `src/types/protocol.ts` | — |
+| `GridLayoutDelegate`, `MasonryLayoutDelegate`, `FlowLayoutDelegate` | `src/types/protocol.ts` | — |
 
 ---
 
