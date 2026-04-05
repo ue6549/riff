@@ -1300,13 +1300,26 @@ const HG_TAG_POOLS: string[][] = [[], ['new'], ['sale', 'hot'], ['featured']];
 export function HorizontalGridDemo() {
   const staticSections = useMemo(() => makeHGSections(), []);
   const [s0Items, setS0Items] = useState<HGCard[]>(staticSections[0]!.items);
+  const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
   const insertCounter = useRef(staticSections[0]!.items.length);
   const cvRef = useRef<RiffHandle>(null);
 
-  const handleInsert = useCallback(() => {
+  const handleInsert1 = useCallback(() => {
+    const idx = insertCounter.current++;
+    const item: HGCard = {
+      id: `hg-nature-ins-${idx}`,
+      color: H_COLORS[idx % H_COLORS.length]!,
+      num: idx,
+      label: `New ${idx + 1}`,
+      tags: ['new'],
+    };
+    setS0Items(prev => [item, ...prev]);
+  }, []);
+
+  const handleInsert4 = useCallback(() => {
     const newItems: HGCard[] = Array.from({ length: 4 }, () => {
       const idx = insertCounter.current++;
       return {
@@ -1323,6 +1336,18 @@ export function HorizontalGridDemo() {
   const handleDelete = useCallback(() => {
     setS0Items(prev => prev.length >= 4 ? prev.slice(4) : prev);
   }, []);
+
+  const toggleResize = useCallback((id: string) => {
+    setResizedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const resizeFirst = useCallback(() => {
+    if (s0Items.length > 0) toggleResize(s0Items[0]!.id);
+  }, [s0Items, toggleResize]);
 
   const riffSections = useMemo(() => {
     const allSections = [
@@ -1378,31 +1403,35 @@ export function HorizontalGridDemo() {
     ),
   }), []);
 
-  const renderCard = useCallback(({ item }: { item: HGCard }) => (
-    <View style={[HGS.card, { backgroundColor: item.color + 'cc' }]}>
-      <View style={HGS.cardThumb}>
-        <Text style={HGS.cardThumbNum}>{item.num + 1}</Text>
-      </View>
-      <Text style={HGS.cardLabel}>{item.label}</Text>
-      {item.tags.length > 0 && (
-        <View style={HGS.tagRow}>
-          {item.tags.map(t => (
-            <View key={t} style={HGS.tag}>
-              <Text style={HGS.tagText}>{t}</Text>
-            </View>
-          ))}
+  const renderCard = useCallback(({ item }: { item: HGCard }) => {
+    const isResized = resizedIds.has(item.id);
+    const tags = isResized ? ['resized', 'wider', ...item.tags] : item.tags;
+    return (
+      <View style={[HGS.card, { backgroundColor: item.color + 'cc' }]}>
+        <View style={HGS.cardThumb}>
+          <Text style={HGS.cardThumbNum}>{item.num + 1}</Text>
         </View>
-      )}
-    </View>
-  ), []);
+        <Text style={HGS.cardLabel}>{isResized ? `${item.label} — wider content` : item.label}</Text>
+        {tags.length > 0 && (
+          <View style={HGS.tagRow}>
+            {tags.map(t => (
+              <View key={t} style={HGS.tag}>
+                <Text style={HGS.tagText}>{t}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </View>
+    );
+  }, [resizedIds]);
 
   const keyExtractor = useCallback((item: HGCard) => item.id, []);
 
   return (
     <View style={{ flex: 1, backgroundColor: '#0a0a0a' }}>
       <View style={HGS.titleBar}>
-        <Text style={HGS.title}>Horizontal Grid (2 rows)</Text>
-        <Text style={HGS.subtitle}>3 sections · columns=2 · sticky headers/footers · section backgrounds · insert/delete</Text>
+        <Text style={HGS.title}>Horizontal Grid (2 rows · fixed cross-axis)</Text>
+        <Text style={HGS.subtitle}>Cell height = {HG_ITEM_CROSS_H}pt × 2 rows + {HG_COL_SPACING}pt gap + {HG_INSET_Y}pt insets = {HG_CONTAINER_H}pt total</Text>
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HGS.ctrlBar} contentContainerStyle={HGS.ctrlBarContent}>
@@ -1411,8 +1440,11 @@ export function HorizontalGridDemo() {
         <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToItem('hg-abstract:hg-abs-0', { position: 'start' })} />
         <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hg-abstract:hg-abs-11', { position: 'end' })} />
         <View style={S.ctrlDivider} />
-        <CtrlBtn label="+Insert" onPress={handleInsert} />
-        <CtrlBtn label="×Delete" onPress={handleDelete} />
+        <CtrlBtn label="+1" onPress={handleInsert1} />
+        <CtrlBtn label="+4" onPress={handleInsert4} />
+        <CtrlBtn label="×4" onPress={handleDelete} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="↔S0[0]" onPress={resizeFirst} active={s0Items.length > 0 && resizedIds.has(s0Items[0]!.id)} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
@@ -1429,6 +1461,7 @@ export function HorizontalGridDemo() {
           renderItem={renderCard}
           keyExtractor={keyExtractor}
           estimatedItemHeight={HG_ITEM_CROSS_H}
+          extraData={resizedIds}
           maintainVisibleContentPosition={mvcEnabled}
           decorationRenderers={decorationRenderers}
           onDecorationCountChange={setDecoCount}
