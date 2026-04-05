@@ -122,33 +122,65 @@ function MasonrySectionFooter({ color, count }: { color: string; count: number }
   );
 }
 
-// ── Flow data (tag cloud) — Two-pass demo ────────────────────────────────────
+// ── Flow data (tag cloud) — Two-pass + multi-section demo ────────────────────
 // The two-pass effect: initial render uses estimated sizes from sizeForItem().
 // Yoga then measures actual text widths. The layout engine receives the deltas
 // and reflows items into different row positions. Items visibly rearrange from
 // estimated to measured positions.
 
-const TAG_LABELS = [
+// 3 sections of tags with different topics.
+const FLOW_S0_LABELS = [
   'React Native', 'C++', 'JSI', 'TypeScript', 'Layout Engine', 'Masonry', 'Grid',
   'Flow', 'Custom', 'Carousel', 'Performance', 'Virtualization', 'Windowing',
   'Sticky', 'Headers', 'Prefetch', 'Diff', 'Snapshot', 'Animation', 'Fabric',
+];
+const FLOW_S1_LABELS = [
   'Hermes', 'iOS', 'Android', 'Yoga', 'Riff', 'FlashList', 'FlatList',
   'ScrollView', 'Reanimated', 'Gesture Handler', 'UIKit', 'SwiftUI', 'Compose',
   'Kotlin', 'Bridge', 'TurboModule', 'Codegen', 'Metro', 'Babel', 'SWC',
+];
+const FLOW_S2_LABELS = [
   // Longer labels to make two-pass effect more visible
   'Layout Cache Architecture', 'Shadow Node Measurement', 'Content Determined Dimensions',
   'Shortest Column Algorithm', 'Row Height Alignment', 'Viewport Windowing',
   'Cell Identity Preservation', 'Scroll Offset Correction', 'Progressive Layout',
   'Three-Tier Height Resolution',
 ];
-type FlowTag = { id: string; label: string; estimatedWidth: number; color: string };
-const FLOW_DATA: FlowTag[] = TAG_LABELS.map((label, i) => ({
-  id: `flow-${i}`,
-  label,
-  // Intentionally imprecise estimate — the two-pass effect corrects this.
-  estimatedWidth: 20 + label.length * 7,
-  color: COLORS[i % COLORS.length]!,
-}));
+
+type FlowTag = { id: string; label: string; estimatedWidth: number; color: string; section: number };
+
+function makeFlowSection(prefix: string, labels: string[], sectionIdx: number): FlowTag[] {
+  return labels.map((label, i) => ({
+    id: `${prefix}-${i}`,
+    label,
+    estimatedWidth: 20 + label.length * 7,  // intentionally imprecise
+    color: COLORS[(i + sectionIdx * 2) % COLORS.length]!,
+    section: sectionIdx,
+  }));
+}
+
+const FS0_INIT = makeFlowSection('fs0', FLOW_S0_LABELS, 0);
+const FS1_DATA = makeFlowSection('fs1', FLOW_S1_LABELS, 1);
+const FS2_DATA = makeFlowSection('fs2', FLOW_S2_LABELS, 2);
+
+const FL_HDR_H = 44;
+const FL_FTR_H = 28;
+
+function FlowSectionHeader({ label, color }: { label: string; color: string }) {
+  return (
+    <View style={{ height: FL_HDR_H, backgroundColor: color + 'dd', justifyContent: 'center', paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: color }}>
+      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>{label}</Text>
+    </View>
+  );
+}
+
+function FlowSectionFooter({ color, count }: { color: string; count: number }) {
+  return (
+    <View style={{ height: FL_FTR_H, backgroundColor: color + '44', justifyContent: 'center', paddingHorizontal: 14, borderTopWidth: 1, borderTopColor: color + '88' }}>
+      <Text style={{ color, fontSize: 11, fontWeight: '600' }}>{count} tags</Text>
+    </View>
+  );
+}
 
 // ── Circular + Carousel data ─────────────────────────────────────────────────
 
@@ -999,49 +1031,290 @@ const HMS = StyleSheet.create({
   cardLabel:      { fontSize: 10, color: 'rgba(255,255,255,0.85)', fontWeight: '600', textAlign: 'center', marginTop: 4 },
 });
 
-// ── Flow layout config (two-pass demo) ──────────────────────────────────────
+// ── Flow layout config (two-pass + multi-section demo) ───────────────────────
 
-function FlowDemo() {
-  const [pass, setPass] = useState(0);
+export function FlowDemo() {
+  const cvRef = useRef<any>(null);
+  const [fs0Items, setFs0Items] = useState<FlowTag[]>(FS0_INIT);
+  const [mvcEnabled, setMvcEnabled] = useState(false);
+  const [sepEnabled, setSepEnabled] = useState(false);
+  const [decoCount, setDecoCount] = useState(0);
+  const insertCounter = useRef(FS0_INIT.length);
+
+  const allSectionsRef = useRef<FlowTag[][]>([fs0Items, FS1_DATA, FS2_DATA]);
+  allSectionsRef.current = [fs0Items, FS1_DATA, FS2_DATA];
 
   const flowLayout = useMemo(() => flow({
     itemSpacing: 8,
     lineSpacing: 8,
-    sizeForItem: (index: number) => ({
-      width: FLOW_DATA[index]?.estimatedWidth ?? 80,
-      height: 34,
-    }),
+    sectionSpacing: 16,
+    sectionBackground: true,
+    separator: sepEnabled ? { color: '#334', height: 0.5 } : undefined,
+    sizeForItem: (i: number, s: number) => {
+      const item = allSectionsRef.current[s]?.[i];
+      if (!item) return { width: 80, height: 34 };
+      return { width: item.estimatedWidth, height: 34 };
+    },
+  }), [sepEnabled, fs0Items]);
+
+  const keyExtractor = useCallback((item: FlowTag) => item.id, []);
+
+  const handleInsert = useCallback(() => {
+    const idx = insertCounter.current++;
+    const label = FLOW_S0_LABELS[idx % FLOW_S0_LABELS.length]!;
+    setFs0Items(prev => [{
+      id: `fs0-ins-${idx}`, label, section: 0,
+      estimatedWidth: 20 + label.length * 7,
+      color: COLORS[idx % COLORS.length]!,
+    }, ...prev]);
+  }, []);
+
+  const handleDelete = useCallback(() => {
+    setFs0Items(prev => prev.length >= 1 ? prev.slice(1) : prev);
+  }, []);
+
+  const sections = useMemo(() => [
+    {
+      key: 'fs0', data: fs0Items,
+      header: { render: () => <FlowSectionHeader label={`S0 — Runtime (${fs0Items.length})`} color="#e63946" />, height: FL_HDR_H, sticky: true },
+      footer: { render: () => <FlowSectionFooter color="#e63946" count={fs0Items.length} />, height: FL_FTR_H, sticky: true },
+      insets: { top: 8, bottom: 8, left: 8, right: 8 },
+    },
+    {
+      key: 'fs1', data: FS1_DATA,
+      header: { render: () => <FlowSectionHeader label="S1 — Ecosystem (20)" color="#2a9d8f" />, height: FL_HDR_H, sticky: true },
+      footer: { render: () => <FlowSectionFooter color="#2a9d8f" count={FS1_DATA.length} />, height: FL_FTR_H, sticky: true },
+      insets: { top: 8, bottom: 8, left: 8, right: 8 },
+    },
+    {
+      key: 'fs2', data: FS2_DATA,
+      header: { render: () => <FlowSectionHeader label="S2 — Architecture (10)" color="#6a4c93" />, height: FL_HDR_H, sticky: true },
+      footer: { render: () => <FlowSectionFooter color="#6a4c93" count={FS2_DATA.length} />, height: FL_FTR_H, sticky: true },
+      insets: { top: 8, bottom: 8, left: 8, right: 8 },
+    },
+  ], [fs0Items]);
+
+  const decorationRenderers = useMemo(() => ({
+    sectionBackground: (sectionIndex: number, frame: { x: number; y: number; width: number; height: number }) => (
+      <AnimatedSectionBg sectionIndex={sectionIndex} frame={frame} />
+    ),
   }), []);
+
+  const renderItem = useCallback(({ item }: { item: FlowTag }) => (
+    <View style={[S.flowTag, { backgroundColor: item.color }]}>
+      <Text style={S.flowTagText}>{item.label}</Text>
+    </View>
+  ), []);
 
   return (
     <View style={S.flex}>
       <View style={S.flowInfoBar}>
         <Text style={S.flowInfoText}>
-          Two-pass demo: tags use estimated widths initially.{'\n'}
-          Yoga measures actual text width → layout reflows.{'\n'}
-          Watch items rearrange from estimated to measured positions.
+          Two-pass: estimated widths initially → Yoga measures → reflows.{'\n'}
+          Multi-section with sticky H/F and section backgrounds.
         </Text>
       </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('fs1:fs1-0', { position: 'top' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('fs2:fs2-9', { position: 'bottom' })} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="+1" onPress={handleInsert} />
+        <CtrlBtn label="−1" onPress={handleDelete} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
+        <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
+        <View style={{ paddingHorizontal: 6, justifyContent: 'center' }}>
+          <Text style={{ color: '#888', fontSize: 10, fontWeight: '600' }}>Deco:{decoCount}</Text>
+        </View>
+      </ScrollView>
+
       <CollectionView
-        data={FLOW_DATA}
+        handle={cvRef}
+        sections={sections}
         layout={flowLayout}
+        stickyMode="push"
         estimatedItemHeight={34}
-        sectionInsetTop={8}
-        sectionInsetBottom={8}
-        sectionInsetLeft={8}
-        sectionInsetRight={8}
-        keyExtractor={useCallback((item: FlowTag) => item.id, [])}
-        renderItem={useCallback(({ item }: { item: FlowTag }) => (
-          <View style={[S.flowTag, { backgroundColor: item.color }]}>
-            <Text style={S.flowTagText}>{item.label}</Text>
-          </View>
-        ), [])}
+        maintainVisibleContentPosition={mvcEnabled}
+        decorationRenderers={decorationRenderers}
+        onDecorationCountChange={setDecoCount}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
       />
     </View>
   );
 }
 
-type SubTab = 'list' | 'grid' | 'hgrid' | 'ahgrid' | 'masonry' | 'hmasonry' | 'flow' | 'circular' | 'carousel';
+// ── Horizontal Flow ───────────────────────────────────────────────────────────
+
+const HF_CONTAINER_H = 220;
+
+const HF_S0_LABELS = ['React Native', 'C++', 'JSI', 'TypeScript', 'Layout Engine', 'Performance', 'Windowing', 'Sticky', 'Headers'];
+const HF_S1_LABELS = ['Yoga', 'Riff', 'FlashList', 'FlatList', 'UIKit', 'SwiftUI', 'TurboModule', 'Codegen', 'Metro'];
+type HFlowTag = { id: string; label: string; color: string; multiLine?: boolean };
+
+function makeHFlowSection(prefix: string, labels: string[], colorOffset: number): HFlowTag[] {
+  return labels.map((label, i) => ({
+    id: `${prefix}-${i}`,
+    label,
+    color: COLORS[(i + colorOffset) % COLORS.length]!,
+    multiLine: i % 3 === 2, // every 3rd tag has 2 lines → taller → different column packing
+  }));
+}
+
+const HF_S0_INIT = makeHFlowSection('hf-s0', HF_S0_LABELS, 0);
+const HF_S1_DATA = makeHFlowSection('hf-s1', HF_S1_LABELS, 3);
+
+export function HFlowDemo() {
+  const cvRef = useRef<any>(null);
+  const [s0Items, setS0Items] = useState<HFlowTag[]>(HF_S0_INIT);
+  const [mvcEnabled, setMvcEnabled] = useState(false);
+  const insertCounter = useRef(HF_S0_INIT.length);
+
+  const hfLayout = useMemo(() => flow({
+    horizontal: true,
+    itemSpacing: 8,
+    lineSpacing: 16,
+    sectionSpacing: 12,
+    sectionBackground: true,
+    // H-flow: sizeForItem returns width (primary) and height (cross).
+    // Tags with multiLine=true are taller → affect column packing.
+    sizeForItem: (i: number, s: number) => {
+      const sections: HFlowTag[][] = [s0Items, HF_S1_DATA];
+      const item = sections[s]?.[i];
+      return { width: 80, height: item?.multiLine ? 52 : 34 };
+    },
+  }), [s0Items]);
+
+  const handleInsert = useCallback(() => {
+    const idx = insertCounter.current++;
+    const label = HF_S0_LABELS[idx % HF_S0_LABELS.length]!;
+    setS0Items(prev => [{
+      id: `hf-s0-ins-${idx}`, label, color: COLORS[idx % COLORS.length]!, multiLine: false,
+    }, ...prev]);
+  }, []);
+
+  const handleDelete = useCallback(() => {
+    setS0Items(prev => prev.length >= 1 ? prev.slice(1) : prev);
+  }, []);
+
+  const sections = useMemo(() => [
+    {
+      key: 'hf-s0', data: s0Items,
+      header: {
+        render: () => (
+          <View style={[HFS.sectionHeader, { backgroundColor: '#e63946' }]}>
+            <Text style={HFS.sectionHeaderTitle}>{'S0'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      footer: {
+        render: () => (
+          <View style={[HFS.sectionFooter, { backgroundColor: '#e63946' }]}>
+            <Text style={HFS.sectionFooterLabel}>{'END'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      insets: { top: 8, bottom: 8, left: 10, right: 10 },
+    },
+    {
+      key: 'hf-s1', data: HF_S1_DATA,
+      header: {
+        render: () => (
+          <View style={[HFS.sectionHeader, { backgroundColor: '#2a9d8f' }]}>
+            <Text style={HFS.sectionHeaderTitle}>{'S1'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      footer: {
+        render: () => (
+          <View style={[HFS.sectionFooter, { backgroundColor: '#2a9d8f' }]}>
+            <Text style={HFS.sectionFooterLabel}>{'END'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      insets: { top: 8, bottom: 8, left: 10, right: 10 },
+    },
+  ], [s0Items]);
+
+  const decorationRenderers = useMemo(() => ({
+    sectionBackground: (sectionIndex: number, frame: { x: number; y: number; width: number; height: number }) => (
+      <AnimatedSectionBg sectionIndex={sectionIndex} frame={frame} />
+    ),
+  }), []);
+
+  const renderItem = useCallback(({ item }: { item: HFlowTag }) => (
+    <View style={[HFS.tag, { backgroundColor: item.color }]}>
+      <Text style={HFS.tagText}>{item.label}</Text>
+      {item.multiLine && <Text style={HFS.tagSub}>multi-line</Text>}
+    </View>
+  ), []);
+
+  const keyExtractor = useCallback((item: HFlowTag) => item.id, []);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0a0a0a' }}>
+      <View style={HFS.titleBar}>
+        <Text style={HFS.title}>H-Flow (items pack top→bottom, wrap to next column)</Text>
+        <Text style={HFS.subtitle}>Container height: {HF_CONTAINER_H}pt (fixed). Tags with taller items force different column packing.</Text>
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HFS.ctrlBar} contentContainerStyle={HFS.ctrlBarContent}>
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hf-s1:hf-s1-0', { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hf-s1:hf-s1-8', { position: 'end' })} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="+1" onPress={handleInsert} />
+        <CtrlBtn label="−1" onPress={handleDelete} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
+      </ScrollView>
+
+      <View style={[HFS.listBg, { height: HF_CONTAINER_H }]}>
+        <CollectionView
+          handle={cvRef}
+          sections={sections}
+          layout={hfLayout}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          estimatedItemHeight={34}
+          maintainVisibleContentPosition={mvcEnabled}
+          decorationRenderers={decorationRenderers}
+          scrollViewProps={{
+            style: { backgroundColor: 'transparent' },
+            indicatorStyle: 'white',
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+const HFS = StyleSheet.create({
+  titleBar:       { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8 },
+  title:          { fontSize: 14, fontWeight: '700', color: '#e2e8f0' },
+  subtitle:       { fontSize: 10, color: '#475569', marginTop: 2 },
+
+  ctrlBar:        { backgroundColor: '#111', flexGrow: 0 },
+  ctrlBarContent: { flexDirection: 'row', gap: 6, paddingHorizontal: 8, paddingVertical: 7, alignItems: 'center' },
+
+  listBg:         { backgroundColor: '#0f1623', overflow: 'hidden' },
+
+  sectionHeader:  { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  sectionHeaderTitle: { fontSize: 8, fontWeight: '700', color: 'rgba(255,255,255,0.7)', textAlign: 'center', lineHeight: 10 },
+  sectionFooter:  { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  sectionFooterLabel: { fontSize: 8, color: 'rgba(255,255,255,0.5)', fontWeight: '600', textAlign: 'center', lineHeight: 10 },
+
+  tag:            { borderRadius: 6, paddingHorizontal: 10, paddingVertical: 6, margin: 3, alignItems: 'center', justifyContent: 'center' },
+  tagText:        { fontSize: 11, fontWeight: '700', color: '#fff' },
+  tagSub:         { fontSize: 9, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+});
+
+type SubTab = 'list' | 'grid' | 'hgrid' | 'ahgrid' | 'masonry' | 'hmasonry' | 'flow' | 'hflow' | 'circular' | 'carousel';
 
 // ── Callout bullets per layout ───────────────────────────────────────────────
 type Bullet = { type: 'green' | 'amber' | 'red' | 'blue'; text: string };
@@ -1084,8 +1357,15 @@ const CALLOUTS: Record<SubTab, Bullet[]> = {
   ],
   flow: [
     { type: 'amber', text: 'FlashList: Possible via custom LayoutProvider, but requires manual row-break logic.' },
-    { type: 'blue', text: 'Two-pass: estimated sizes → Yoga measures → layout engine reflows. Watch items shift.' },
+    { type: 'blue', text: 'Multi-section: 3 sections with sticky push headers/footers and animated section backgrounds.' },
+    { type: 'blue', text: 'Two-pass: estimated widths → Yoga measures actual text width → C++ reflows rows. Watch items shift.' },
     { type: 'blue', text: 'Engine: C++ FlowLayout via JSI. ContentDimension=Both (width + height are cell-intrinsic).' },
+  ],
+  hflow: [
+    { type: 'green', text: 'FlashList: Not possible. No horizontal flow mode.' },
+    { type: 'blue', text: 'H-flow: items pack top→bottom into columns. Column width = widest item in column.' },
+    { type: 'blue', text: 'Container height is fixed (consumer-provided). shouldInvalidate on height change (not oscillation risk).' },
+    { type: 'blue', text: 'Every 3rd tag is multi-line (taller) — demonstrates variable cross-axis sizes affecting column packing.' },
   ],
   circular: [
     { type: 'red', text: 'FlashList: Not possible. Radial positioning requires arbitrary (x, y) placement.' },
@@ -1109,6 +1389,7 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: 'masonry', label: 'Masonry' },
   { key: 'hmasonry', label: 'H-Masonry' },
   { key: 'flow', label: 'Flow' },
+  { key: 'hflow', label: 'H-Flow' },
   { key: 'circular', label: 'Radial Arc' },
   { key: 'carousel', label: '3D Carousel' },
 ];
@@ -1166,6 +1447,7 @@ export default function LayoutsTab() {
         {subTab === 'masonry' && <MasonryDemo />}
         {subTab === 'hmasonry' && <HMasonryDemo />}
         {subTab === 'flow' && <FlowDemo />}
+        {subTab === 'hflow' && <HFlowDemo />}
 
         {subTab === 'circular' && (
           <CircularList

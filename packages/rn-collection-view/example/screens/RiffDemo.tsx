@@ -4,25 +4,27 @@
  * Each tab demos a specific layout engine with both vertical and horizontal
  * variants, decorations, mutations, and sticky headers where applicable.
  *
- * Tabs are added progressively as layouts are implemented:
- *   List (V+H)    ← both done
- *   Grid (V+H)    ← both done
- *   Masonry (V+H) ← both done
- *   Flow (align)  ← TODO
+ * Tabs:
+ *   List (V+H)    ← done
+ *   Grid (V+H)    ← done
+ *   Masonry (V+H) ← done
+ *   Flow (V+H)    ← done
  */
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { ListDemo, HorizontalListDemo, GridDemo, HorizontalGridDemo, MasonryDemo, HMasonryDemo } from './comparison/LayoutsTab';
+import { ListDemo, HorizontalListDemo, GridDemo, HorizontalGridDemo, MasonryDemo, HMasonryDemo, FlowDemo, HFlowDemo } from './comparison/LayoutsTab';
 
-type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'masonry-h';
+type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'masonry-h' | 'flow-v' | 'flow-h';
 
 const TABS: { key: DemoTab; label: string; detail: string }[] = [
-  { key: 'list-v', label: 'List ↕', detail: 'Vertical · sections · decorations · mutations · sticky' },
-  { key: 'list-h', label: 'List ↔', detail: 'Horizontal · sections · fixed-width cards' },
-  { key: 'grid-v', label: 'Grid ↕', detail: 'Vertical grid · multi-section · sticky headers · section backgrounds · insert/delete · MVC' },
-  { key: 'grid-h', label: 'Grid ↔', detail: 'Horizontal grid · columns=2 · section backgrounds · insert/delete · MVC' },
+  { key: 'list-v',    label: 'List ↕',    detail: 'Vertical · sections · decorations · mutations · sticky' },
+  { key: 'list-h',    label: 'List ↔',    detail: 'Horizontal · sections · fixed-width cards' },
+  { key: 'grid-v',    label: 'Grid ↕',    detail: 'Vertical grid · multi-section · sticky headers · section backgrounds · insert/delete · MVC' },
+  { key: 'grid-h',    label: 'Grid ↔',    detail: 'Horizontal grid · columns=2 · section backgrounds · insert/delete · MVC' },
   { key: 'masonry-v', label: 'Masonry ↕', detail: 'Vertical masonry · 2 columns · shortest-lane · multi-section · sticky · section backgrounds · insert/delete · MVC' },
   { key: 'masonry-h', label: 'Masonry ↔', detail: 'Horizontal masonry · 3 lanes · adaptive container height · insert/delete · MVC' },
+  { key: 'flow-v',    label: 'Flow ↕',    detail: 'Vertical flow · tag cloud · multi-section · two-pass · sticky · section backgrounds · insert/delete · MVC' },
+  { key: 'flow-h',    label: 'Flow ↔',    detail: 'Horizontal flow · items pack top→bottom · fixed container height · multi-section · insert/delete' },
 ];
 
 export default function RiffDemo() {
@@ -46,12 +48,6 @@ export default function RiffDemo() {
             <Text style={[S.tabLabel, tab === t.key && S.tabLabelActive]}>{t.label}</Text>
           </Pressable>
         ))}
-        {/* Placeholder tabs — shown greyed out for roadmap visibility */}
-        {(['Flow ↕', 'Flow ↔'] as const).map(label => (
-          <View key={label} style={[S.tab, S.tabDisabled]}>
-            <Text style={S.tabLabelDisabled}>{label}</Text>
-          </View>
-        ))}
       </ScrollView>
 
       {/* Detail line */}
@@ -61,12 +57,14 @@ export default function RiffDemo() {
 
       {/* Content */}
       <View style={S.content}>
-        {tab === 'list-v' && <ListDemo />}
-        {tab === 'list-h' && <HorizontalListDemo />}
-        {tab === 'grid-v' && <GridDemo />}
-        {tab === 'grid-h' && <HorizontalGridDemo />}
+        {tab === 'list-v'    && <ListDemo />}
+        {tab === 'list-h'    && <HorizontalListDemo />}
+        {tab === 'grid-v'    && <GridDemo />}
+        {tab === 'grid-h'    && <HorizontalGridDemo />}
         {tab === 'masonry-v' && <MasonryDemo />}
         {tab === 'masonry-h' && <HMasonryDemo />}
+        {tab === 'flow-v'    && <FlowDemo />}
+        {tab === 'flow-h'    && <HFlowDemo />}
       </View>
     </View>
   );

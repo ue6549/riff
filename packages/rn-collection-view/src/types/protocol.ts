@@ -398,11 +398,12 @@ export interface GridLayoutDelegate {
 }
 
 /**
- * Flow layout — dynamic columns based on item dimensions, wraps to next line.
+ * Flow layout — variable-width items, greedy bin-packing, wraps to next line.
  *
  * `sizeForItem` is MANDATORY — flow layout needs both width and height to
- * decide how many items fit per row. Items pack left-to-right, wrapping when
- * the next item wouldn't fit.
+ * decide how many items fit per row (V) or column (H).
+ * V-mode: items pack left-to-right, wrap when next item doesn't fit row width.
+ * H-mode: items pack top-to-bottom, wrap when next item doesn't fit column height.
  */
 export interface FlowLayoutDelegate {
   /** Per-item size callback. Mandatory. Returns both width and height.
@@ -416,10 +417,53 @@ export interface FlowLayoutDelegate {
   heightForFooter?: (sectionIndex: number) => number;
 
   // ── Spacing ──
-  itemSpacing?: number;
-  lineSpacing?: number;
+  itemSpacing?: number;   // gap between items within a row (V) or column (H)
+  lineSpacing?: number;   // gap between rows (V) or columns (H)
+
+  /**
+   * Gap inserted after each section's footer before the next section's header.
+   * Analogous to NSCollectionLayoutSection.interSectionSpacing.
+   */
+  sectionSpacing?: number;
 
   stickyMode?: StickyMode;
+
+  // ── Decoration views ──
+  /** Between-row separators (V) or between-column separators (H). */
+  separator?: {
+    /** Line color. Default: '#C6C6C8' (iOS system separator grey). */
+    color?: string;
+    /** Line thickness in points. Default: StyleSheet.hairlineWidth (0.5). */
+    height?: number;
+    /** Leading inset from section edge. Default: 0. */
+    insetLeading?: number;
+    /** Trailing inset from section edge. Default: 0. */
+    insetTrailing?: number;
+  };
+  /** When true, the layout engine emits a sectionBackground decoration attribute
+   *  covering the full section rect. Render via decorationRenderers on the component. */
+  sectionBackground?: boolean;
+
+  /**
+   * Insets applied to the sectionBackground frame at C++ emission time.
+   * Same semantics as the list layout equivalent — see ListLayoutDelegate.
+   * Requires `sectionBackground: true`.
+   */
+  sectionBackgroundContentInsets?: {
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+  };
+
+  // ── Horizontal mode ──
+  /**
+   * When true, flow scrolls horizontally.
+   * Items pack top-to-bottom within each column, wrapping to a new column when
+   * the next item doesn't fit the container height. Column width = widest item in column.
+   * Unlike H-masonry, container height is fixed (provided by the consumer, not adaptive).
+   */
+  horizontal?: boolean;
 }
 
 /**

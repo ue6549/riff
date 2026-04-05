@@ -1,11 +1,20 @@
 /**
- * Flow Layout — dynamic columns based on item dimensions, wraps to next line.
+ * Flow Layout — variable-width items, greedy bin-packing, wraps to next line.
  *
  * Backed by the C++ FlowLayout engine via JSI.
- * Items pack left-to-right. When the next item doesn't fit in the remaining
- * row width, it wraps to a new line. Row height = tallest item in that row.
+ * V-mode: items pack left-to-right, wrap when next item doesn't fit row width.
+ * H-mode: items pack top-to-bottom, wrap when next item doesn't fit column height.
+ * Row height (V) / column width (H) = max cross-axis size of items in that row/column.
  *
- * `sizeForItem` is mandatory — flow layout needs both width and height.
+ * `sizeForItem` is mandatory — flow layout needs both width and height for bin-packing.
+ *
+ * Multi-section support: each section gets its own header/footer/background/separators.
+ * The C++ engine writes all LayoutAttributes to the shared LayoutCache.
+ * All queries go through the LayoutCache so ShadowNode corrections are immediately visible.
+ *
+ * Standard JSI contract (mirrors GridLayout):
+ *   nativeMod.flowLayout.computeSections(sections[])       → void
+ *   nativeMod.flowLayout.invalidateSectionsFrom(n, [])     → void
  *
  * ─── STABLE KEY RULE (enforce in every layout engine) ────────────────────────
  * One key per item, used identically in ALL three places:
@@ -15,11 +24,6 @@
  *
  * Identity keys from keyExtractor flow as:
  *   keyExtractor → layoutContext.sections[s].itemKeys → prepare() keys[] → C++ → TS read
- *
- * KNOWN VIOLATIONS IN THIS FILE (TODO — fix before multi-section flow):
- *   - C++ key format is "flow-{i}" (no section index) — must become "flow-{s}-{i}"
- *   - TS `prepare()` hardcodes keys[i]="flow-{i}", never passes sec.itemKeys
- *   - attributesForItem() does not use lastSectionKeys
  *
  * Violation = silent rendering failures (wrong width, lost measurements, broken sticky).
  * See docs/COLLECTIONVIEW_INTERNALS.md "RULE: Stable Key Consistency" for full details.
@@ -40,154 +44,130 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getAttributesInRect(rect: { x: number; y: number; width: number; height: number }): LayoutAttributes[];
     getAttributes(key: string): LayoutAttributes | null;
     getTotalContentSize(): Size;
+    setHorizontal(horizontal: boolean): void;
     clear(): void;
   };
   flowLayout: {
-    computeFlowLayout(params: {
-      itemCount: number;
-      itemSpacing: number;
-      lineSpacing: number;
-      viewportWidth: number;
-      sectionInsetTop?: number;
-      sectionInsetBottom?: number;
-      sectionInsetLeft?: number;
-      sectionInsetRight?: number;
-      itemWidths: number[];
-      itemHeights: number[];
-      keys: string[];
-    }): { positions: number[]; contentHeight: number };
+    /** Legacy single-section method. Kept for compatibility. */
+    computeFlowLayout(params: object): { positions: number[]; contentHeight: number };
+    /** Standard multi-section method — preferred. */
+    computeSections(sections: object[]): void;
+    /** Standard partial re-layout from fromSection onward. */
+    invalidateSectionsFrom(fromSection: number, sections: object[]): void;
   };
 };
 
 class FlowLayoutEngine implements CollectionViewLayout {
   readonly type = 'flow';
+  readonly horizontal: boolean;
   private readonly delegate: FlowLayoutDelegate;
-  private _contentHeight = 0;
-  private _positions: number[] = [];
-  private _containerWidth = 0;
+  private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: FlowLayoutDelegate) {
     this.delegate = delegate;
+    this.horizontal = delegate.horizontal ?? false;
   }
 
   prepare(context: LayoutContext): void {
     const d = this.delegate;
-    this._containerWidth = context.containerWidth;
-
-    const sec = context.sections[0];
-    if (!sec || sec.itemCount === 0 || context.containerWidth <= 0) {
-      this._contentHeight = 0;
-      this._positions = [];
-      return;
-    }
-
-    // Build widths and heights arrays.
-    // Height priority: measured (actual) → delegate sizeForItem (estimate).
-    // Width always from delegate (no width measurement feedback yet).
-    const widths: number[] = new Array(sec.itemCount);
-    const heights: number[] = new Array(sec.itemCount);
+    const H = this.horizontal;
     const w = context.containerWidth;
-    for (let i = 0; i < sec.itemCount; i++) {
-      const size = d.sizeForItem(i, 0, w);
-      widths[i] = size.width;
-      const measured = context.measuredHeightForItem?.(i, 0);
-      heights[i] = measured ?? size.height;
-    }
 
-    // Build keys array
-    const keys: string[] = new Array(sec.itemCount);
-    for (let i = 0; i < sec.itemCount; i++) {
-      keys[i] = `flow-${i}`;
-    }
+    if (w <= 0 || context.sections.length === 0) return;
 
-    const result = nativeMod.flowLayout.computeFlowLayout({
-      itemCount: sec.itemCount,
-      itemSpacing: d.itemSpacing ?? 0,
-      lineSpacing: d.lineSpacing ?? 0,
-      viewportWidth: context.containerWidth,
-      sectionInsetTop: sec.insets?.top ?? 0,
-      sectionInsetBottom: sec.insets?.bottom ?? 0,
-      sectionInsetLeft: sec.insets?.left ?? 0,
-      sectionInsetRight: sec.insets?.right ?? 0,
-      itemWidths: widths,
-      itemHeights: heights,
-      keys,
+    // Inform LayoutCache of scroll axis for MVC anchor computation.
+    nativeMod.layoutCache.setHorizontal(H);
+
+    const sections = context.sections.map((sec, sectionIndex) => {
+      // Build per-item widths and heights.
+      // Both dimensions are provided: W from sizeForItem (estimated), H from sizeForItem or Yoga.
+      const itemWidths: number[]  = new Array(sec.itemCount);
+      const itemHeights: number[] = new Array(sec.itemCount);
+
+      for (let i = 0; i < sec.itemCount; i++) {
+        const size = d.sizeForItem(i, sectionIndex, w);
+        const measuredH = context.measuredHeightForItem?.(i, sectionIndex);
+        itemWidths[i]  = size.width;
+        itemHeights[i] = measuredH ?? size.height;
+      }
+
+      // Keys: prefer section.itemKeys for stable identity, else fallback prefix.
+      const keyPrefix = `flow-${sectionIndex}-`;
+      const keys: string[] = sec.itemKeys
+        ? Array.from(sec.itemKeys)
+        : Array.from({ length: sec.itemCount }, (_, i) => `${keyPrefix}${i}`);
+
+      // Supplementary heights: prefer section config over delegate.
+      const headerInfo = sec.supplementaryItems.find(s => s.kind === 'header');
+      const footerInfo = sec.supplementaryItems.find(s => s.kind === 'footer');
+      const headerH = headerInfo ? headerInfo.size.height
+        : (d.heightForHeader ? d.heightForHeader(sectionIndex) : (d.headerHeight ?? 0));
+      const footerH = footerInfo ? footerInfo.size.height
+        : (d.heightForFooter ? d.heightForFooter(sectionIndex) : (d.footerHeight ?? 0));
+
+      return {
+        itemCount: sec.itemCount,
+        itemSpacing: d.itemSpacing ?? 0,
+        lineSpacing: d.lineSpacing ?? 0,
+        viewportWidth: w,
+        // H-flow: viewportHeight is the fixed container height (cross-axis extent).
+        viewportHeight: H ? context.containerHeight : 0,
+        sectionInsetTop:    sec.insets?.top    ?? 0,
+        sectionInsetBottom: sec.insets?.bottom ?? 0,
+        sectionInsetLeft:   sec.insets?.left   ?? 0,
+        sectionInsetRight:  sec.insets?.right  ?? 0,
+        headerHeight: headerH,
+        footerHeight: footerH,
+        emitSectionBackground: d.sectionBackground ?? false,
+        emitSeparators: !!d.separator,
+        separatorHeight: d.separator?.height ?? 0.5,
+        separatorInsetLeading:  d.separator?.insetLeading  ?? 0,
+        separatorInsetTrailing: d.separator?.insetTrailing ?? 0,
+        sectionSpacing: d.sectionSpacing ?? 0,
+        // sectionBackground content insets — applied at C++ frame emission time.
+        sectionBackgroundInsetTop:    d.sectionBackgroundContentInsets?.top    ?? 0,
+        sectionBackgroundInsetBottom: d.sectionBackgroundContentInsets?.bottom ?? 0,
+        sectionBackgroundInsetLeft:   d.sectionBackgroundContentInsets?.left   ?? 0,
+        sectionBackgroundInsetRight:  d.sectionBackgroundContentInsets?.right  ?? 0,
+        horizontal: H,
+        itemWidths,
+        itemHeights,
+        keys,
+        keyPrefix: '', // keys are provided explicitly above
+      };
     });
 
-    this._positions = result.positions;
-    this._contentHeight = result.contentHeight;
+    this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
+    nativeMod.flowLayout.computeSections(sections);
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    const result: LayoutAttributes[] = [];
-    const pos = this._positions;
-    const n = pos.length / 4;
-
-    for (let i = 0; i < n; i++) {
-      const x = pos[i * 4]!;
-      const y = pos[i * 4 + 1]!;
-      const w = pos[i * 4 + 2]!;
-      const h = pos[i * 4 + 3]!;
-
-      if (y + h < inRect.y || y > inRect.y + inRect.height) continue;
-      if (x + w < inRect.x || x > inRect.x + inRect.width) continue;
-
-      result.push({
-        key: `flow-${i}`,
-        section: 0,
-        index: i,
-        frame: { x, y, width: w, height: h },
-        zIndex: 0,
-        isSupplementary: false,
-        supplementaryKind: null,
-        sizingState: 'measured',
-        isDirty: false,
-        tier: 'visible',
-        isSticky: false,
-        alpha: 1,
-        isAnimating: false,
-      });
-    }
-
-    return result;
+    return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
-  attributesForItem(index: number, _section: number): LayoutAttributes | null {
-    const pos = this._positions;
-    if (index < 0 || index >= pos.length / 4) return null;
-
-    return {
-      key: `flow-${index}`,
-      section: 0,
-      index,
-      frame: {
-        x: pos[index * 4]!,
-        y: pos[index * 4 + 1]!,
-        width: pos[index * 4 + 2]!,
-        height: pos[index * 4 + 3]!,
-      },
-      zIndex: 0,
-      isSupplementary: false,
-      supplementaryKind: null,
-      sizingState: 'measured',
-      isDirty: false,
-      tier: 'visible',
-      isSticky: false,
-      alpha: 1,
-      isAnimating: false,
-    };
+  attributesForItem(index: number, section: number): LayoutAttributes | null {
+    const sectionKeys = this.lastSectionKeys[section];
+    const key = sectionKeys?.[index] ?? `flow-${section}-${index}`;
+    return nativeMod.layoutCache.getAttributes(key);
   }
 
-  attributesForSupplementary(_kind: string, _section: number): LayoutAttributes | null {
-    return null;
+  attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
+    return nativeMod.layoutCache.getAttributes(`flow-${section}-${kind}`);
   }
 
   contentSize(): Size {
-    return { width: this._containerWidth, height: this._contentHeight };
+    return nativeMod.layoutCache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {
-    // Flow layout MUST reflow when width changes — items per row changes
+    // Re-layout when the cross-axis (packing direction) size changes:
+    //   V-flow: cross = width → invalidate on width change
+    //   H-flow: cross = height → invalidate on height change
+    // Unlike H-masonry, H-flow's container height is an INPUT (not content-determined),
+    // so there's no oscillation risk — we DO invalidate on height change.
+    if (this.horizontal) {
+      return Math.abs(oldBounds.height - newBounds.height) > 0.5;
+    }
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
@@ -200,10 +180,21 @@ class FlowLayoutEngine implements CollectionViewLayout {
  * Create a flow layout with the given delegate configuration.
  *
  * ```typescript
+ * // Vertical flow — tag cloud
  * layout={flow({
- *   sizeForItem: (index) => ({ width: tagWidths[index], height: 32 }),
- *   itemSpacing: 6,
+ *   sizeForItem: (index) => ({ width: tagWidths[index], height: 34 }),
+ *   itemSpacing: 8,
  *   lineSpacing: 8,
+ *   headerHeight: 44,
+ *   stickyMode: 'push',
+ * })}
+ *
+ * // Horizontal flow — items pack top→bottom into columns
+ * layout={flow({
+ *   horizontal: true,
+ *   sizeForItem: (index) => ({ width: 80, height: tagHeights[index] }),
+ *   itemSpacing: 6,
+ *   lineSpacing: 12,
  * })}
  * ```
  */
