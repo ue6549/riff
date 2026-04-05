@@ -1306,6 +1306,32 @@ DOCS:         DOC.1 (solution document) + DOC.2 (ShadowNode architecture writeup
 
 ---
 
+## Future Enhancements
+
+### F-Flow.1 — Flow row justification
+
+`justification?: 'leading' | 'center' | 'trailing' | 'spaceBetween' | 'spaceEvenly'` on `FlowLayoutDelegate`.
+
+After computing each row, shift item X positions based on remaining horizontal space. ~20 lines in `computeSection`/`computeSectionFromCache`. No structural change to the bin-packing algorithm — justification is a post-pass over each completed row's items.
+
+Current: leading-aligned only (same as UICollectionViewFlowLayout default).
+
+### F-Flow.2 — Flow item weight/stretching
+
+Items grow proportionally to fill row based on a per-item weight. Needs:
+- `weightForItem?: (index, section) => number` on `FlowLayoutDelegate`
+- Proportional width calculation: `item.width + (remainingSpace * weight / totalWeight)`
+- Interacts with Yoga measurement — weight affects estimated width, which Yoga then refines
+- Research needed before implementation
+
+### F-Grid.1 — Grid row alignment
+
+`rowAlignment?: 'top' | 'center' | 'bottom'` on `GridLayoutDelegate`.
+
+Alignment of shorter items within a row when `heightForItem` produces uneven heights. 'top' (default) aligns all items to the row's top Y. 'center'/'bottom' offset shorter items downward. See `ethereal-seeking-willow.md`.
+
+---
+
 ## Research Backlog
 
 - [ ] **R1: Hexagonal architecture review** — Audit the current layout engine ↔ LayoutCache ↔ ShadowNode ↔ native view boundaries. Ensure we have clean ports/adapters: LayoutEngine protocol (contract-first), LayoutCache as the shared port, ShadowNode as a layout-agnostic consumer. Verify no layer reaches into another's internals. Document the contract boundaries.

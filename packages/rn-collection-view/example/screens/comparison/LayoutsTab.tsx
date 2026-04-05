@@ -87,15 +87,40 @@ const GS2_DATA: GridCell[] = Array.from({ length: 24 }, (_, i) => ({
 
 // ── Masonry data ─────────────────────────────────────────────────────────────
 
-const MASONRY_COUNT = 200;
-type MasonryItem = { id: string; height: number; color: string; num: number };
-const MASONRY_HEIGHTS = Array.from({ length: MASONRY_COUNT }, () => 80 + Math.floor(Math.random() * 120));
-const MASONRY_DATA: MasonryItem[] = Array.from({ length: MASONRY_COUNT }, (_, i) => ({
-  id: `masonry-${i}`,
-  height: MASONRY_HEIGHTS[i]!,
-  color: COLORS[i % COLORS.length]!,
-  num: i,
-}));
+type MasonryItem = { id: string; height: number; color: string; num: number; section: number };
+
+function makeMasonrySection(prefix: string, sectionIdx: number, count: number): MasonryItem[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `${prefix}-${i}`,
+    height: 70 + Math.floor(Math.random() * 130),
+    color: COLORS[(i + sectionIdx * 3) % COLORS.length]!,
+    num: i,
+    section: sectionIdx,
+  }));
+}
+
+const MS0_INIT = makeMasonrySection('ms0', 0, 20);
+const MS1_DATA = makeMasonrySection('ms1', 1, 16);
+const MS2_DATA = makeMasonrySection('ms2', 2, 24);
+
+const MS_HDR_H = 44;
+const MS_FTR_H = 28;
+
+function MasonrySectionHeader({ label, color }: { label: string; color: string }) {
+  return (
+    <View style={{ height: MS_HDR_H, backgroundColor: color + 'dd', justifyContent: 'center', paddingHorizontal: 14, borderBottomWidth: 1, borderBottomColor: color }}>
+      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }}>{label}</Text>
+    </View>
+  );
+}
+
+function MasonrySectionFooter({ color, count }: { color: string; count: number }) {
+  return (
+    <View style={{ height: MS_FTR_H, backgroundColor: color + '44', justifyContent: 'center', paddingHorizontal: 14, borderTopWidth: 1, borderTopColor: color + '88' }}>
+      <Text style={{ color, fontSize: 11, fontWeight: '600' }}>{count} items</Text>
+    </View>
+  );
+}
 
 // ── Flow data (tag cloud) — Two-pass demo ────────────────────────────────────
 // The two-pass effect: initial render uses estimated sizes from sizeForItem().
@@ -682,33 +707,297 @@ export function GridDemo() {
 
 // ── Masonry layout config ───────────────────────────────────────────────────
 
-function MasonryDemo() {
+export function MasonryDemo() {
+  const cvRef = useRef<any>(null);
+  const [ms0Items, setMs0Items] = useState<MasonryItem[]>(MS0_INIT);
+  const [mvcEnabled, setMvcEnabled] = useState(false);
+  const [sepEnabled, setSepEnabled] = useState(false);
+  const [decoCount, setDecoCount] = useState(0);
+  const [resizedIds, setResizedIds] = useState(() => new Set<string>());
+  const insertCounter = useRef(MS0_INIT.length);
+  const resizedIdsRef = useRef(resizedIds);
+  resizedIdsRef.current = resizedIds;
+
+  const allSectionsRef = useRef<MasonryItem[][]>([ms0Items, MS1_DATA, MS2_DATA]);
+  allSectionsRef.current = [ms0Items, MS1_DATA, MS2_DATA];
+
   const masonryLayout = useMemo(() => masonry({
     columns: 2,
     columnSpacing: 8,
     rowSpacing: 8,
-    heightForItem: (index: number) => MASONRY_HEIGHTS[index] ?? 100,
+    sectionSpacing: 16,
+    sectionBackground: true,
+    separator: sepEnabled ? { color: '#334', height: 0.5 } : undefined,
+    heightForItem: (i: number, s: number) => {
+      const item = allSectionsRef.current[s]?.[i];
+      if (!item) return 100;
+      return resizedIdsRef.current.has(item.id) ? item.height * 1.5 : item.height;
+    },
+  }), [sepEnabled, resizedIds, ms0Items]);
+
+  const keyExtractor = useCallback((item: MasonryItem) => item.id, []);
+
+  const handleInsert = useCallback(() => {
+    setMs0Items(prev => {
+      const idx = insertCounter.current++;
+      return [{ id: `ms0-ins-${idx}`, height: 70 + Math.floor(Math.random() * 130),
+                color: COLORS[idx % COLORS.length]!, num: idx, section: 0 }, ...prev];
+    });
+  }, []);
+
+  const handleDelete = useCallback(() => {
+    setMs0Items(prev => prev.length >= 1 ? prev.slice(1) : prev);
+  }, []);
+
+  const toggleResize = useCallback((id: string) => {
+    setResizedIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
+
+  const sections = useMemo(() => [
+    {
+      key: 'ms0', data: ms0Items,
+      header: { render: () => <MasonrySectionHeader label={`S0 — Photos (${ms0Items.length})`} color="#e63946" />, height: MS_HDR_H, sticky: true },
+      footer: { render: () => <MasonrySectionFooter color="#e63946" count={ms0Items.length} />, height: MS_FTR_H, sticky: true },
+      insets: { top: 8, bottom: 8, left: 8, right: 8 },
+    },
+    {
+      key: 'ms1', data: MS1_DATA,
+      header: { render: () => <MasonrySectionHeader label="S1 — Art (16)" color="#2a9d8f" />, height: MS_HDR_H, sticky: true },
+      footer: { render: () => <MasonrySectionFooter color="#2a9d8f" count={MS1_DATA.length} />, height: MS_FTR_H, sticky: true },
+      insets: { top: 8, bottom: 8, left: 8, right: 8 },
+    },
+    {
+      key: 'ms2', data: MS2_DATA,
+      header: { render: () => <MasonrySectionHeader label="S2 — Archive (24)" color="#6a4c93" />, height: MS_HDR_H, sticky: true },
+      footer: { render: () => <MasonrySectionFooter color="#6a4c93" count={MS2_DATA.length} />, height: MS_FTR_H, sticky: true },
+      insets: { top: 8, bottom: 8, left: 8, right: 8 },
+    },
+  ], [ms0Items]);
+
+  const decorationRenderers = useMemo(() => ({
+    sectionBackground: (sectionIndex: number, frame: { x: number; y: number; width: number; height: number }) => (
+      <AnimatedSectionBg sectionIndex={sectionIndex} frame={frame} />
+    ),
   }), []);
 
+  const renderItem = useCallback(({ item }: { item: MasonryItem }) => {
+    const isResized = resizedIds.has(item.id);
+    const h = isResized ? Math.round(item.height * 1.5) : item.height;
+    return (
+      <Pressable style={[S.masonryCell, { backgroundColor: item.color, height: h }]} onPress={() => toggleResize(item.id)}>
+        <Text style={S.masonryCellText}>{item.num}</Text>
+        <Text style={S.masonryCellSub}>{h}px{isResized ? ' ↕' : ''}</Text>
+      </Pressable>
+    );
+  }, [resizedIds, toggleResize]);
+
   return (
-    <CollectionView
-      data={MASONRY_DATA}
-      layout={masonryLayout}
-      estimatedItemHeight={140}
-      sectionInsetTop={8}
-      sectionInsetBottom={8}
-      sectionInsetLeft={8}
-      sectionInsetRight={8}
-      keyExtractor={useCallback((item: MasonryItem) => item.id, [])}
-      renderItem={useCallback(({ item }: { item: MasonryItem }) => (
-        <View style={[S.masonryCell, { backgroundColor: item.color }]}>
-          <Text style={S.masonryCellText}>{item.num}</Text>
-          <Text style={S.masonryCellSub}>{item.height}px</Text>
+    <View style={S.flex}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('ms1:ms1-0', { position: 'top' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('ms2:ms2-23', { position: 'bottom' })} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="+1" onPress={handleInsert} />
+        <CtrlBtn label="−1" onPress={handleDelete} />
+        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = ms0Items[0]?.id; if (id) toggleResize(id); }} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
+        <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
+        <View style={{ paddingHorizontal: 6, justifyContent: 'center' }}>
+          <Text style={{ color: '#888', fontSize: 10, fontWeight: '600' }}>Deco:{decoCount}</Text>
         </View>
-      ), [])}
-    />
+      </ScrollView>
+
+      <CollectionView
+        handle={cvRef}
+        sections={sections}
+        layout={masonryLayout}
+        stickyMode="push"
+        estimatedItemHeight={120}
+        extraData={resizedIds}
+        maintainVisibleContentPosition={mvcEnabled}
+        decorationRenderers={decorationRenderers}
+        onDecorationCountChange={setDecoCount}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+      />
+    </View>
   );
 }
+
+// ── Horizontal Masonry ────────────────────────────────────────────────────────
+
+const HM_COLS = 3;          // number of horizontal lanes (rows)
+const HM_ESTIMATED_H = 150; // initial container height estimate
+
+type HMItem = { id: string; color: string; num: number; label: string };
+
+function makeHMSection(prefix: string, count: number, colorOffset: number): HMItem[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `${prefix}-${i}`,
+    color: COLORS[(i + colorOffset) % COLORS.length]!,
+    num: i,
+    label: `${prefix.split('-')[1]} #${i + 1}`,
+  }));
+}
+
+const HM_S0_INIT = makeHMSection('hm-s0', 15, 0);
+const HM_S1_DATA = makeHMSection('hm-s1', 12, 3);
+
+export function HMasonryDemo() {
+  const cvRef = useRef<any>(null);
+  const [s0Items, setS0Items] = useState<HMItem[]>(HM_S0_INIT);
+  const [containerH, setContainerH] = useState(HM_ESTIMATED_H);
+  const [mvcEnabled, setMvcEnabled] = useState(false);
+  const insertCounter = useRef(HM_S0_INIT.length);
+
+  const hmLayout = useMemo(() => masonry({
+    horizontal: true,
+    columns: HM_COLS,
+    estimatedCrossAxisHeight: HM_ESTIMATED_H,
+    columnSpacing: 8,
+    rowSpacing: 8,
+    sectionSpacing: 16,
+    sectionBackground: true,
+    // heightForItem unused in H-mode (Yoga measures; heights are uniform across all items)
+    heightForItem: () => 0,
+  }), []);
+
+  const handleInsert = useCallback(() => {
+    const idx = insertCounter.current++;
+    setS0Items(prev => [{
+      id: `hm-s0-ins-${idx}`, color: COLORS[idx % COLORS.length]!,
+      num: idx, label: `New #${idx + 1}`,
+    }, ...prev]);
+  }, []);
+
+  const handleDelete = useCallback(() => {
+    setS0Items(prev => prev.length >= 1 ? prev.slice(1) : prev);
+  }, []);
+
+  const sections = useMemo(() => [
+    {
+      key: 'hm-s0', data: s0Items,
+      header: {
+        render: () => (
+          <View style={[HMS.sectionHeader, { backgroundColor: '#e63946' }]}>
+            <Text style={HMS.sectionHeaderTitle}>{'S0'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      footer: {
+        render: () => (
+          <View style={[HMS.sectionFooter, { backgroundColor: '#e63946' }]}>
+            <Text style={HMS.sectionFooterLabel}>{'END'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      insets: { top: 8, bottom: 8, left: 10, right: 10 },
+    },
+    {
+      key: 'hm-s1', data: HM_S1_DATA,
+      header: {
+        render: () => (
+          <View style={[HMS.sectionHeader, { backgroundColor: '#2a9d8f' }]}>
+            <Text style={HMS.sectionHeaderTitle}>{'S1'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      footer: {
+        render: () => (
+          <View style={[HMS.sectionFooter, { backgroundColor: '#2a9d8f' }]}>
+            <Text style={HMS.sectionFooterLabel}>{'END'.split('').join('\n')}</Text>
+          </View>
+        ),
+        height: 20, sticky: true,
+      },
+      insets: { top: 8, bottom: 8, left: 10, right: 10 },
+    },
+  ], [s0Items]);
+
+  const decorationRenderers = useMemo(() => ({
+    sectionBackground: (sectionIndex: number, frame: { x: number; y: number; width: number; height: number }) => (
+      <AnimatedSectionBg sectionIndex={sectionIndex} frame={frame} />
+    ),
+  }), []);
+
+  const renderItem = useCallback(({ item }: { item: HMItem }) => (
+    <View style={[HMS.card, { backgroundColor: item.color + 'cc' }]}>
+      <Text style={HMS.cardNum}>{item.num + 1}</Text>
+      <Text style={HMS.cardLabel}>{item.label}</Text>
+    </View>
+  ), []);
+
+  const keyExtractor = useCallback((item: HMItem) => item.id, []);
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#0a0a0a' }}>
+      <View style={HMS.titleBar}>
+        <Text style={HMS.title}>H-Masonry ({HM_COLS} lanes · shortest-lane placement)</Text>
+        <Text style={HMS.subtitle}>Container height auto-sizes — currently {Math.round(containerH)}pt</Text>
+      </View>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HMS.ctrlBar} contentContainerStyle={HMS.ctrlBarContent}>
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hm-s1:hm-s1-0', { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hm-s1:hm-s1-11', { position: 'end' })} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label="+1" onPress={handleInsert} />
+        <CtrlBtn label="−1" onPress={handleDelete} />
+        <View style={S.ctrlDivider} />
+        <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
+      </ScrollView>
+
+      <View style={[HMS.listBg, { height: containerH }]}>
+        <CollectionView
+          handle={cvRef}
+          sections={sections}
+          layout={hmLayout}
+          renderItem={renderItem}
+          keyExtractor={keyExtractor}
+          estimatedItemHeight={HM_ESTIMATED_H}
+          maintainVisibleContentPosition={mvcEnabled}
+          decorationRenderers={decorationRenderers}
+          scrollViewProps={{
+            style: { backgroundColor: 'transparent' },
+            indicatorStyle: 'white',
+            onContentSizeChange: (_w: number, h: number) => {
+              if (h > 0) setContainerH(prev => Math.abs(prev - h) > 2 ? h : prev);
+            },
+          }}
+        />
+      </View>
+    </View>
+  );
+}
+
+const HMS = StyleSheet.create({
+  titleBar:       { paddingHorizontal: 14, paddingTop: 12, paddingBottom: 8 },
+  title:          { fontSize: 15, fontWeight: '700', color: '#e2e8f0' },
+  subtitle:       { fontSize: 11, color: '#475569', marginTop: 2 },
+
+  ctrlBar:        { backgroundColor: '#111', flexGrow: 0 },
+  ctrlBarContent: { flexDirection: 'row', gap: 6, paddingHorizontal: 8, paddingVertical: 7, alignItems: 'center' },
+
+  listBg:         { backgroundColor: '#0f1623', overflow: 'hidden' },
+
+  sectionHeader:  { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  sectionHeaderTitle: { fontSize: 8, fontWeight: '700', color: 'rgba(255,255,255,0.7)', textAlign: 'center', lineHeight: 10 },
+  sectionFooter:  { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  sectionFooterLabel: { fontSize: 8, color: 'rgba(255,255,255,0.5)', fontWeight: '600', textAlign: 'center', lineHeight: 10 },
+
+  card:           { borderRadius: 10, alignItems: 'center', justifyContent: 'center', paddingVertical: 12, paddingHorizontal: 8, margin: 4 },
+  cardNum:        { fontSize: 22, fontWeight: '800', color: '#fff' },
+  cardLabel:      { fontSize: 10, color: 'rgba(255,255,255,0.85)', fontWeight: '600', textAlign: 'center', marginTop: 4 },
+});
 
 // ── Flow layout config (two-pass demo) ──────────────────────────────────────
 
@@ -752,7 +1041,7 @@ function FlowDemo() {
   );
 }
 
-type SubTab = 'list' | 'grid' | 'hgrid' | 'ahgrid' | 'masonry' | 'flow' | 'circular' | 'carousel';
+type SubTab = 'list' | 'grid' | 'hgrid' | 'ahgrid' | 'masonry' | 'hmasonry' | 'flow' | 'circular' | 'carousel';
 
 // ── Callout bullets per layout ───────────────────────────────────────────────
 type Bullet = { type: 'green' | 'amber' | 'red' | 'blue'; text: string };
@@ -783,7 +1072,15 @@ const CALLOUTS: Record<SubTab, Bullet[]> = {
   ],
   masonry: [
     { type: 'green', text: 'FlashList: MasonryFlashList available as a separate import. Similar capability.' },
+    { type: 'blue', text: 'Multi-section: 3 sections with sticky push headers/footers and animated section backgrounds.' },
     { type: 'blue', text: 'Engine: C++ MasonryLayout via JSI. Shortest-column placement, Yoga height refinement.' },
+    { type: 'blue', text: 'Tap any cell to resize it (height ×1.5) — downstream items in same and other lanes reflow correctly.' },
+  ],
+  hmasonry: [
+    { type: 'green', text: 'FlashList: Not possible. No horizontal masonry mode.' },
+    { type: 'blue', text: 'Horizontal masonry: lanes run left→right, items placed into shortest lane (by accumulated width).' },
+    { type: 'blue', text: 'Container height is adaptive — self-determined from Yoga-measured item heights (same as H-grid).' },
+    { type: 'blue', text: 'Engine: C++ MasonryLayout horizontal path. shouldInvalidate=false prevents oscillation loop.' },
   ],
   flow: [
     { type: 'amber', text: 'FlashList: Possible via custom LayoutProvider, but requires manual row-break logic.' },
@@ -810,6 +1107,7 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: 'hgrid', label: 'H-Grid' },
   { key: 'ahgrid', label: 'AH-Grid' },
   { key: 'masonry', label: 'Masonry' },
+  { key: 'hmasonry', label: 'H-Masonry' },
   { key: 'flow', label: 'Flow' },
   { key: 'circular', label: 'Radial Arc' },
   { key: 'carousel', label: '3D Carousel' },
@@ -866,6 +1164,7 @@ export default function LayoutsTab() {
         {subTab === 'hgrid' && <HorizontalGridDemo />}
         {subTab === 'ahgrid' && <AdaptiveHGridDemo />}
         {subTab === 'masonry' && <MasonryDemo />}
+        {subTab === 'hmasonry' && <HMasonryDemo />}
         {subTab === 'flow' && <FlowDemo />}
 
         {subTab === 'circular' && (

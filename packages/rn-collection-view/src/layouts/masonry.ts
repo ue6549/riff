@@ -4,10 +4,13 @@
  * Backed by the C++ MasonryLayout engine via JSI.
  * `columns` and `heightForItem` are mandatory.
  *
- * Key difference from the old API: `heightForItem` is a per-index callback,
- * not a bulk array. The factory calls it only for items in the compute range,
- * then passes a slice to C++. This enables O(window) computation per frame
- * during container resize.
+ * Multi-section support: each section gets its own header/footer/background/separators.
+ * The C++ engine writes all LayoutAttributes to the shared LayoutCache.
+ * All queries go through the LayoutCache so ShadowNode corrections are immediately visible.
+ *
+ * Standard JSI contract (mirrors GridLayout):
+ *   nativeMod.masonryLayout.computeSections(sections[])       → void
+ *   nativeMod.masonryLayout.invalidateSectionsFrom(n, [])     → void
  *
  * ─── STABLE KEY RULE (enforce in every layout engine) ────────────────────────
  * One key per item, used identically in ALL three places:
@@ -17,11 +20,6 @@
  *
  * Identity keys from keyExtractor flow as:
  *   keyExtractor → layoutContext.sections[s].itemKeys → prepare() keys[] → C++ → TS read
- *
- * KNOWN VIOLATIONS IN THIS FILE (TODO — fix before multi-section masonry):
- *   - C++ key format is "masonry-{i}" (no section index) — must become "masonry-{s}-{i}"
- *   - TS `prepare()` hardcodes keys[i]="masonry-{i}", never passes sec.itemKeys
- *   - attributesForItem() does not use lastSectionKeys
  *
  * Violation = silent rendering failures (wrong width, lost measurements, broken sticky).
  * See docs/COLLECTIONVIEW_INTERNALS.md "RULE: Stable Key Consistency" for full details.
@@ -42,156 +40,131 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getAttributesInRect(rect: { x: number; y: number; width: number; height: number }): LayoutAttributes[];
     getAttributes(key: string): LayoutAttributes | null;
     getTotalContentSize(): Size;
+    setHorizontal(horizontal: boolean): void;
     clear(): void;
   };
   masonryLayout: {
-    computeMasonryLayout(params: {
-      itemCount: number;
-      columns: number;
-      columnSpacing: number;
-      rowSpacing: number;
-      viewportWidth: number;
-      sectionInsetTop?: number;
-      sectionInsetBottom?: number;
-      sectionInsetLeft?: number;
-      sectionInsetRight?: number;
-      itemHeights: number[];
-      keys: string[];
-    }): { positions: number[]; contentHeight: number };
+    /** Legacy single-section method. Kept for compatibility. */
+    computeMasonryLayout(params: object): { positions: number[]; contentHeight: number };
+    /** Standard multi-section method — preferred. */
+    computeSections(sections: object[]): void;
+    /** Standard partial re-layout from fromSection onward. */
+    invalidateSectionsFrom(fromSection: number, sections: object[]): void;
   };
 };
 
 class MasonryLayoutEngine implements CollectionViewLayout {
   readonly type = 'masonry';
+  readonly horizontal: boolean;
   private readonly delegate: MasonryLayoutDelegate;
-  private _contentHeight = 0;
-  private _positions: number[] = [];
-  private _containerWidth = 0;
+  private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: MasonryLayoutDelegate) {
     this.delegate = delegate;
+    this.horizontal = delegate.horizontal ?? false;
   }
 
   prepare(context: LayoutContext): void {
     const d = this.delegate;
-    this._containerWidth = context.containerWidth;
-
-    // For each section, compute masonry layout
-    // Currently supports single section — multi-section masonry is a future extension
-    const sec = context.sections[0];
-    if (!sec || sec.itemCount === 0 || context.containerWidth <= 0) {
-      this._contentHeight = 0;
-      this._positions = [];
-      return;
-    }
-
+    const H = this.horizontal;
     const w = context.containerWidth;
+
+    if (w <= 0 || context.sections.length === 0) return;
+
+    // Inform LayoutCache of scroll axis for MVC anchor computation.
+    nativeMod.layoutCache.setHorizontal(H);
+
     const effectiveColumns = typeof d.columns === 'function' ? d.columns(w) : d.columns;
 
-    // Build heights array. Priority: measured (actual) → delegate heightForItem (estimate).
-    const heights: number[] = new Array(sec.itemCount);
-    for (let i = 0; i < sec.itemCount; i++) {
-      const measured = context.measuredHeightForItem?.(i, 0);
-      heights[i] = measured ?? d.heightForItem(i, 0, w);
-    }
+    const sections = context.sections.map((sec, sectionIndex) => {
+      // Build per-item heights.
+      // V-masonry: heights determine which lane is shortest → placement.
+      // H-masonry: Yoga measures widths (primary axis); heights are uniform (cross axis).
+      let itemHeights: number[] | undefined;
+      if (!H) {
+        itemHeights = new Array(sec.itemCount);
+        for (let i = 0; i < sec.itemCount; i++) {
+          const measured = context.measuredHeightForItem?.(i, sectionIndex);
+          itemHeights[i] = measured ?? d.heightForItem(i, sectionIndex, w);
+        }
+      }
 
-    // Build keys array
-    const keys: string[] = new Array(sec.itemCount);
-    for (let i = 0; i < sec.itemCount; i++) {
-      keys[i] = `masonry-${i}`;
-    }
+      // Keys: prefer section.itemKeys for stable identity, else fallback prefix.
+      const keyPrefix = `masonry-${sectionIndex}-`;
+      const keys: string[] = sec.itemKeys
+        ? Array.from(sec.itemKeys)
+        : Array.from({ length: sec.itemCount }, (_, i) => `${keyPrefix}${i}`);
 
-    const result = nativeMod.masonryLayout.computeMasonryLayout({
-      itemCount: sec.itemCount,
-      columns: effectiveColumns,
-      columnSpacing: d.columnSpacing ?? 8,
-      rowSpacing: d.rowSpacing ?? 8,
-      viewportWidth: context.containerWidth,
-      sectionInsetTop: sec.insets?.top ?? 0,
-      sectionInsetBottom: sec.insets?.bottom ?? 0,
-      sectionInsetLeft: sec.insets?.left ?? 0,
-      sectionInsetRight: sec.insets?.right ?? 0,
-      itemHeights: heights,
-      keys,
+      // Supplementary heights: prefer section config over delegate.
+      const headerInfo = sec.supplementaryItems.find(s => s.kind === 'header');
+      const footerInfo = sec.supplementaryItems.find(s => s.kind === 'footer');
+      const headerH = headerInfo ? headerInfo.size.height
+        : (d.heightForHeader ? d.heightForHeader(sectionIndex) : (d.headerHeight ?? 0));
+      const footerH = footerInfo ? footerInfo.size.height
+        : (d.heightForFooter ? d.heightForFooter(sectionIndex) : (d.footerHeight ?? 0));
+
+      return {
+        itemCount: sec.itemCount,
+        columns: effectiveColumns,
+        columnSpacing: d.columnSpacing ?? 0,
+        rowSpacing: d.rowSpacing ?? 0,
+        viewportWidth: w,
+        sectionInsetTop: sec.insets?.top ?? 0,
+        sectionInsetBottom: sec.insets?.bottom ?? 0,
+        sectionInsetLeft: sec.insets?.left ?? 0,
+        sectionInsetRight: sec.insets?.right ?? 0,
+        headerHeight: headerH,
+        footerHeight: footerH,
+        emitSectionBackground: d.sectionBackground ?? false,
+        emitSeparators: !!d.separator,
+        separatorHeight: d.separator?.height ?? 0.5,
+        separatorInsetLeading: d.separator?.insetLeading ?? 0,
+        separatorInsetTrailing: d.separator?.insetTrailing ?? 0,
+        sectionSpacing: d.sectionSpacing ?? 0,
+        // sectionBackground content insets — applied at C++ frame emission time.
+        sectionBackgroundInsetTop:    d.sectionBackgroundContentInsets?.top    ?? 0,
+        sectionBackgroundInsetBottom: d.sectionBackgroundContentInsets?.bottom ?? 0,
+        sectionBackgroundInsetLeft:   d.sectionBackgroundContentInsets?.left   ?? 0,
+        sectionBackgroundInsetRight:  d.sectionBackgroundContentInsets?.right  ?? 0,
+        // Horizontal mode params
+        horizontal: H,
+        // H-masonry: viewportHeight passed as 0 (self-determined from content, same as H-grid).
+        viewportHeight: H ? 0 : context.containerHeight,
+        estimatedCrossAxisHeight: d.estimatedCrossAxisHeight ?? 200,
+        keys,
+        keyPrefix: '', // keys are provided explicitly above
+        ...(itemHeights ? { itemHeights } : {}),
+      };
     });
 
-    this._positions = result.positions;
-    this._contentHeight = result.contentHeight;
+    this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
+    nativeMod.masonryLayout.computeSections(sections);
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    // Scan positions array for items intersecting the rect
-    const result: LayoutAttributes[] = [];
-    const pos = this._positions;
-    const n = pos.length / 4;
-
-    for (let i = 0; i < n; i++) {
-      const x = pos[i * 4]!;
-      const y = pos[i * 4 + 1]!;
-      const w = pos[i * 4 + 2]!;
-      const h = pos[i * 4 + 3]!;
-
-      // Check intersection with query rect
-      if (y + h < inRect.y || y > inRect.y + inRect.height) continue;
-      if (x + w < inRect.x || x > inRect.x + inRect.width) continue;
-
-      result.push({
-        key: `masonry-${i}`,
-        section: 0,
-        index: i,
-        frame: { x, y, width: w, height: h },
-        zIndex: 0,
-        isSupplementary: false,
-        supplementaryKind: null,
-        sizingState: 'measured',
-        isDirty: false,
-        tier: 'visible',
-        isSticky: false,
-        alpha: 1,
-        isAnimating: false,
-      });
-    }
-
-    return result;
+    return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
-  attributesForItem(index: number, _section: number): LayoutAttributes | null {
-    const pos = this._positions;
-    if (index < 0 || index >= pos.length / 4) return null;
-
-    return {
-      key: `masonry-${index}`,
-      section: 0,
-      index,
-      frame: {
-        x: pos[index * 4]!,
-        y: pos[index * 4 + 1]!,
-        width: pos[index * 4 + 2]!,
-        height: pos[index * 4 + 3]!,
-      },
-      zIndex: 0,
-      isSupplementary: false,
-      supplementaryKind: null,
-      sizingState: 'measured',
-      isDirty: false,
-      tier: 'visible',
-      isSticky: false,
-      alpha: 1,
-      isAnimating: false,
-    };
+  attributesForItem(index: number, section: number): LayoutAttributes | null {
+    const sectionKeys = this.lastSectionKeys[section];
+    const key = sectionKeys?.[index] ?? `masonry-${section}-${index}`;
+    return nativeMod.layoutCache.getAttributes(key);
   }
 
-  attributesForSupplementary(_kind: string, _section: number): LayoutAttributes | null {
-    // Masonry supplementary views — future extension
-    return null;
+  attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
+    return nativeMod.layoutCache.getAttributes(`masonry-${section}-${kind}`);
   }
 
   contentSize(): Size {
-    return { width: this._containerWidth, height: this._contentHeight };
+    return nativeMod.layoutCache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {
-    // Masonry must reflow when container width changes (column widths change)
+    // V-masonry: re-layout when viewport width changes (lane widths change).
+    // H-masonry: cross-axis height is self-determined — never re-layout on height changes.
+    // Same oscillation risk as H-grid: height update → containerH changes → shouldInvalidate
+    // → prepare() resets _maxCrossAxisHeight → height changes again → loop.
+    if (this.horizontal) return false;
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
@@ -204,12 +177,22 @@ class MasonryLayoutEngine implements CollectionViewLayout {
  * Create a masonry layout with the given delegate configuration.
  *
  * ```typescript
+ * // Vertical masonry — 2 columns, variable height
  * layout={masonry({
- *   columns: 3,
- *   heightForItem: (index) => imageHeights[index],
+ *   columns: 2,
+ *   heightForItem: (index, section, w) => imageHeights[index],
  *   columnSpacing: 8,
  *   rowSpacing: 8,
+ *   headerHeight: 44,
  *   stickyMode: 'push',
+ * })}
+ *
+ * // Horizontal masonry — 3 rows, variable width
+ * layout={masonry({
+ *   horizontal: true,
+ *   columns: 3,
+ *   heightForItem: (index, section, w) => 0, // unused in H-mode
+ *   estimatedCrossAxisHeight: 150,
  * })}
  * ```
  */

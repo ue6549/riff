@@ -264,7 +264,57 @@ export interface MasonryLayoutDelegate {
   columnSpacing?: number;
   rowSpacing?: number;
 
+  /**
+   * Vertical gap inserted after each section's footer (or last item if no footer),
+   * before the next section's header. Analogous to NSCollectionLayoutSection.interSectionSpacing.
+   */
+  sectionSpacing?: number;
+
   stickyMode?: StickyMode;
+
+  // ── Decoration views ──
+  /** Lane-divider separators between masonry columns (V) or rows (H). */
+  separator?: {
+    /** Line color. Default: '#C6C6C8' (iOS system separator grey). */
+    color?: string;
+    /** Line thickness in points. Default: StyleSheet.hairlineWidth (0.5). */
+    height?: number;
+    /** Leading inset from section edge. Default: 0. */
+    insetLeading?: number;
+    /** Trailing inset from section edge. Default: 0. */
+    insetTrailing?: number;
+  };
+  /** When true, the layout engine emits a sectionBackground decoration attribute
+   *  covering the full section rect. Render via decorationRenderers on the component. */
+  sectionBackground?: boolean;
+
+  /**
+   * Insets applied to the sectionBackground frame at C++ emission time.
+   * Same semantics as the list layout equivalent — see ListLayoutDelegate.
+   * Requires `sectionBackground: true`.
+   */
+  sectionBackgroundContentInsets?: {
+    top?: number;
+    bottom?: number;
+    left?: number;
+    right?: number;
+  };
+
+  // ── Horizontal mode ──
+  /**
+   * When true, the masonry layout scrolls horizontally.
+   * Lanes run left-to-right; items are placed into the shortest lane.
+   * `columns` controls the number of horizontal lanes (rows).
+   * Yoga measures item widths (primary axis); heights are uniform across all items
+   * and self-determined from the tallest measured item (same pattern as H-grid).
+   */
+  horizontal?: boolean;
+  /**
+   * Estimated item height along the cross axis for horizontal masonry.
+   * Used as initial estimate before Yoga measures actual heights.
+   * Default: 200.
+   */
+  estimatedCrossAxisHeight?: number;
 }
 
 /**
