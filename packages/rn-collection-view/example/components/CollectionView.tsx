@@ -2087,13 +2087,21 @@ export function Riff<T = unknown>({
     const layoutDelegate = (effectiveLayout as any)?.delegate ?? null;
     const hasSeparators = !!(layoutDelegate?.separator);
     if ((hasDecoRenderers || hasSeparators) && viewportWidth > 0) {
+      const isHorizDeco = effectiveLayout.horizontal ?? false;
+      const scrollX = prevScrollXRef.current;
       const scrollY = prevScrollYRef.current;
       const vpH = viewportHeightRef.current || viewportHeight;
-      const margin = vpH * renderMultiplier;
-      const decoRect = {
+      const vpW = viewportWidth;
+      const margin = (isHorizDeco ? vpW : vpH) * renderMultiplier;
+      const decoRect = isHorizDeco ? {
+        x: Math.max(0, scrollX - margin),
+        y: 0,
+        width: vpW + margin * 2,
+        height: vpH,
+      } : {
         x: 0,
         y: Math.max(0, scrollY - margin),
-        width: viewportWidth,
+        width: vpW,
         height: vpH + margin * 2,
       };
       const decoAttrs = nativeMod.layoutCache.getAttributesInRect(decoRect)

@@ -1259,6 +1259,7 @@ const makeHGSections = () => [
       color: H_COLORS[i % H_COLORS.length]!,
       num: i,
       label: `Nature ${i + 1}`,
+      tags: HG_TAG_POOLS[i % HG_TAG_POOLS.length]!,
     })),
   },
   {
@@ -1268,6 +1269,7 @@ const makeHGSections = () => [
       color: H_COLORS[(i + 3) % H_COLORS.length]!,
       num: i,
       label: `City ${i + 1}`,
+      tags: HG_TAG_POOLS[(i + 2) % HG_TAG_POOLS.length]!,
     })),
   },
   {
@@ -1277,11 +1279,23 @@ const makeHGSections = () => [
       color: H_COLORS[(i + 6) % H_COLORS.length]!,
       num: i,
       label: `Art ${i + 1}`,
+      tags: HG_TAG_POOLS[(i + 1) % HG_TAG_POOLS.length]!,
     })),
   },
 ];
 
-type HGCard = { id: string; color: string; num: number; label: string };
+type HGCard = { id: string; color: string; num: number; label: string; tags: string[] };
+
+// Cross-axis layout constants — shared between layout params and container sizing.
+// containerH = itemCrossH * cols + columnSpacing*(cols-1) + insetTop + insetBottom
+const HG_COLS         = 2;
+const HG_COL_SPACING  = 8;
+const HG_INSET_Y      = 8;     // top and bottom each
+const HG_ITEM_CROSS_H = 120;   // desired per-item cross-axis height
+const HG_CONTAINER_H  = HG_ITEM_CROSS_H * HG_COLS + HG_COL_SPACING * (HG_COLS - 1) + HG_INSET_Y * 2;
+// = 120*2 + 8 + 16 = 264
+
+const HG_TAG_POOLS: string[][] = [[], ['new'], ['sale', 'hot'], ['featured']];
 
 export function HorizontalGridDemo() {
   const staticSections = useMemo(() => makeHGSections(), []);
@@ -1300,6 +1314,7 @@ export function HorizontalGridDemo() {
         color: H_COLORS[idx % H_COLORS.length]!,
         num: idx,
         label: `New ${idx + 1}`,
+        tags: ['new'],
       };
     });
     setS0Items(prev => [...newItems, ...prev]);
@@ -1340,17 +1355,17 @@ export function HorizontalGridDemo() {
           height: 20,
           sticky: true,
         },
-        insets: { top: 8, bottom: 8, left: 10, right: 10 },
+        insets: { top: HG_INSET_Y, bottom: HG_INSET_Y, left: 10, right: 10 },
       };
     });
   }, [s0Items, staticSections]);
 
   const hgLayout = useMemo(() => grid({
     horizontal: true,
-    columns: 2,
-    rowHeight: 110,
-    estimatedCrossAxisHeight: 120,
-    columnSpacing: 8,
+    columns: HG_COLS,
+    rowHeight: 110,           // estimated item width (primary axis); Yoga measures actual
+    estimatedCrossAxisHeight: 110,
+    columnSpacing: HG_COL_SPACING,
     rowSpacing: 4,
     sectionSpacing: 8,
     sectionBackground: true,
@@ -1369,6 +1384,15 @@ export function HorizontalGridDemo() {
         <Text style={HGS.cardThumbNum}>{item.num + 1}</Text>
       </View>
       <Text style={HGS.cardLabel}>{item.label}</Text>
+      {item.tags.length > 0 && (
+        <View style={HGS.tagRow}>
+          {item.tags.map(t => (
+            <View key={t} style={HGS.tag}>
+              <Text style={HGS.tagText}>{t}</Text>
+            </View>
+          ))}
+        </View>
+      )}
     </View>
   ), []);
 
@@ -1383,9 +1407,9 @@ export function HorizontalGridDemo() {
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HGS.ctrlBar} contentContainerStyle={HGS.ctrlBarContent}>
         <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hg-city-0', { position: 'start' })} />
-        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToItem('hg-abs-0', { position: 'start' })} />
-        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hg-abs-11', { position: 'end' })} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hg-cities:hg-city-0', { position: 'start' })} />
+        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToItem('hg-abstract:hg-abs-0', { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hg-abstract:hg-abs-11', { position: 'end' })} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+Insert" onPress={handleInsert} />
         <CtrlBtn label="×Delete" onPress={handleDelete} />
@@ -1397,14 +1421,14 @@ export function HorizontalGridDemo() {
         </View>
       </ScrollView>
 
-      <View style={HGS.listBackground}>
+      <View style={[HGS.listBackground, { height: HG_CONTAINER_H }]}>
         <CollectionView
           handle={cvRef}
           sections={riffSections}
           layout={hgLayout}
           renderItem={renderCard}
           keyExtractor={keyExtractor}
-          estimatedItemHeight={120}
+          estimatedItemHeight={HG_ITEM_CROSS_H}
           maintainVisibleContentPosition={mvcEnabled}
           decorationRenderers={decorationRenderers}
           onDecorationCountChange={setDecoCount}
@@ -1423,7 +1447,7 @@ const HGS = StyleSheet.create({
   ctrlBar:            { backgroundColor: '#111', flexGrow: 0 },
   ctrlBarContent:     { flexDirection: 'row', gap: 6, paddingHorizontal: 8, paddingVertical: 7, alignItems: 'center' },
 
-  listBackground:     { height: 290, backgroundColor: '#0f1623', overflow: 'hidden' },
+  listBackground:     { backgroundColor: '#0f1623', overflow: 'hidden' },
 
   sectionHeader:      { flex: 1, alignItems: 'center', justifyContent: 'center' },
   sectionHeaderTitle: { fontSize: 8, fontWeight: '700', color: 'rgba(255,255,255,0.7)',
@@ -1441,4 +1465,9 @@ const HGS = StyleSheet.create({
   cardThumbNum:       { fontSize: 22, fontWeight: '800', color: '#fff' },
   cardLabel:          { fontSize: 10, color: 'rgba(255,255,255,0.85)', fontWeight: '600',
                         textAlign: 'center' },
+  tagRow:             { flexDirection: 'row', flexWrap: 'wrap', gap: 3, marginTop: 6,
+                        justifyContent: 'center' },
+  tag:                { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 4,
+                        paddingHorizontal: 5, paddingVertical: 2 },
+  tagText:            { fontSize: 8, color: '#fff', fontWeight: '700', textTransform: 'uppercase' },
 });
