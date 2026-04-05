@@ -13,8 +13,8 @@
 | L3 – Proper Decoration Views | 🔄 In progress (branch: `cur-section-footer-test`, built, fixing 8 bugs) |
 | Horizontal list demo (sticky H/F, section bkg, scrollTo, insert/delete/resize, MVC) | ✅ Done (branch: `cur-section-footer-test`) |
 | L3.fix – Decoration bug fixes (stale frames, MVC anchor, fingerprint, demo UI) | ✅ Done (tag-based native positioning, visible separator color) |
-| L3.1 – Decoration contentInsets API (frame adjustment like NSCollectionLayoutDecorationItem) | ⬜ Next |
-| 5g – Extend ShadowNode to grid/masonry/flow | ⬜ After L3.1 |
+| L3.1 – Decoration contentInsets API (frame adjustment like NSCollectionLayoutDecorationItem) | ✅ Done (branch: `cur-decoration-content-insets`, merged to main) |
+| 5g – Extend ShadowNode to grid/masonry/flow | ⬜ Next |
 | 5j – Remove JS cell wrapper positioning | ⬜ After 5g |
 | Grid rowAlignment – 'top'\|'center'\|'bottom' for uneven heightForItem rows | ⬜ Future (see PLAN.md F3.1) |
 
