@@ -122,15 +122,13 @@ function MasonrySectionFooter({ color, count }: { color: string; count: number }
   );
 }
 
-// ── Flow data — S0: product cards, S1: tag cloud ─────────────────────────────
-// S0 demonstrates fractional-width bin-packing: banners fill one row, halves
-// pack 2-per-row, thirds pack 3-per-row. sizeForItem receives containerWidth
-// so widths are computed at layout time. Tap a card to expand/collapse it.
-// S1 demonstrates the two-pass effect: estimated tag widths → Yoga measures →
-// reflow. Items visibly rearrange from estimated to measured positions.
+// ── Flow data — product cards with fractional widths ─────────────────────────
+// Demonstrates flow layout's bin-packing: banners fill one row (1 item),
+// halves pack 2-per-row, thirds pack 3-per-row. sizeForItem receives
+// containerWidth so fractional widths are computed at layout time.
+// Widths subtract a 0.1px epsilon to absorb IEEE-754 rounding in (avail-16)/3.
 
-// ── S0: product cards ──
-type FlowCard = { id: string; kind: 'banner' | 'half' | 'third'; label: string; color: string };
+type FlowCard = { id: string; kind: 'banner' | 'half' | 'third'; icon: string; label: string; color: string };
 
 // Pattern: banner, half, half, third, third, third — repeating
 const FC_PATTERN: Array<'banner' | 'half' | 'third'> = [
@@ -144,46 +142,83 @@ const FC_PATTERN: Array<'banner' | 'half' | 'third'> = [
   'half', 'half',
 ];
 
-const FC_LABELS: Record<FlowCard['kind'], string[]> = {
-  banner: ['Featured Deal', 'New Arrivals', 'Top Picks'],
-  half:   ['Electronics', 'Fashion', 'Home', 'Sports', 'Books', 'Toys'],
-  third:  ['Shoes', 'Bags', 'Watches', 'Jewellery', 'Phones', 'Tablets', 'Cameras', 'Audio', 'Games'],
+// S0: shopping categories
+const FC_S0_META: Record<FlowCard['kind'], Array<{ icon: string; label: string }>> = {
+  banner: [
+    { icon: '🔥', label: 'Flash Sale — Up to 70% off' },
+    { icon: '🆕', label: 'New Arrivals — Just Landed' },
+    { icon: '⭐', label: 'Top Rated — Bestsellers' },
+  ],
+  half: [
+    { icon: '📱', label: 'Electronics' },
+    { icon: '👗', label: 'Fashion' },
+    { icon: '🏠', label: 'Home & Kitchen' },
+    { icon: '⚽', label: 'Sports' },
+    { icon: '📚', label: 'Books' },
+    { icon: '🧸', label: 'Toys' },
+  ],
+  third: [
+    { icon: '👟', label: 'Shoes' },
+    { icon: '👜', label: 'Bags' },
+    { icon: '⌚', label: 'Watches' },
+    { icon: '💎', label: 'Jewellery' },
+    { icon: '📷', label: 'Cameras' },
+    { icon: '🎧', label: 'Audio' },
+    { icon: '🎮', label: 'Gaming' },
+    { icon: '💻', label: 'Laptops' },
+    { icon: '🖥️', label: 'Monitors' },
+  ],
 };
 
-function makeFlowCards(): FlowCard[] {
+// S1: deals & lifestyle categories
+const FC_S1_META: Record<FlowCard['kind'], Array<{ icon: string; label: string }>> = {
+  banner: [
+    { icon: '🎁', label: 'Gift Cards — For Everyone' },
+    { icon: '🚀', label: 'Prime Deals — Members Only' },
+    { icon: '🏷️', label: 'Clearance — Last Few Left' },
+  ],
+  half: [
+    { icon: '🍔', label: 'Grocery' },
+    { icon: '💄', label: 'Beauty' },
+    { icon: '✈️', label: 'Travel' },
+    { icon: '🎬', label: 'Entertainment' },
+    { icon: '🏥', label: 'Health' },
+    { icon: '🐾', label: 'Pet Supplies' },
+  ],
+  third: [
+    { icon: '🥤', label: 'Beverages' },
+    { icon: '🧴', label: 'Skincare' },
+    { icon: '🏨', label: 'Hotels' },
+    { icon: '🎵', label: 'Music' },
+    { icon: '💊', label: 'Vitamins' },
+    { icon: '🐕', label: 'Dog' },
+    { icon: '🌿', label: 'Organic' },
+    { icon: '🧘', label: 'Wellness' },
+    { icon: '🎨', label: 'Art' },
+  ],
+};
+
+function makeFlowCards(
+  prefix: string,
+  meta: typeof FC_S0_META,
+  colorOffset: number,
+): FlowCard[] {
   const counters = { banner: 0, half: 0, third: 0 };
   return FC_PATTERN.map((kind, i) => {
     const idx = counters[kind]++;
+    const m = meta[kind][idx % meta[kind].length]!;
     return {
-      id: `fc-${i}`,
+      id: `${prefix}-${i}`,
       kind,
-      label: FC_LABELS[kind][idx % FC_LABELS[kind].length]!,
-      color: COLORS[(i * 3) % COLORS.length]!,
+      icon: m.icon,
+      label: m.label,
+      color: COLORS[(i * 3 + colorOffset) % COLORS.length]!,
     };
   });
 }
 
-const FC_S0_INIT: FlowCard[] = makeFlowCards();
-
-// ── S1: tag cloud ──
-const FLOW_S1_LABELS = [
-  'Hermes', 'iOS', 'Android', 'Yoga', 'Riff', 'FlashList', 'FlatList',
-  'ScrollView', 'Reanimated', 'Gesture Handler', 'UIKit', 'SwiftUI', 'Compose',
-  'Kotlin', 'Bridge', 'TurboModule', 'Codegen', 'Metro', 'Babel', 'SWC',
-];
-
-type FlowTag = { id: string; label: string; estimatedWidth: number; color: string };
-
-function makeFlowTagSection(prefix: string, labels: string[], colorOffset: number): FlowTag[] {
-  return labels.map((label, i) => ({
-    id: `${prefix}-${i}`,
-    label,
-    estimatedWidth: 20 + label.length * 7,  // intentionally imprecise for two-pass demo
-    color: COLORS[(i + colorOffset) % COLORS.length]!,
-  }));
-}
-
-const FS1_DATA = makeFlowTagSection('fs1', FLOW_S1_LABELS, 2);
+const FC_S0_INIT: FlowCard[] = makeFlowCards('fc0', FC_S0_META, 0);
+const FC_S1_INIT: FlowCard[] = makeFlowCards('fc1', FC_S1_META, 5);
 
 const FL_HDR_H = 44;
 const FL_FTR_H = 28;
@@ -1055,6 +1090,16 @@ const HMS = StyleSheet.create({
 
 // ── Flow layout config (two-pass + multi-section demo) ───────────────────────
 
+// Width helper: computes fractional card widths from containerWidth.
+// Subtracts 0.1px epsilon to absorb IEEE-754 rounding so 3 thirds never
+// exceed availCross + 0.01 (the C++ bin-packing tolerance).
+function flowCardWidth(kind: FlowCard['kind'], containerWidth: number): number {
+  const avail = containerWidth - 16; // section insetLeft(8) + insetRight(8)
+  if (kind === 'banner') return avail - 0.1;
+  if (kind === 'half')   return (avail - 8) / 2 - 0.1;   // (avail - 1×gap) / 2
+  /* third */            return (avail - 16) / 3 - 0.1;  // (avail - 2×gap) / 3
+}
+
 export function FlowDemo() {
   const cvRef = useRef<any>(null);
   const [s0Cards, setS0Cards] = useState<FlowCard[]>(FC_S0_INIT);
@@ -1063,7 +1108,7 @@ export function FlowDemo() {
   const [resizedIds, setResizedIds] = useState(() => new Set<string>());
   const insertCounter = useRef(FC_S0_INIT.length);
 
-  // Refs for access inside sizeForItem without closure staleness.
+  // Refs so sizeForItem never captures stale closures.
   const s0CardsRef = useRef(s0Cards);
   s0CardsRef.current = s0Cards;
   const resizedIdsRef = useRef(resizedIds);
@@ -1075,30 +1120,28 @@ export function FlowDemo() {
     sectionSpacing: 16,
     sectionBackground: true,
     sizeForItem: (i: number, s: number, containerWidth: number) => {
-      if (s === 0) {
-        const card = s0CardsRef.current[i];
-        if (!card) return { width: 80, height: 80 };
-        const expanded = resizedIdsRef.current.has(card.id);
-        const avail = containerWidth - 16; // insetLeft(8) + insetRight(8)
-        if (card.kind === 'banner') return { width: avail, height: expanded ? 160 : 80 };
-        if (card.kind === 'half')   return { width: (avail - 8) / 2, height: expanded ? 200 : 120 };
-        /* third */                 return { width: (avail - 16) / 3, height: expanded ? 140 : 80 };
-      }
-      // S1: tag cloud — estimated widths, Yoga corrects
-      const tag = FS1_DATA[i];
-      return { width: tag?.estimatedWidth ?? 80, height: 34 };
+      // Both sections use FlowCard with the same fractional-width sizes.
+      const cards = s === 0 ? s0CardsRef.current : FC_S1_INIT;
+      const card = cards[i];
+      if (!card) return { width: 80, height: 80 };
+      const expanded = resizedIdsRef.current.has(card.id);
+      const w = flowCardWidth(card.kind, containerWidth);
+      if (card.kind === 'banner') return { width: w, height: expanded ? 140 : 68 };
+      if (card.kind === 'half')   return { width: w, height: expanded ? 190 : 110 };
+      /* third */                 return { width: w, height: expanded ? 130 : 80 };
     },
   }), [resizedIds, s0Cards]);
 
-  const keyExtractor = useCallback((item: FlowCard | FlowTag) => item.id, []);
+  const keyExtractor = useCallback((item: FlowCard) => item.id, []);
 
   const handleInsert = useCallback(() => {
     const idx = insertCounter.current++;
-    // Insert a 'third' card so it doesn't break an existing row pattern too badly.
     const kinds: FlowCard['kind'][] = ['third', 'half', 'banner'];
     const kind = kinds[idx % kinds.length]!;
+    const meta = FC_S0_META[kind];
+    const m = meta[idx % meta.length]!;
     setS0Cards(prev => [{
-      id: `fc-ins-${idx}`, kind, label: FC_LABELS[kind][idx % FC_LABELS[kind].length]!,
+      id: `fc-ins-${idx}`, kind, icon: m.icon, label: m.label,
       color: COLORS[idx % COLORS.length]!,
     }, ...prev]);
   }, []);
@@ -1117,15 +1160,15 @@ export function FlowDemo() {
 
   const sections = useMemo(() => [
     {
-      key: 'fc0', data: s0Cards as Array<FlowCard | FlowTag>,
-      header: { render: () => <FlowSectionHeader label={`S0 — Products (${s0Cards.length})`} color="#e63946" />, height: FL_HDR_H, sticky: true },
+      key: 'fc0', data: s0Cards,
+      header: { render: () => <FlowSectionHeader label={`S0 — Shop (${s0Cards.length})`} color="#e63946" />, height: FL_HDR_H, sticky: true },
       footer: { render: () => <FlowSectionFooter color="#e63946" count={s0Cards.length} />, height: FL_FTR_H, sticky: true },
       insets: { top: 8, bottom: 8, left: 8, right: 8 },
     },
     {
-      key: 'fs1', data: FS1_DATA as Array<FlowCard | FlowTag>,
-      header: { render: () => <FlowSectionHeader label="S1 — Tags (two-pass)" color="#2a9d8f" />, height: FL_HDR_H, sticky: true },
-      footer: { render: () => <FlowSectionFooter color="#2a9d8f" count={FS1_DATA.length} />, height: FL_FTR_H, sticky: true },
+      key: 'fc1', data: FC_S1_INIT,
+      header: { render: () => <FlowSectionHeader label="S1 — Deals & Lifestyle" color="#2a9d8f" />, height: FL_HDR_H, sticky: true },
+      footer: { render: () => <FlowSectionFooter color="#2a9d8f" count={FC_S1_INIT.length} />, height: FL_FTR_H, sticky: true },
       insets: { top: 8, bottom: 8, left: 8, right: 8 },
     },
   ], [s0Cards]);
@@ -1136,31 +1179,43 @@ export function FlowDemo() {
     ),
   }), []);
 
-  const renderItem = useCallback(({ item }: { item: FlowCard | FlowTag }) => {
-    if ('kind' in item) {
-      // FlowCard — product card/banner
-      const card = item as FlowCard;
-      const isExpanded = resizedIds.has(card.id);
-      const kindLabel = card.kind === 'banner' ? '▬' : card.kind === 'half' ? '½' : '⅓';
-      return (
-        <Pressable
-          style={{ flex: 1, backgroundColor: card.color, borderRadius: card.kind === 'banner' ? 6 : 10,
-                   alignItems: 'center', justifyContent: 'center', padding: 8 }}
-          onPress={() => toggleResize(card.id)}
-        >
-          <Text style={{ fontSize: card.kind === 'banner' ? 13 : 11, fontWeight: '700', color: '#fff', textAlign: 'center' }}>
-            {kindLabel} {card.label}
-          </Text>
-          {isExpanded && <Text style={{ fontSize: 9, color: 'rgba(255,255,255,0.7)', marginTop: 4 }}>↕ tap to collapse</Text>}
-        </Pressable>
-      );
-    }
-    // FlowTag — tag cloud
-    const tag = item as FlowTag;
+  const renderItem = useCallback(({ item }: { item: FlowCard }) => {
+    const isExpanded = resizedIds.has(item.id);
+    const isBanner = item.kind === 'banner';
+    const isHalf   = item.kind === 'half';
     return (
-      <View style={[S.flowTag, { backgroundColor: tag.color }]}>
-        <Text style={S.flowTagText}>{tag.label}</Text>
-      </View>
+      <Pressable
+        // absoluteFill ensures the card fills the absolute-positioned cell wrapper.
+        style={[StyleSheet.absoluteFillObject, {
+          backgroundColor: item.color,
+          borderRadius: isBanner ? 8 : 12,
+          overflow: 'hidden',
+        }]}
+        onPress={() => toggleResize(item.id)}
+      >
+        {isBanner ? (
+          // Banner: horizontal layout — icon + label + chevron
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14 }}>
+            <Text style={{ fontSize: 26 }}>{item.icon}</Text>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={{ color: '#fff', fontSize: 13, fontWeight: '700' }} numberOfLines={1}>{item.label}</Text>
+              <Text style={{ color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 2 }}>
+                {isExpanded ? 'Tap to collapse ↑' : 'Tap to expand ↓'}
+              </Text>
+            </View>
+            <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 20, marginLeft: 8 }}>›</Text>
+          </View>
+        ) : (
+          // Half / Third: vertical centered — icon + label
+          <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 8 }}>
+            <Text style={{ fontSize: isHalf ? 30 : 22 }}>{item.icon}</Text>
+            <Text style={{ color: '#fff', fontSize: isHalf ? 12 : 10, fontWeight: '600',
+                           marginTop: 6, textAlign: 'center' }} numberOfLines={2}>
+              {item.label}
+            </Text>
+          </View>
+        )}
+      </Pressable>
     );
   }, [resizedIds, toggleResize]);
 
@@ -1168,8 +1223,8 @@ export function FlowDemo() {
     <View style={S.flex}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
         <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('fs1:fs1-0', { position: 'top' })} />
-        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('fs1:fs1-19', { position: 'bottom' })} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('fc1:fc1-0', { position: 'top' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('fc1:fc1-14', { position: 'bottom' })} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
