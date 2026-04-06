@@ -11,7 +11,7 @@
  * - Deep hierarchy (5-10 Views deep) stresses JS bridge in FlashList recycling.
  */
 import React, { useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Riff } from '../../components/CollectionView';
 import { list } from '@riff/layouts';
@@ -208,6 +208,7 @@ function FeedCell({ item }: { item: FeedItem }) {
 
 let feedTotalMounts  = 0;
 let feedActiveMounts = 0;
+let feedBlankAreaPct = -1; // -1 = unavailable (FlashList)
 
 export function resetFeedMounts() { feedTotalMounts = 0; feedActiveMounts = 0; }
 
@@ -228,14 +229,21 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
   const prevOffsetRef   = useRef(0);
   const prevTimeRef     = useRef(0);
   const listRef         = useRef<any>(null);
+  const vpHeightRef     = useRef(0);
   const [velocity,      setVelocity]     = useState(0);
   const [contentHeight, setContentH]     = useState(0);
   // Tick drives re-renders so PerfHood picks up latest module-level mount counters.
   const [, setTick] = useState(0);
   React.useEffect(() => {
+    // Reset blank area when switching engines.
+    feedBlankAreaPct = -1;
     const id = setInterval(() => setTick(t => t + 1), 500);
     return () => clearInterval(id);
-  }, []);
+  }, [mode]);
+
+  const handleLayout = (e: LayoutChangeEvent) => {
+    vpHeightRef.current = e.nativeEvent.layout.height;
+  };
 
   const handleScroll = (e: any) => {
     const offset = e.nativeEvent.contentOffset.y;
@@ -259,6 +267,7 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
       activeMounts={feedActiveMounts}
       totalMounts={feedTotalMounts}
       scrollVelocity={velocity}
+      blankAreaPct={feedBlankAreaPct}
       scrollRef={listRef}
       engine={mode === 'cv' ? 'riff' : 'flash'}
       tab="feed"
@@ -270,7 +279,7 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
 
   if (mode === 'flash') {
     return (
-      <View style={T.root}>
+      <View style={T.root} onLayout={handleLayout}>
         <FlashList
           ref={listRef}
           data={FEED_DATA}
@@ -289,13 +298,19 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
   }
 
   return (
-    <View style={T.root}>
+    <View style={T.root} onLayout={handleLayout}>
       <Riff
         handle={listRef}
         data={FEED_DATA}
         keyExtractor={item => String(item.id)}
         renderItem={renderItem}
         layout={LAYOUT}
+        onBlankArea={({ offsetStart, offsetEnd }) => {
+          const vpH = vpHeightRef.current;
+          feedBlankAreaPct = vpH > 0
+            ? Math.round((offsetStart + offsetEnd) / vpH * 100)
+            : 0;
+        }}
         scrollViewProps={{
           onScroll: handleScroll,
           scrollEventThrottle: 100,

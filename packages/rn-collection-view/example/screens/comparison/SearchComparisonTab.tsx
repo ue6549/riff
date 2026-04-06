@@ -10,7 +10,7 @@
  * PerfHood shows JS FPS, mount count, and render count during the session.
  */
 import React, { useRef, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Riff } from '../../components/CollectionView';
 import { list } from '@riff/layouts';
@@ -75,6 +75,7 @@ function SearchCell({ item }: { item: SearchItem }) {
 
 let searchTotalMounts  = 0;
 let searchActiveMounts = 0;
+let searchBlankAreaPct = -1; // -1 = unavailable (FlashList)
 
 export function resetSearchMounts() { searchTotalMounts = 0; searchActiveMounts = 0; }
 
@@ -94,13 +95,19 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
   const prevOffsetRef   = useRef(0);
   const prevTimeRef     = useRef(0);
   const listRef         = useRef<any>(null);
+  const vpHeightRef     = useRef(0);
   const [velocity,      setVelocity] = useState(0);
   const [contentHeight, setContentH] = useState(0);
   const [, setTick] = useState(0);
   React.useEffect(() => {
+    searchBlankAreaPct = -1;
     const id = setInterval(() => setTick(t => t + 1), 500);
     return () => clearInterval(id);
-  }, []);
+  }, [mode]);
+
+  const handleLayout = (e: LayoutChangeEvent) => {
+    vpHeightRef.current = e.nativeEvent.layout.height;
+  };
 
   const handleScroll = (e: any) => {
     const offset = e.nativeEvent.contentOffset.y;
@@ -124,6 +131,7 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
       activeMounts={searchActiveMounts}
       totalMounts={searchTotalMounts}
       scrollVelocity={velocity}
+      blankAreaPct={searchBlankAreaPct}
       scrollRef={listRef}
       engine={mode === 'cv' ? 'riff' : 'flash'}
       tab="search"
@@ -135,7 +143,7 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
 
   if (mode === 'flash') {
     return (
-      <View style={T.root}>
+      <View style={T.root} onLayout={handleLayout}>
         <FlashList
           ref={listRef}
           data={SEARCH_DATA}
@@ -154,13 +162,19 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
   }
 
   return (
-    <View style={T.root}>
+    <View style={T.root} onLayout={handleLayout}>
       <Riff
         handle={listRef}
         data={SEARCH_DATA}
         keyExtractor={item => String(item.id)}
         renderItem={renderItem}
         layout={LAYOUT}
+        onBlankArea={({ offsetStart, offsetEnd }) => {
+          const vpH = vpHeightRef.current;
+          searchBlankAreaPct = vpH > 0
+            ? Math.round((offsetStart + offsetEnd) / vpH * 100)
+            : 0;
+        }}
         scrollViewProps={{
           onScroll: handleScroll,
           scrollEventThrottle: 100,

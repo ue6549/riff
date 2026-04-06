@@ -41,6 +41,8 @@ export interface RunResult {
   avgJSIdle: number;
   avgCPU: number;
   peakMemDeltaMB: number;
+  avgBlankPct: number;
+  peakBlankPct: number;
   activeMountMin: number;
   activeMountMax: number;
   durationMs: number;
@@ -53,6 +55,8 @@ export interface AggregateResult {
   avgJSIdle: number;
   avgCPU: number;
   peakMemDeltaMB: number;
+  avgBlankPct: number;
+  peakBlankPct: number;
   totalMounts: number;
 }
 
@@ -86,6 +90,8 @@ export interface BenchmarkConfig {
   activeMounts: number;
   /** Current total mount count. */
   totalMounts: number;
+  /** Blank area % (0-100) for Riff; -1 for FlashList (unavailable). */
+  blankAreaPct: number;
 }
 
 export interface BenchmarkHandle {
@@ -227,6 +233,7 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
       const idleSamples:   number[] = [];
       const cpuSamples:    number[] = [];
       const memSamples:    number[] = [];
+      const blankSamples:  number[] = [];
       let   activeMountMin = configRef.current.activeMounts;
       let   activeMountMax = configRef.current.activeMounts;
       const startTime = Date.now();
@@ -246,6 +253,8 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
             idleSamples.push(lm.jsIdlePct);
             if (lm.mainThreadCPU >= 0) cpuSamples.push(lm.mainThreadCPU);
             memSamples.push(lm.memoryDeltaMB);
+            const blank = configRef.current.blankAreaPct;
+            if (blank >= 0) blankSamples.push(blank);
             activeMountMin = Math.min(activeMountMin, configRef.current.activeMounts);
             activeMountMax = Math.max(activeMountMax, configRef.current.activeMounts);
           }, 200);
@@ -278,6 +287,8 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
           avgJSIdle:      mean(idleSamples),
           avgCPU:         cpuSamples.length > 0 ? mean(cpuSamples) : -1,
           peakMemDeltaMB: memSamples.length > 0 ? Math.max(...memSamples) : 0,
+          avgBlankPct:    blankSamples.length > 0 ? mean(blankSamples) : -1,
+          peakBlankPct:   blankSamples.length > 0 ? Math.max(...blankSamples) : -1,
           activeMountMin,
           activeMountMax,
           durationMs:     Date.now() - startTime,
@@ -286,12 +297,14 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
     }
 
     // Aggregate across all measured runs.
-    const allFPS  = runResults.flatMap(r => [r.avgFPS]);
-    const allIdle = runResults.map(r => r.avgJSIdle);
-    const allCPU  = runResults.filter(r => r.avgCPU >= 0).map(r => r.avgCPU);
-    const allMem  = runResults.map(r => r.peakMemDeltaMB);
-    const minFPS  = runResults.reduce((m, r) => Math.min(m, r.minFPS), Infinity);
-    const p5FPS   = runResults.reduce((m, r) => Math.min(m, r.p5FPS), Infinity);
+    const allFPS   = runResults.flatMap(r => [r.avgFPS]);
+    const allIdle  = runResults.map(r => r.avgJSIdle);
+    const allCPU   = runResults.filter(r => r.avgCPU >= 0).map(r => r.avgCPU);
+    const allMem   = runResults.map(r => r.peakMemDeltaMB);
+    const allBlank = runResults.filter(r => r.avgBlankPct >= 0).map(r => r.avgBlankPct);
+    const minFPS   = runResults.reduce((m, r) => Math.min(m, r.minFPS), Infinity);
+    const p5FPS    = runResults.reduce((m, r) => Math.min(m, r.p5FPS), Infinity);
+    const peakBlank = runResults.filter(r => r.peakBlankPct >= 0).reduce((m, r) => Math.max(m, r.peakBlankPct), 0);
 
     const benchResult: BenchmarkResult = {
       engine,
@@ -308,6 +321,8 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
         avgJSIdle:      mean(allIdle),
         avgCPU:         allCPU.length > 0 ? mean(allCPU) : -1,
         peakMemDeltaMB: allMem.length > 0 ? Math.max(...allMem) : 0,
+        avgBlankPct:    allBlank.length > 0 ? mean(allBlank) : -1,
+        peakBlankPct:   allBlank.length > 0 ? peakBlank : -1,
         totalMounts:    configRef.current.totalMounts,
       },
     };
