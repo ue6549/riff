@@ -1470,14 +1470,21 @@ export function Riff<T = unknown>({
     // measurement, before any frame is painted.
     if (prevRenderRef.current === null && w > 0 && h > 0) {
       // Use stride-based arithmetic for the very first range (before layout cache is seeded).
+      // Multi-column layouts (grid, masonry) pack N items per row, so the effective stride
+      // per flat index is rowHeight / N. Without this, Phase A under-counts the visible range.
+      const rawCols = (effectiveLayout.type === 'grid' || effectiveLayout.type === 'masonry')
+        ? (effectiveLayout as any).delegate?.columns
+        : undefined;
+      const colCount = rawCols ? (typeof rawCols === 'function' ? rawCols(w) : rawCols as number) : 1;
+      const effectiveStride = colCount > 1 ? stride / colCount : stride;
       const wc = nativeWindowController;
-      const ws = wc.computeRanges(0, h, itemCount, stride, renderMultiplier, sectionInsetTop, 0);
-      const budgeted = wc.applyBudget(ws.render.first, ws.render.last, ws.visible.first, ws.visible.last, effectiveMountedWindowSize, h, budgetStride);
+      const ws = wc.computeRanges(0, h, itemCount, effectiveStride, renderMultiplier, sectionInsetTop, 0);
+      const budgeted = wc.applyBudget(ws.render.first, ws.render.last, ws.visible.first, ws.visible.last, effectiveMountedWindowSize, h, effectiveStride);
       prevRenderRef.current = budgeted;
       setRenderRange(budgeted);
 
       // Seed content height from estimates so scroll view has a size.
-      const estContent = sectionInsetTop + itemCount * stride - itemSpacing + sectionInsetBottom;
+      const estContent = sectionInsetTop + itemCount * effectiveStride - itemSpacing + sectionInsetBottom;
       contentHeightRef.current = estContent;
       setContentHeight(estContent);
     }
