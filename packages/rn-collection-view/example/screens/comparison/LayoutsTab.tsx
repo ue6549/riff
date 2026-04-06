@@ -1183,14 +1183,15 @@ export function FlowDemo() {
     const isExpanded = resizedIds.has(item.id);
     const isBanner = item.kind === 'banner';
     const isHalf   = item.kind === 'half';
+    // Explicit height must match sizeForItem — this is what Yoga measures to size
+    // the cell wrapper. The cell wrapper has no explicit height; it relies on the
+    // content height (same pattern as MasonryDemo's explicit `height: h`).
+    const h = isBanner ? (isExpanded ? 140 : 68)
+            : isHalf   ? (isExpanded ? 190 : 110)
+            :             (isExpanded ? 130 : 80);
     return (
       <Pressable
-        // absoluteFill ensures the card fills the absolute-positioned cell wrapper.
-        style={[StyleSheet.absoluteFillObject, {
-          backgroundColor: item.color,
-          borderRadius: isBanner ? 8 : 12,
-          overflow: 'hidden',
-        }]}
+        style={{ height: h, backgroundColor: item.color, borderRadius: isBanner ? 8 : 12 }}
         onPress={() => toggleResize(item.id)}
       >
         {isBanner ? (
