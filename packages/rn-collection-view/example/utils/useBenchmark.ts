@@ -8,7 +8,8 @@
  * Scroll method: animated scrollToOffset on a ref (works for both Riff and
  * FlashList — Riff: { y, animated }, FlashList: { offset, animated }).
  *
- * Suite (7 runs, 1 warm-up + 6 measured):
+ * Suite (7 runs, 1 warm-up + 6 measured), each measured run repeated
+ * ROUNDS_PER_RUN times before moving to the next run:
  *   0. Warm-up  — scroll to bottom + back (metrics discarded)
  *   1. Slow ↓   — 20-item steps, 300ms pause between steps
  *   2. Slow ↑   — 20-item steps back to top
@@ -16,15 +17,24 @@
  *   4. Fast ↑   — 100-item steps back to top
  *   5. Fling ↓  — single scroll to content bottom
  *   6. Fling ↑  — single scroll back to 0
+ *
+ * Fix: configRef pattern — async start() always reads configRef.current
+ * so it gets the latest scrollRef/engine/liveMetrics even though the
+ * BenchmarkConfig object changes on every render.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PerformanceMetrics } from './useMetrics';
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const ROUNDS_PER_RUN = 5;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface RunResult {
   name: string;
   label: string;
+  rounds: number;
   avgFPS: number;
   minFPS: number;
   p5FPS: number;
@@ -52,6 +62,7 @@ export interface BenchmarkResult {
   itemCount: number;
   itemHeight: number;
   timestamp: string;
+  rounds: number;
   runs: RunResult[];
   aggregate: AggregateResult;
 }
@@ -163,7 +174,25 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
   const [currentRun,  setCurrentRun]  = useState<string | null>(null);
   const [progress,    setProgress]    = useState(0);
   const [result,      setResult]      = useState<BenchmarkResult | null>(null);
-  const abortRef = useRef(false);
+  const abortRef   = useRef(false);
+
+  // configRef: always holds the latest config so async start() never reads
+  // stale values even though config changes every 500ms (liveMetrics update).
+  const configRef = useRef(config);
+  configRef.current = config;
+
+  // Reset result when engine changes so Riff and FlashList results stay separate.
+  const prevEngineRef = useRef(config.engine);
+  useEffect(() => {
+    if (prevEngineRef.current !== config.engine) {
+      prevEngineRef.current = config.engine;
+      if (!isRunning) {
+        setResult(null);
+        setProgress(0);
+        setCurrentRun(null);
+      }
+    }
+  });
 
   const start = useCallback(async () => {
     if (isRunning) return;
@@ -172,11 +201,17 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
     setProgress(0);
     abortRef.current = false;
 
-    const { scrollRef, engine, tab, itemCount, itemHeight, contentHeight } = config;
+    // Read fresh config at start — not the closure-captured config.
+    const cfg = configRef.current;
+    const { scrollRef, engine, tab, itemCount, itemHeight, contentHeight } = cfg;
+
     const runs = makeRuns(itemHeight, itemCount, contentHeight);
-    const measuredRuns: RunDef[] = runs.filter(r => !r.warmup);
+    const measuredRuns = runs.filter(r => !r.warmup);
+
+    // Total steps = each measured run × its offset count × rounds.
     const totalSteps = measuredRuns.reduce(
-      (sum, r) => sum + r.offsets(itemHeight, itemCount, contentHeight).length, 0
+      (sum, r) => sum + r.offsets(itemHeight, itemCount, contentHeight).length * ROUNDS_PER_RUN,
+      0
     );
     let completedSteps = 0;
 
@@ -187,47 +222,56 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
       const run = runs[ri]!;
       setCurrentRun(run.label);
 
-      // Metric samples collected during this run.
+      // Metric samples collected across all rounds of this run.
       const fpsSamples:    number[] = [];
       const idleSamples:   number[] = [];
       const cpuSamples:    number[] = [];
       const memSamples:    number[] = [];
-      let   activeMountMin = config.activeMounts;
-      let   activeMountMax = config.activeMounts;
+      let   activeMountMin = configRef.current.activeMounts;
+      let   activeMountMax = configRef.current.activeMounts;
       const startTime = Date.now();
 
-      // Start sampling interval (200ms) for this run.
-      let samplingId: ReturnType<typeof setInterval> | null = null;
-      if (!run.warmup) {
-        samplingId = setInterval(() => {
-          // Read from config refs — these are live values from usePerformanceMetrics.
-          const lm = config.liveMetrics;
-          fpsSamples.push(lm.nativeFPS);
-          idleSamples.push(lm.jsIdlePct);
-          if (lm.mainThreadCPU >= 0) cpuSamples.push(lm.mainThreadCPU);
-          memSamples.push(lm.memoryDeltaMB);
-          activeMountMin = Math.min(activeMountMin, config.activeMounts);
-          activeMountMax = Math.max(activeMountMax, config.activeMounts);
-        }, 200);
-      }
+      const rounds = run.warmup ? 1 : ROUNDS_PER_RUN;
 
-      const offsets = run.offsets(itemHeight, itemCount, contentHeight);
-      for (const offset of offsets) {
+      for (let round = 0; round < rounds; round++) {
         if (abortRef.current) break;
-        scrollToOffset(scrollRef, offset, engine);
-        await delay(run.pauseMs);
-        if (!run.warmup) {
-          completedSteps++;
-          setProgress(completedSteps / totalSteps);
-        }
-      }
 
-      if (samplingId) clearInterval(samplingId);
+        // Start sampling interval (200ms) for this round.
+        let samplingId: ReturnType<typeof setInterval> | null = null;
+        if (!run.warmup) {
+          samplingId = setInterval(() => {
+            // Always read from configRef.current — liveMetrics is fresh.
+            const lm = configRef.current.liveMetrics;
+            fpsSamples.push(lm.nativeFPS);
+            idleSamples.push(lm.jsIdlePct);
+            if (lm.mainThreadCPU >= 0) cpuSamples.push(lm.mainThreadCPU);
+            memSamples.push(lm.memoryDeltaMB);
+            activeMountMin = Math.min(activeMountMin, configRef.current.activeMounts);
+            activeMountMax = Math.max(activeMountMax, configRef.current.activeMounts);
+          }, 200);
+        }
+
+        const offsets = run.offsets(itemHeight, itemCount, contentHeight);
+        for (const offset of offsets) {
+          if (abortRef.current) break;
+          // Always read scrollRef from configRef.current — the ref object itself
+          // is stable but reading from configRef ensures we never use a stale engine.
+          scrollToOffset(configRef.current.scrollRef, offset, configRef.current.engine);
+          await delay(run.pauseMs);
+          if (!run.warmup) {
+            completedSteps++;
+            setProgress(completedSteps / totalSteps);
+          }
+        }
+
+        if (samplingId) clearInterval(samplingId);
+      }
 
       if (!run.warmup && fpsSamples.length > 0) {
         runResults.push({
           name:           run.name,
           label:          run.label,
+          rounds:         ROUNDS_PER_RUN,
           avgFPS:         mean(fpsSamples),
           minFPS:         Math.min(...fpsSamples),
           p5FPS:          percentile(fpsSamples, 5),
@@ -255,6 +299,7 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
       itemCount,
       itemHeight,
       timestamp: new Date().toISOString(),
+      rounds: ROUNDS_PER_RUN,
       runs: runResults,
       aggregate: {
         avgFPS:         mean(allFPS),
@@ -263,7 +308,7 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
         avgJSIdle:      mean(allIdle),
         avgCPU:         allCPU.length > 0 ? mean(allCPU) : -1,
         peakMemDeltaMB: allMem.length > 0 ? Math.max(...allMem) : 0,
-        totalMounts:    config.totalMounts,
+        totalMounts:    configRef.current.totalMounts,
       },
     };
 
@@ -271,7 +316,7 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
     setCurrentRun(null);
     setProgress(1);
     setIsRunning(false);
-  }, [config, isRunning]);
+  }, [isRunning]); // configRef is a ref — not a dep. Only isRunning gates re-creation.
 
   return { start, isRunning, currentRun, progress, result };
 }
