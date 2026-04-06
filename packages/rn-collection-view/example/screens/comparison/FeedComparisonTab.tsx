@@ -53,7 +53,7 @@ const TEXTS = [
   'Every senior engineer was once a junior who shipped something that broke prod on a Friday.',
 ];
 
-const FEED_DATA: FeedItem[] = Array.from({ length: 150 }, (_, i) => {
+const FEED_DATA: FeedItem[] = Array.from({ length: 1000 }, (_, i) => {
   const type = ITEM_TYPES[i % ITEM_TYPES.length]!;
   return {
     id: i,
