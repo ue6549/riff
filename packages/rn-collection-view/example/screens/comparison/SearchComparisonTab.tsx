@@ -90,10 +90,12 @@ function TrackedSearchCell({ item }: { item: SearchItem }) {
 const LAYOUT = list({ itemHeight: ITEM_H });
 
 export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
-  const renderCount    = useRef(0);
-  const prevOffsetRef  = useRef(0);
-  const prevTimeRef    = useRef(0);
-  const [velocity, setVelocity] = useState(0);
+  const renderCount     = useRef(0);
+  const prevOffsetRef   = useRef(0);
+  const prevTimeRef     = useRef(0);
+  const listRef         = useRef<any>(null);
+  const [velocity,      setVelocity] = useState(0);
+  const [contentHeight, setContentH] = useState(0);
   const [, setTick] = useState(0);
   React.useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 500);
@@ -122,6 +124,12 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
       activeMounts={searchActiveMounts}
       totalMounts={searchTotalMounts}
       scrollVelocity={velocity}
+      scrollRef={listRef}
+      engine={mode === 'cv' ? 'riff' : 'flash'}
+      tab="search"
+      itemCount={SEARCH_DATA.length}
+      itemHeight={ITEM_H}
+      contentHeight={contentHeight}
     />
   );
 
@@ -129,6 +137,7 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
     return (
       <View style={T.root}>
         <FlashList
+          ref={listRef}
           data={SEARCH_DATA}
           keyExtractor={item => String(item.id)}
           renderItem={renderItem}
@@ -137,6 +146,7 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
           overrideItemLayout={layout => { layout.size = ITEM_H; }}
           onScroll={handleScroll}
           scrollEventThrottle={100}
+          onContentSizeChange={(_, h) => setContentH(h)}
         />
         {perfHood}
       </View>
@@ -146,12 +156,16 @@ export default function SearchComparisonTab({ mode }: { mode: 'cv' | 'flash' }) 
   return (
     <View style={T.root}>
       <Riff
+        ref={listRef}
         data={SEARCH_DATA}
         keyExtractor={item => String(item.id)}
         renderItem={renderItem}
         layout={LAYOUT}
-        onScroll={handleScroll}
-        scrollEventThrottle={100}
+        scrollViewProps={{
+          onScroll: handleScroll,
+          scrollEventThrottle: 100,
+          onContentSizeChange: (_, h) => setContentH(h),
+        }}
       />
       {perfHood}
     </View>

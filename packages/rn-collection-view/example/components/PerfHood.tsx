@@ -1,62 +1,202 @@
 /**
- * PerfHood — rich live performance overlay for Riff vs FlashList comparison.
+ * PerfHood — rich live performance overlay + automated benchmark runner.
  *
- * Displays 6 metric rows from native + JS measurement:
+ * Live display (6 metric rows):
  *   UI  — CADisplayLink native FPS + frame time
  *   JS  — rAF FPS + idle headroom %
  *   CPU — main-thread utilization % (Mach thread_info)
  *   Cells — active / total mount count
- *   Mem — memory delta from session start (os_proc_available_memory)
- *   Vel — scroll velocity in pt/s (when scrolling)
+ *   Mem — memory delta from session start
+ *   Vel — scroll velocity (when scrolling)
  *
- * Color coding per row: green/yellow/red thresholds.
- * Pointer events disabled (overlay only — no touch interception).
- * A single 500ms polling interval drives all native reads.
+ * Benchmark mode (tap "▶ Bench"):
+ *   Runs a scripted scroll suite (warm-up + 6 measured runs), samples
+ *   metrics at 200ms intervals, displays a summary table on completion.
+ *   "Copy JSON" produces structured output for comparison.
+ *
+ * Color coding: green/yellow/red per metric threshold.
+ * The overlay intercepts touch only for the benchmark button and summary
+ * close/copy buttons. All other areas pass touches through.
  */
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Modal,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { usePerformanceMetrics } from '../utils/useMetrics';
+import { useBenchmark } from '../utils/useBenchmark';
+import type { BenchmarkConfig, BenchmarkResult, RunResult } from '../utils/useBenchmark';
 
-interface PerfHoodProps {
+// ── Public props ──────────────────────────────────────────────────────────────
+
+export interface PerfHoodProps {
   /** Currently mounted cell count (decremented on unmount). */
   activeMounts: number;
-  /** Total cells ever mounted (cumulative, never decremented). */
+  /** Total cells ever mounted (cumulative). */
   totalMounts: number;
-  /** Scroll velocity in pt/s (pass from onScroll handler). */
+  /** Scroll velocity in pt/s from the parent's onScroll handler. */
   scrollVelocity?: number;
+  // ── Benchmark config (optional — omit to disable "▶ Bench" button) ──
+  scrollRef?: React.RefObject<any>;
+  engine?: 'riff' | 'flash';
+  tab?: string;
+  itemCount?: number;
+  itemHeight?: number;
+  contentHeight?: number;
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
 
-function fpsColor(fps: number): string {
-  if (fps >= 55) return '#4ade80'; // green
-  if (fps >= 40) return '#facc15'; // yellow
-  return '#f87171';                // red
+function fpsColor(fps: number)   { return fps >= 55 ? '#4ade80' : fps >= 40 ? '#facc15' : '#f87171'; }
+function idleColor(pct: number)  { return pct >= 70 ? '#4ade80' : pct >= 40 ? '#facc15' : '#f87171'; }
+function cpuColor(pct: number)   { return pct < 0 ? '#555' : pct < 50 ? '#4ade80' : pct < 80 ? '#facc15' : '#f87171'; }
+function memColor(mb: number)    { return mb < 20 ? '#4ade80' : mb < 50 ? '#facc15' : '#f87171'; }
+function benchFpsColor(fps: number) { return fps >= 55 ? '#4ade80' : fps >= 40 ? '#facc15' : '#f87171'; }
+
+// ── Benchmark summary modal ───────────────────────────────────────────────────
+
+function BenchmarkSummary({
+  result,
+  onClose,
+  onRunAgain,
+}: {
+  result: BenchmarkResult;
+  onClose: () => void;
+  onRunAgain: () => void;
+}) {
+  const handleCopyJSON = async () => {
+    await Share.share({ message: JSON.stringify(result, null, 2) });
+  };
+
+  const agg = result.aggregate;
+
+  return (
+    <Modal transparent animationType="fade" onRequestClose={onClose}>
+      <View style={M.backdrop}>
+        <View style={M.sheet}>
+          <Text style={M.title}>BENCHMARK — {result.engine.toUpperCase()} · {result.tab}</Text>
+          <Text style={M.subtitle}>{result.itemCount} items · {result.timestamp.slice(11, 19)} UTC</Text>
+
+          {/* Per-run table */}
+          <View style={M.tableHeader}>
+            <Text style={[M.th, { flex: 2 }]}>Run</Text>
+            <Text style={[M.th, { width: 44 }]}>Avg</Text>
+            <Text style={[M.th, { width: 36 }]}>Min</Text>
+            <Text style={[M.th, { width: 44 }]}>CPU</Text>
+            <Text style={[M.th, { width: 48 }]}>Mem</Text>
+          </View>
+          <ScrollView style={M.tableScroll} showsVerticalScrollIndicator={false}>
+            {result.runs.map((r: RunResult) => (
+              <View key={r.name} style={M.tableRow}>
+                <Text style={[M.td, { flex: 2 }]} numberOfLines={1}>{r.label}</Text>
+                <Text style={[M.td, { width: 44, color: benchFpsColor(r.avgFPS) }]}>{r.avgFPS}</Text>
+                <Text style={[M.td, { width: 36, color: benchFpsColor(r.minFPS) }]}>{r.minFPS}</Text>
+                <Text style={[M.td, { width: 44, color: cpuColor(r.avgCPU) }]}>
+                  {r.avgCPU >= 0 ? `${r.avgCPU}%` : '—'}
+                </Text>
+                <Text style={[M.td, { width: 48, color: memColor(r.peakMemDeltaMB) }]}>
+                  +{r.peakMemDeltaMB.toFixed(1)}M
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+
+          {/* Aggregate row */}
+          <View style={M.aggRow}>
+            <Text style={[M.aggLabel, { flex: 2 }]}>TOTAL</Text>
+            <Text style={[M.aggVal, { width: 44, color: benchFpsColor(agg.avgFPS) }]}>{agg.avgFPS}</Text>
+            <Text style={[M.aggVal, { width: 36, color: benchFpsColor(agg.minFPS) }]}>{agg.minFPS}</Text>
+            <Text style={[M.aggVal, { width: 44, color: cpuColor(agg.avgCPU) }]}>
+              {agg.avgCPU >= 0 ? `${agg.avgCPU}%` : '—'}
+            </Text>
+            <Text style={[M.aggVal, { width: 48, color: memColor(agg.peakMemDeltaMB) }]}>
+              +{agg.peakMemDeltaMB.toFixed(1)}M
+            </Text>
+          </View>
+
+          {/* Extra aggregate stats */}
+          <Text style={M.extraStats}>
+            JS idle {agg.avgJSIdle}% avg  ·  p5 FPS {agg.p5FPS}  ·  mounts {agg.totalMounts}
+          </Text>
+
+          {/* Action buttons */}
+          <View style={M.btnRow}>
+            <Pressable style={M.btn} onPress={onClose}>
+              <Text style={M.btnText}>Close</Text>
+            </Pressable>
+            <Pressable style={[M.btn, M.btnAccent]} onPress={onRunAgain}>
+              <Text style={[M.btnText, { color: '#4ade80' }]}>Run Again</Text>
+            </Pressable>
+            <Pressable style={[M.btn, M.btnAccent]} onPress={handleCopyJSON}>
+              <Text style={[M.btnText, { color: '#60a5fa' }]}>Copy JSON</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
-function idleColor(pct: number): string {
-  if (pct >= 70) return '#4ade80';
-  if (pct >= 40) return '#facc15';
-  return '#f87171';
-}
+// ── Main component ────────────────────────────────────────────────────────────
 
-function cpuColor(pct: number): string {
-  if (pct < 0)   return '#555';    // unavailable
-  if (pct < 50)  return '#4ade80';
-  if (pct < 80)  return '#facc15';
-  return '#f87171';
-}
-
-function memColor(mb: number): string {
-  if (mb < 20) return '#4ade80';
-  if (mb < 50) return '#facc15';
-  return '#f87171';
-}
-
-// ── Component ─────────────────────────────────────────────────────────────────
-
-export function PerfHood({ activeMounts, totalMounts, scrollVelocity = 0 }: PerfHoodProps) {
+export function PerfHood({
+  activeMounts,
+  totalMounts,
+  scrollVelocity = 0,
+  scrollRef,
+  engine = 'riff',
+  tab = 'feed',
+  itemCount = 0,
+  itemHeight = 56,
+  contentHeight = 0,
+}: PerfHoodProps) {
   const m = usePerformanceMetrics();
+  const [showResult, setShowResult] = useState(false);
+  const prevResultRef = useRef<BenchmarkResult | null>(null);
+
+  const benchmarkEnabled = !!scrollRef;
+
+  const benchConfig: BenchmarkConfig = {
+    scrollRef: scrollRef ?? { current: null },
+    engine,
+    tab,
+    itemCount,
+    itemHeight,
+    contentHeight,
+    liveMetrics: m,
+    activeMounts,
+    totalMounts,
+  };
+
+  const bench = useBenchmark(benchConfig);
+
+  // Auto-show summary when a new result arrives.
+  useEffect(() => {
+    if (bench.result && bench.result !== prevResultRef.current) {
+      prevResultRef.current = bench.result;
+      setShowResult(true);
+    }
+  }, [bench.result]);
+
+  const handleBenchPress = () => {
+    if (bench.isRunning) return;
+    if (bench.result) {
+      // Show existing result again.
+      setShowResult(true);
+    } else {
+      bench.start();
+    }
+  };
+
+  const handleRunAgain = () => {
+    setShowResult(false);
+    bench.start();
+  };
 
   const velStr = scrollVelocity > 5
     ? scrollVelocity >= 1000
@@ -65,89 +205,164 @@ export function PerfHood({ activeMounts, totalMounts, scrollVelocity = 0 }: Perf
     : null;
 
   return (
-    <View style={S.overlay} pointerEvents="none">
-
-      {/* UI (native CADisplayLink) FPS */}
-      <View style={S.row}>
-        <Text style={S.label}>UI </Text>
-        <Text style={[S.val, { color: fpsColor(m.nativeFPS) }]}>{m.nativeFPS}</Text>
-        <Text style={S.unit}>fps </Text>
-        <Text style={S.dim}>{m.frameTimeMs.toFixed(1)}ms</Text>
-      </View>
-
-      {/* JS thread FPS + idle */}
-      <View style={S.row}>
-        <Text style={S.label}>JS </Text>
-        <Text style={[S.val, { color: fpsColor(m.jsFPS) }]}>{m.jsFPS}</Text>
-        <Text style={S.unit}>fps </Text>
-        <Text style={S.dim}>idle </Text>
-        <Text style={[S.val, { color: idleColor(m.jsIdlePct) }]}>{m.jsIdlePct}</Text>
-        <Text style={S.unit}>%</Text>
-      </View>
-
-      {/* Main thread CPU */}
-      <View style={S.row}>
-        <Text style={S.label}>CPU </Text>
-        {m.mainThreadCPU >= 0 ? (
-          <>
-            <Text style={[S.val, { color: cpuColor(m.mainThreadCPU) }]}>{m.mainThreadCPU}</Text>
-            <Text style={S.unit}>%</Text>
-          </>
-        ) : (
-          <Text style={S.dim}>—</Text>
-        )}
-      </View>
-
-      {/* Active / total mounts */}
-      <View style={S.row}>
-        <Text style={S.label}>Cells </Text>
-        <Text style={S.val}>{activeMounts}</Text>
-        <Text style={S.dim}>/{totalMounts}</Text>
-      </View>
-
-      {/* Memory delta */}
-      <View style={S.row}>
-        <Text style={S.label}>Mem </Text>
-        <Text style={[S.val, { color: memColor(Math.abs(m.memoryDeltaMB)) }]}>
-          {m.memoryDeltaMB >= 0 ? '+' : ''}{m.memoryDeltaMB.toFixed(1)}
-        </Text>
-        <Text style={S.unit}> MB</Text>
-        {m.pressureLevel > 0 && (
-          <Text style={[S.unit, { color: m.pressureLevel === 2 ? '#f87171' : '#facc15' }]}>
-            {' '}{m.pressureLevel === 2 ? '⚠' : '△'}
-          </Text>
-        )}
-      </View>
-
-      {/* Scroll velocity — only shown when scrolling */}
-      {velStr != null && (
-        <View style={S.row}>
-          <Text style={S.label}>Vel </Text>
-          <Text style={S.val}>{velStr}</Text>
-          <Text style={S.unit}> pt/s</Text>
-        </View>
+    <>
+      {/* Result modal */}
+      {showResult && bench.result && (
+        <BenchmarkSummary
+          result={bench.result}
+          onClose={() => setShowResult(false)}
+          onRunAgain={handleRunAgain}
+        />
       )}
-    </View>
+
+      <View style={S.overlay} pointerEvents="box-none">
+        {/* Metric rows (no touch interception) */}
+        <View pointerEvents="none">
+          {/* UI (native CADisplayLink) FPS */}
+          <View style={S.row}>
+            <Text style={S.label}>UI </Text>
+            <Text style={[S.val, { color: fpsColor(m.nativeFPS) }]}>{m.nativeFPS}</Text>
+            <Text style={S.unit}>fps </Text>
+            <Text style={S.dim}>{m.frameTimeMs.toFixed(1)}ms</Text>
+          </View>
+
+          {/* JS thread FPS + idle */}
+          <View style={S.row}>
+            <Text style={S.label}>JS </Text>
+            <Text style={[S.val, { color: fpsColor(m.jsFPS) }]}>{m.jsFPS}</Text>
+            <Text style={S.unit}>fps </Text>
+            <Text style={S.dim}>idle </Text>
+            <Text style={[S.val, { color: idleColor(m.jsIdlePct) }]}>{m.jsIdlePct}</Text>
+            <Text style={S.unit}>%</Text>
+          </View>
+
+          {/* Main thread CPU */}
+          <View style={S.row}>
+            <Text style={S.label}>CPU </Text>
+            {m.mainThreadCPU >= 0 ? (
+              <>
+                <Text style={[S.val, { color: cpuColor(m.mainThreadCPU) }]}>{m.mainThreadCPU}</Text>
+                <Text style={S.unit}>%</Text>
+              </>
+            ) : (
+              <Text style={S.dim}>—</Text>
+            )}
+          </View>
+
+          {/* Active / total mounts */}
+          <View style={S.row}>
+            <Text style={S.label}>Cells </Text>
+            <Text style={S.val}>{activeMounts}</Text>
+            <Text style={S.dim}>/{totalMounts}</Text>
+          </View>
+
+          {/* Memory delta */}
+          <View style={S.row}>
+            <Text style={S.label}>Mem </Text>
+            <Text style={[S.val, { color: memColor(Math.abs(m.memoryDeltaMB)) }]}>
+              {m.memoryDeltaMB >= 0 ? '+' : ''}{m.memoryDeltaMB.toFixed(1)}
+            </Text>
+            <Text style={S.unit}> MB</Text>
+            {m.pressureLevel > 0 && (
+              <Text style={[S.unit, { color: m.pressureLevel === 2 ? '#f87171' : '#facc15' }]}>
+                {' '}{m.pressureLevel === 2 ? '⚠' : '△'}
+              </Text>
+            )}
+          </View>
+
+          {/* Scroll velocity */}
+          {velStr != null && (
+            <View style={S.row}>
+              <Text style={S.label}>Vel </Text>
+              <Text style={S.val}>{velStr}</Text>
+              <Text style={S.unit}> pt/s</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Benchmark button / progress */}
+        {benchmarkEnabled && (
+          <Pressable style={S.benchBtn} onPress={handleBenchPress}>
+            {bench.isRunning ? (
+              <Text style={S.benchText} numberOfLines={1}>
+                {bench.currentRun ?? '…'} {Math.round(bench.progress * 100)}%
+              </Text>
+            ) : bench.result ? (
+              <Text style={S.benchText}>▶ Results</Text>
+            ) : (
+              <Text style={S.benchText}>▶ Bench</Text>
+            )}
+          </Pressable>
+        )}
+      </View>
+    </>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Overlay styles ────────────────────────────────────────────────────────────
 
 const S = StyleSheet.create({
   overlay: {
     position: 'absolute',
     bottom: 16,
     right: 10,
-    backgroundColor: 'rgba(0,0,0,0.80)',
+    backgroundColor: 'rgba(0,0,0,0.82)',
     borderRadius: 8,
     paddingVertical: 7,
     paddingHorizontal: 10,
     gap: 3,
-    minWidth: 140,
+    minWidth: 148,
   },
-  row:   { flexDirection: 'row', alignItems: 'baseline' },
-  label: { fontSize: 10, color: '#555', fontFamily: 'Menlo', width: 34 },
-  val:   { fontSize: 11, fontWeight: '700', color: '#ddd', fontFamily: 'Menlo' },
-  unit:  { fontSize: 10, color: '#555', fontFamily: 'Menlo' },
-  dim:   { fontSize: 10, color: '#444', fontFamily: 'Menlo' },
+  row:      { flexDirection: 'row', alignItems: 'baseline' },
+  label:    { fontSize: 10, color: '#555', fontFamily: 'Menlo', width: 34 },
+  val:      { fontSize: 11, fontWeight: '700', color: '#ddd', fontFamily: 'Menlo' },
+  unit:     { fontSize: 10, color: '#555', fontFamily: 'Menlo' },
+  dim:      { fontSize: 10, color: '#444', fontFamily: 'Menlo' },
+  benchBtn: {
+    marginTop: 5,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 5,
+    alignItems: 'center',
+  },
+  benchText: { fontSize: 10, color: '#4ade80', fontWeight: '700', fontFamily: 'Menlo' },
+});
+
+// ── Modal styles ──────────────────────────────────────────────────────────────
+
+const M = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.85)',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  sheet: {
+    backgroundColor: '#111',
+    borderRadius: 12,
+    padding: 16,
+    gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#2a2a2a',
+  },
+  title:    { fontSize: 13, fontWeight: '700', color: '#4ade80', fontFamily: 'Menlo' },
+  subtitle: { fontSize: 10, color: '#555', fontFamily: 'Menlo', marginTop: -4 },
+
+  tableHeader: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#2a2a2a', paddingBottom: 4 },
+  th:          { fontSize: 9, fontWeight: '600', color: '#444', fontFamily: 'Menlo', textAlign: 'right' },
+  tableScroll: { maxHeight: 200 },
+  tableRow:    { flexDirection: 'row', paddingVertical: 3 },
+  td:          { fontSize: 11, color: '#ccc', fontFamily: 'Menlo', textAlign: 'right' },
+
+  aggRow:   { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#2a2a2a', paddingTop: 4, marginTop: -4 },
+  aggLabel: { fontSize: 11, fontWeight: '700', color: '#888', fontFamily: 'Menlo', textAlign: 'right' },
+  aggVal:   { fontSize: 11, fontWeight: '700', fontFamily: 'Menlo', textAlign: 'right' },
+
+  extraStats: { fontSize: 10, color: '#555', fontFamily: 'Menlo' },
+
+  btnRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  btn:    { flex: 1, paddingVertical: 8, borderRadius: 6, backgroundColor: '#1a1a1a', alignItems: 'center' },
+  btnAccent: { backgroundColor: '#1a1a1a' },
+  btnText:   { fontSize: 11, fontWeight: '600', color: '#888', fontFamily: 'Menlo' },
 });

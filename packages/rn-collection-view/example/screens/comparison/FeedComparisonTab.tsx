@@ -224,11 +224,13 @@ function TrackedFeedCell({ item }: { item: FeedItem }) {
 const LAYOUT = list({ estimatedItemHeight: 140 }); // measured by Yoga; estimate for Phase A windowing
 
 export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
-  const renderCount    = useRef(0);
-  const prevOffsetRef  = useRef(0);
-  const prevTimeRef    = useRef(0);
-  const [velocity, setVelocity] = useState(0);
-  // Tick state drives re-renders so PerfHood picks up latest mount counters.
+  const renderCount     = useRef(0);
+  const prevOffsetRef   = useRef(0);
+  const prevTimeRef     = useRef(0);
+  const listRef         = useRef<any>(null);
+  const [velocity,      setVelocity]     = useState(0);
+  const [contentHeight, setContentH]     = useState(0);
+  // Tick drives re-renders so PerfHood picks up latest module-level mount counters.
   const [, setTick] = useState(0);
   React.useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 500);
@@ -247,8 +249,6 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
     prevTimeRef.current   = now;
   };
 
-  // Re-render PerfHood by reading module-level counters on each render.
-  // PerfHood's 500ms interval triggers re-renders which pick up the latest values.
   const renderItem = ({ item }: { item: FeedItem }) => {
     renderCount.current++;
     return <TrackedFeedCell item={item} />;
@@ -259,6 +259,12 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
       activeMounts={feedActiveMounts}
       totalMounts={feedTotalMounts}
       scrollVelocity={velocity}
+      scrollRef={listRef}
+      engine={mode === 'cv' ? 'riff' : 'flash'}
+      tab="feed"
+      itemCount={FEED_DATA.length}
+      itemHeight={140}
+      contentHeight={contentHeight}
     />
   );
 
@@ -266,6 +272,7 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
     return (
       <View style={T.root}>
         <FlashList
+          ref={listRef}
           data={FEED_DATA}
           keyExtractor={item => String(item.id)}
           renderItem={renderItem}
@@ -274,6 +281,7 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
           overrideItemLayout={(layout, item) => { layout.size = TYPE_HEIGHTS[item.type]; }}
           onScroll={handleScroll}
           scrollEventThrottle={100}
+          onContentSizeChange={(_, h) => setContentH(h)}
         />
         {perfHood}
       </View>
@@ -283,12 +291,16 @@ export default function FeedComparisonTab({ mode }: { mode: 'cv' | 'flash' }) {
   return (
     <View style={T.root}>
       <Riff
+        ref={listRef}
         data={FEED_DATA}
         keyExtractor={item => String(item.id)}
         renderItem={renderItem}
         layout={LAYOUT}
-        onScroll={handleScroll}
-        scrollEventThrottle={100}
+        scrollViewProps={{
+          onScroll: handleScroll,
+          scrollEventThrottle: 100,
+          onContentSizeChange: (_, h) => setContentH(h),
+        }}
       />
       {perfHood}
     </View>
