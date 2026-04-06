@@ -80,7 +80,7 @@ function BenchmarkSummary({
       <View style={M.backdrop}>
         <View style={M.sheet}>
           <Text style={M.title}>BENCHMARK — {result.engine.toUpperCase()} · {result.tab}</Text>
-          <Text style={M.subtitle}>{result.itemCount} items · {result.timestamp.slice(11, 19)} UTC</Text>
+          <Text style={M.subtitle}>{result.itemCount} items · {result.rounds}×/run · {result.timestamp.slice(11, 19)} UTC</Text>
 
           {/* Per-run table */}
           <View style={M.tableHeader}>
@@ -175,11 +175,15 @@ export function PerfHood({
 
   const bench = useBenchmark(benchConfig);
 
-  // Auto-show summary when a new result arrives.
+  // Auto-show summary when a new result arrives; hide when result is cleared
+  // (e.g. engine switch resets it to null).
   useEffect(() => {
     if (bench.result && bench.result !== prevResultRef.current) {
       prevResultRef.current = bench.result;
       setShowResult(true);
+    } else if (!bench.result) {
+      prevResultRef.current = null;
+      setShowResult(false);
     }
   }, [bench.result]);
 
