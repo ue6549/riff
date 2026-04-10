@@ -113,7 +113,7 @@ Change `applyPositionsFromState` to use `layer.transform = CATransform3DMakeTran
 
 **Files**: `ios/RNCollectionViewContainerView.mm`
 
-### Opt 4: JS-level cell recycling (revisit) ⬜
+### Opt 4: JS-level cell recycling (revisit) ✅
 **Impact: MEDIUM** — reduces Fiber CREATE/DELETE overhead
 
 The previous pooling attempt failed because native position application (via ShadowNode state) was desynced from React content updates. Two possible fixes:
@@ -159,7 +159,7 @@ if (curVersion == _last.cacheVersion &&
 
 **Files**: `cpp/CollectionViewModule.cpp`
 
-### Opt 7: Incremental render loop (O(delta) instead of O(window_size)) ⬜
+### Opt 7: Incremental render loop (O(delta) instead of O(window_size)) ✅
 **Impact: MEDIUM** — reduces per-render JS work
 
 Currently the `scrollContent` render loop rebuilds React elements for the FULL window (~30 cells) even when only 1-2 cells enter/leave. React's reconciler efficiently diffs the output, but element creation itself (JSX → `React.createElement` for 30 cells with nested view trees) is O(window_size) JS work per render.
@@ -289,3 +289,101 @@ The **consumer React component** (`Riff` / `CollectionView`) is implemented unde
 2. **Horizontal grid — cross-axis height flicker on section boundary.** In horizontal grid, after changing the size of `s[0][0]` and scrolling past section 0, the list sometimes shrinks to a smaller cross-axis height then grows back to the correct height when scrolling back to `s[0][0]`. Likely cause: `_maxCrossAxisHeight` re-derivation from visible items (not all items) when the mutated item scrolls off-screen.
 
 3. **MVC should anchor on resize.** When the list container is resized (e.g., orientation change, split view), the currently visible item should remain visually anchored. Currently no MVC correction is triggered on resize — it only activates on data mutations (insert/delete). This needs a resize-triggered MVC path.
+
+4. **Duplicate item at s[0][0] after insert/delete (seen once).** Two instances of the same item stacked at the same position. Not fully diagnosed. Possible causes: (a) LayoutAnimation 350ms spring causing two cells to briefly overlap during the transition; (b) a pooled SlotManager slot with `Activity=hidden` rendering at a valid LayoutCache position (the pooled cell should be invisible but may flash for 1 frame before Fabric commits `display:none`); (c) a SlotManager edge case where two slots share the same `cacheKey` after mutation-induced pool churn. To investigate: add `__DEV__` assertion in `SlotManager.sync()` after Phase 3 that verifies no two non-pooled slots share the same `cacheKey`. If the assertion fires, it's a recycling bug; if not, it's a visual overlap from LayoutAnimation.
+
+5. **`apply()` removeAttributes key format mismatch (pre-existing, masked by cache clear).** `apply()` in CollectionView.tsx line 1458-1465 calls `removeAttributes(key)` using raw keyExtractor IDs (e.g., `"s0-5"`), but LayoutCache stores entries under prefixed keys (e.g., `"sticky-identity:s0-5"`). The removal is always a no-op. Currently harmless because the fingerprint-based `cache.clear()` in `list.ts prepare()` wipes everything. Will need fixing if the clear behavior ever changes. Fix: map removed keys through the section-key prefix format from `layoutContext.sections[s].itemKeys`.
+
+---
+
+## Correctness Fixes (not perf, but identified during perf work)
+
+### Fix 1: Decouple `measureAhead` from `isVariableHeight` ⬜
+
+`isVariableHeight` is `estimatedItemHeight !== undefined` — it gates whether `measureAhead` is passed to `processScroll` and whether `measureRange` state is updated. This is wrong: a list using `itemHeight` (fixed) with `measureAhead > 0` should still pre-measure.
+
+**Locations (3):**
+- L1269, L1554: `isVariableHeight && measureAhead > 0` → `measureAhead > 0`
+- L1285, L1575: Same pattern in measure-range state update
+- L2048: `!isVariableHeight || measureRange.last < measureRange.first` → `measureRange.last < measureRange.first`
+
+See COLLECTIONVIEW_INTERNALS.md § "isVariableHeight" for full analysis.
+
+---
+
+## RN Version Compatibility Testing
+
+Target versions (from MEMORY.md):
+- **Primary: RN 0.83.4** — full `Activity` API (React 19.2, exclusively new arch)
+- **Compatibility: RN 0.80.x** — new arch, `Activity` absent → top:-9999 fallback
+
+### What to test on each version
+
+Testing must cover both versions before any milestone is marked done. The table below captures what differs between them and what regression risk each area carries.
+
+| Area | RN 0.80.x behaviour | RN 0.83.x behaviour | Risk if broken |
+|------|---------------------|---------------------|----------------|
+| Measure-range cells | `top: -9999` (no `Activity`) | `Activity mode="hidden"` | Blank cells, off-screen render overlap |
+| `Activity` prop availability | Not available — `CollectionView.tsx` must not reference it | Available | Crash / JS error if guarded incorrectly |
+| ShadowNode `layout()` API | Stable since Fabric introduction — same C++ surface | Same | Low — no API delta here |
+| Fabric commit timing | Fabric BG thread; same contract | Same | Low |
+| `useLayoutEffect` ordering | React 18 semantics | React 19.2 semantics | Effects fire differently; check measurement feedback loop |
+| `useDeferredValue` | Available (React 18+) | Available | Low |
+| `processScroll` JSI | Stable — our custom TurboModule, no RN version dependency | Same | Low |
+| `applyMeasurements` / height stash | Pure C++ — no RN API | Same | Low |
+| MVC correction (`_correctionConsumed`) | Pure C++ — no RN API | Same | Low |
+
+### Test matrix per RN version
+
+Run the following scenarios on **both 0.80.x and 0.83.x** after any C++ or native change:
+
+**Scroll correctness**
+- [ ] Fast fling to end of 1000-item list — no blank frames visible after fling stops
+- [ ] Slow scroll up and down — measure-range cells appear before viewport reaches them
+- [ ] Rotate device mid-scroll — relayout without position jump
+- [ ] Horizontal list: all of the above
+
+**Data mutation (MVC)**
+- [ ] MVC on → scroll to bottom → delete 3 items at top → no scroll position shift
+- [ ] MVC on → scroll to bottom → insert 3 items at top → no scroll position shift
+- [ ] MVC on → scroll to bottom → insert 3 → press "Top" button → scrolls to y=0 in one press
+- [ ] MVC off → insert/delete → content size changes correctly, no correction applied
+
+**Measure-range (Activity / top:-9999)**
+- [ ] Cells in measure range are not visible (either hidden or off-screen)
+- [ ] Yoga measurements from measure-range cells flow into LayoutCache correctly
+- [ ] No visual artifact from the `top:-9999` fallback on 0.80.x (cell not clipped into view)
+
+**Sticky headers/footers**
+- [ ] Sticky header stays pinned during fast scroll
+- [ ] Sticky footer (cur-section-footer-test) — verify in both versions
+- [ ] No sticky flicker after MVC correction is applied
+
+**Decorations**
+- [ ] Separators render correctly and do not shift after insert/delete
+- [ ] Section backgrounds render at correct bounds
+
+**SlotManager recycling (Opt 4+7)**
+- [ ] Recycled slots receive correct `item` and `cacheKey` props on first render
+- [ ] No duplicate items visible during rapid insert/delete cycles
+- [ ] Pool drain (maxPoolSize) does not produce blank slots
+
+### How to switch RN versions (local)
+
+The primary dev environment uses **0.83.4** (`packages/rn-collection-view/example/`). To test 0.80.x:
+
+1. Check if a separate example directory or branch exists for 0.80.x; if not, create one.
+2. `cd example && npm install react-native@0.80.x` (or update `package.json`).
+3. `pod install` in `example/ios/` — Podfile `platform :ios, '15.1'` is already set.
+4. Xcode clean build (`Cmd+Shift+K`).
+5. Run the test matrix above.
+
+**Key guard to verify in 0.80.x**: Search for `Activity` in `CollectionView.tsx`. It must be wrapped in a runtime or compile-time guard. The current approach uses `top: measureOnly ? -9999 : undefined` as the fallback; confirm the `Activity` import path is conditionally resolved.
+
+### Timing
+
+Run the full matrix:
+- After any C++ change that affects `applyMeasurements`, MVC correction, or height stash
+- After any native ObjC change to `RNCollectionViewContainerView.mm`
+- Before merging any feature branch to `main`
+- Before the FlashList comparison benchmark session (REQUIREMENTS.md P6.2)
