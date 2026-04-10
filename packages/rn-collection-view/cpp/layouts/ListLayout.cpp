@@ -7,6 +7,13 @@
 #define RNCV_ENABLE_NATIVE_LOGS 0
 #endif
 
+// Set RNCV_ENABLE_MVC_TRACE=1 to log height lookup source in computeSectionFromCache.
+// First 5 items per section + any item whose key matches the MVC anchor key.
+// Keep 0 in normal development.
+#ifndef RNCV_ENABLE_MVC_TRACE
+#define RNCV_ENABLE_MVC_TRACE 0
+#endif
+
 #if DEBUG && RNCV_ENABLE_NATIVE_LOGS
   #ifdef __APPLE__
     #include <os/log.h>
@@ -17,6 +24,21 @@
   #endif
 #else
   #define RNCV_LIST_LOG(fmt, ...) ((void)0)
+#endif
+
+#if DEBUG && RNCV_ENABLE_MVC_TRACE
+  #ifdef __APPLE__
+    #ifndef RNCV_MVC_TRACE_LIST_OS_INCLUDED
+    #define RNCV_MVC_TRACE_LIST_OS_INCLUDED
+    #include <os/log.h>
+    #endif
+    #define RNCV_LIST_TRACE(fmt, ...) os_log_info(os_log_create("com.rncv", "mvc-trace"), "[MVC-TRACE] " fmt, ##__VA_ARGS__)
+  #else
+    #include <android/log.h>
+    #define RNCV_LIST_TRACE(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "MVC-TRACE", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_LIST_TRACE(fmt, ...) ((void)0)
 #endif
 
 namespace rncv {
@@ -782,8 +804,16 @@ void ListLayout::computeSections(const std::vector<ListLayoutParams>& sections) 
   _viewportHeight = !sections.empty() ? sections[0].viewportHeight : 0.0;
   double primary = 0.0;
   RNCV_LIST_LOG("computeSections begin sections=%zu horizontal=%d", sections.size(), (int)_horizontal);
+  RNCV_LIST_TRACE("computeSections begin: %zu sections horizontal=%d", sections.size(), (int)_horizontal);
   for (int s = 0; s < static_cast<int>(sections.size()); ++s) {
-    primary = computeSection(sections[s], s, primary);
+    RNCV_LIST_TRACE("computeSections section[%d]: itemCount=%d stashSize=%zu",
+                    s, sections[s].itemCount, (size_t)0 /* stash size not exposed here */);
+    // Use computeSectionFromCache so the height stash is consulted after insert/delete.
+    // Fallback chain: cache hit → stash hit → p.itemHeights[i] → p.itemHeight (scalar).
+    // computeSection (fresh path) is no longer called here; it remains available for
+    // layout engines that explicitly need a cache-independent path (e.g. first layout
+    // with no stash — computeSectionFromCache handles that transparently via fallback).
+    primary = computeSectionFromCache(sections[s], s, primary);
   }
   RNCV_LIST_LOG("computeSections end totalContentPrimary=%.1f", primary);
 }
@@ -868,17 +898,27 @@ double ListLayout::computeSectionFromCache(const ListLayoutParams& p,
     auto existing = _cache->getAttributes(key);
     // Primary-axis size: cached → stashed → JS per-item heights → scalar estimate.
     double sz;
+    const char* heightSource = "unknown";
     if (existing) {
       sz = H ? existing->frame.width : existing->frame.height;
+      heightSource = "cache";
     } else {
       const double stashed = _cache->getStashedHeight(key);
       if (stashed > 0.0) {
         sz = stashed;
+        heightSource = "stash";
       } else if (!p.itemHeights.empty() && i < static_cast<int>(p.itemHeights.size())) {
         sz = p.itemHeights[i];
+        heightSource = "itemHeights";
       } else {
         sz = p.itemHeight;
+        heightSource = "scalar";
       }
+    }
+    // Trace first 5 items per section (enough to catch estimate vs measured discrepancy).
+    if (i < 5) {
+      RNCV_LIST_TRACE("computeSectionFromCache s[%d][%d] key=%s source=%s sz=%.1f",
+                      sectionIndex, i, key.c_str(), heightSource, sz);
     }
     // Cross-axis size: preserve cached height for horizontal, use crossContent for vertical.
     const double crossSz = H

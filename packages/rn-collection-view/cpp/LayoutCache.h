@@ -244,6 +244,10 @@ private:
   bool        _hasAnchor           = false;
   bool        _mvcEnabled          = false;
   bool        _horizontal          = false; // when true, anchor by X; correction on X axis
+  // One-shot flag: set by computeCorrection(), cleared by snapshotAnchor().
+  // snapshotAnchorIfNeeded() is a no-op while true, preventing re-arming
+  // during animated scrollTo (which would cancel the animation via setContentOffset).
+  bool        _correctionConsumed  = false;
   double      _pendingCorrectionY  = 0;
   bool        _hasPendingCorrection = false;
 

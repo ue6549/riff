@@ -55,6 +55,15 @@ const listDebugLog = (...args: any[]) => {
   console.log(...args);
 };
 
+// Set RNCV_MVC_TRACE_LAYOUT=true to log fingerprint changes, stash/clear events,
+// and the first 5 per-item height lookups passed to computeSections.
+// Keep false in normal development.
+const RNCV_MVC_TRACE_LAYOUT = false;
+const listMvcTrace = (msg: string) => {
+  if (!__DEV__ || !RNCV_MVC_TRACE_LAYOUT) return;
+  console.log(`[MVC-TRACE] ${msg}`);
+};
+
 class ListLayout implements CollectionViewLayout {
   readonly type = 'list';
   readonly horizontal: boolean;
@@ -171,18 +180,31 @@ class ListLayout implements CollectionViewLayout {
     // This preserves Yoga-measured heights across measurement-triggered re-renders.
     // Include both dimensions in fingerprint: horizontal list invalidates on height change, vertical on width.
     const fp = `${context.containerWidth}x${context.containerHeight}|${sectionParams.map(s => `${s.itemCount},${s.headerHeight},${s.footerHeight},${s.emitSeparators},${s.emitSectionBackground},${s.sectionBackgroundInsetTop},${s.sectionBackgroundInsetBottom},${s.sectionBackgroundInsetLeft},${s.sectionBackgroundInsetRight}`).join(';')}`;
-    if (fp !== this._lastFingerprint) {
+    const fingerprintChanged = fp !== this._lastFingerprint;
+    listMvcTrace(`prepare: fingerprintChanged=${fingerprintChanged} sections=${sectionParams.length} totalItems=${sectionParams.reduce((n, s) => n + (s.itemCount as number), 0)}`);
+    if (fingerprintChanged) {
       // Stash measured heights before clearing so they survive the orphan cleanup.
       // computeSectionFromCache falls through to the stash when the main cache
       // has no entry (i.e. after an insert/delete that changed itemCount).
+      listMvcTrace(`prepare: stashHeights + clear (fingerprint changed)`);
       nativeMod.layoutCache.stashHeights();
       nativeMod.layoutCache.clear();
       this._lastFingerprint = fp;
     }
 
+    // Trace first 5 per-item heights per section as they'll be passed to C++.
+    if (RNCV_MVC_TRACE_LAYOUT && __DEV__) {
+      sectionParams.forEach((sec, sIdx) => {
+        const itemHeights = sec.itemHeights as number[] | undefined;
+        const first5 = itemHeights ? itemHeights.slice(0, 5) : [];
+        listMvcTrace(`prepare: s[${sIdx}] itemCount=${sec.itemCount} itemHeights[0..4]=${JSON.stringify(first5)} (${itemHeights ? itemHeights.filter(h => h > 0).length : 0} non-zero)`);
+      });
+    }
+
     nativeMod.listLayout.computeSections(sectionParams);
     // Release stash memory now that computeSections has consumed what it needs.
     nativeMod.layoutCache.clearStash();
+    listMvcTrace(`prepare: computeSections done, stash cleared`);
 
     // Verification: immediately check if header was stored
     const headerCheck = nativeMod.layoutCache.getAttributes('item-0-header');

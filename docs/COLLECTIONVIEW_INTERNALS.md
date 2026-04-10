@@ -834,7 +834,237 @@ if (existing) {
 
 ---
 
-## Codegen Setup (for native pod install)
+## Layout & Measurement Pipeline — Step-by-Step Walkthrough
+
+This section traces how heights flow through the system across three lifecycle phases. Read this before touching any part of the MVC correction, height stash, or layout engine paths.
+
+### Phase 1: Initial Render (no measured heights yet)
+
+```
+React renders CollectionView
+  └─ layoutContext useMemo fires (viewportWidth, sections, data.length deps)
+       └─ prepare useMemo fires
+            ├─ list.ts prepare():
+            │     fingerprint = containerWidth × containerHeight | itemCount per section
+            │     fingerprint differs from "" → stashHeights() [nothing to stash]
+            │                                 → clear() [nothing to clear]
+            │     sectionParams.itemHeights[] = [] (no cache entries → measuredHeightForItem returns undefined)
+            │     computeSections(sectionParams) → computeSectionFromCache() per section
+            │       item loop fallback chain: cache miss → stash miss → p.itemHeights miss → p.itemHeight (SCALAR ESTIMATE)
+            │       All items placed at estimated heights (e.g. every item = 56px)
+            └─ nativeMod.layoutCache.clearStash()
+
+Fabric commit → ShadowNode.layout()
+  └─ Phase 1: reads positions from LayoutCache (estimate-based)
+  └─ Phase 2: Yoga measures each cell's actual height
+              deltas = [(key, estimatedH, yogaH), ...]   ← almost always non-empty
+  └─ Phase 3: snapshotAnchorIfNeeded() → NO-OP (_correctionConsumed=false but _mvcEnabled=false on first render)
+              engine->applyMeasurements(deltas, *cache)
+              → ListLayout::applyMeasurements sorts all items by Y, accumulates delta shift
+              → writes corrected positions back to LayoutCache
+              → native updateState: fires → JS onScroll fires → processScroll recomputes render window
+```
+
+**Key point**: After the first layout, ALL items in the render+measure range have Yoga-measured heights in the LayoutCache (`sizingState=Measured`). Items outside that range still have `sizingState=Placeholder` with estimate heights.
+
+### Phase 2: Scroll
+
+```
+UIScrollViewDelegate.scrollViewDidScroll:
+  └─ cache->setScrollOffset(x, y, timestamp) [UI thread, no JS involved]
+
+onScroll event → JS
+  └─ nativeWindowController.processScroll(scrollY, contentH, ...) [JSI, UI thread]
+       └─ updates renderFirst/renderLast (O(1) arithmetic)
+  └─ if renderRange changed → setState → React re-render
+       └─ SlotManager.sync() → slots update
+       └─ prepare useMemo fires IFF layoutContext changed (usually NOT — data didn't change)
+```
+
+**Key point**: Scroll DOES NOT re-run `prepare()` unless the viewport dimensions change. The LayoutCache persists across scroll events. New cells entering the render window are rendered with `Activity=hidden` in the measure range first, then Yoga measures them → `applyMeasurements` cascades → positions update.
+
+### Phase 3: Data Mutation (insert/delete)
+
+```
+App calls CollectionView insert/delete
+  └─ data changes → React re-render
+       └─ layoutContext useMemo fires (data.length in deps)
+            └─ prepare useMemo fires
+                 ├─ MVC: snapshotAnchor()
+                 │    ← finds first item at or below scrollY in old cache
+                 │    ← stores {anchorKey, anchorY}
+                 │    ← resets _correctionConsumed = false (new transaction)
+                 │
+                 └─ list.ts prepare():
+                      sectionParams.itemHeights[] built from measuredHeightForItemRef
+                        → reads from LayoutCache by key → EMPTY (cache was just cleared)
+                        → returns undefined for all items → itemHeights stays []
+
+                      fingerprint changed (itemCount changed) → stashHeights() + clear()
+                        ← stashHeights() saves {key → measured height} for all Measured entries
+                        ← clear() wipes the cache (orphan cleanup)
+
+                      computeSections(sectionParams)
+                        → computeSectionFromCache() per section (FIXED: was computeSection)
+                           item loop:
+                             cache miss (just cleared)
+                             → stash hit → uses MEASURED height  ✓  ← KEY FIX
+                             → (if no stash) p.itemHeights[i]   (estimate, from JS)
+                             → (if no itemHeights) p.itemHeight  (scalar estimate)
+
+                      clearStash()
+
+Fabric commit → ShadowNode.layout()
+  └─ applyMeasurements: deltas for cells in render range (Yoga re-measures)
+  └─ snapshotAnchorIfNeeded():
+       _hasAnchor=true (JS already snapshotted) → SKIP
+  └─ cache positions updated → native updateState:
+       └─ computeCorrection()
+            newAnchorY = cache.getAttributes(anchorKey).frame.y  (from stash-based layout)
+            correction = newAnchorY - snapshotAnchorY
+            ← with stash fix: newAnchorY ≈ snapshotAnchorY → correction ≈ 0  ✓
+            ← without fix: newAnchorY was estimate-based → large wrong correction
+            _correctionConsumed = true  (prevents re-arming during scrollTo)
+
+       └─ layoutSubviews: applies _pendingMVCCorrection to contentOffset
+```
+
+---
+
+## MVC Correction Bugs — Root Causes & Fixes
+
+### Bug A: Delete → small shift (computeSections used wrong path)
+
+**Root cause**: `computeSections()` was calling `computeSection()` (fresh path) which ignores the stash entirely. After `cache.clear()`, all item heights reverted to scalar estimates. The MVC correction was `newEstimateY - oldMeasuredY` → non-zero → visible shift.
+
+**Fix** (`cpp/layouts/ListLayout.cpp`):
+```cpp
+// computeSections() now calls computeSectionFromCache() for every section.
+// Fallback chain: cache hit → stash hit → p.itemHeights[i] → p.itemHeight
+// computeSection() (fresh path) is no longer called from computeSections().
+primary = computeSectionFromCache(sections[s], s, primary);  // ← was computeSection
+```
+
+**Why computeSectionFromCache is safe for first layout**: On first layout there's no cache AND no stash, so all three fallbacks miss → falls through to `p.itemHeight` (scalar). Same result as `computeSection`. No regression.
+
+### Bug B: Insert → scrollToTop doesn't reach y=0 (MVC re-arming during animation)
+
+**Root cause**: After the insert correction, `_hasAnchor = false` (consumed). During the scrollTo animation, new cells entered the render range → Yoga measured them → deltas in ShadowNode → `snapshotAnchorIfNeeded()` re-armed (hasAnchor=false, mvcEnabled=true) → `applyMeasurements` cascaded → `computeCorrection()` fired → `setContentOffset:animated:NO` cancelled the ongoing scrollTo animation.
+
+**Fix** (`cpp/LayoutCache.h` + `.cpp`):
+```cpp
+// _correctionConsumed = true after computeCorrection().
+// snapshotAnchorIfNeeded() checks it and skips → no re-arm during scrollTo.
+// snapshotAnchor() resets it (new transaction).
+bool _correctionConsumed = false;
+```
+
+**Why this is correct**: The correction is conceptually one-shot per data mutation. The `snapshotAnchor()` call in the JS prepare useMemo marks the start of each mutation transaction and resets the flag. Re-arming during an animated scroll is always wrong — the anchor position at the START of the mutation is what matters for offset preservation.
+
+---
+
+## MVC Trace Logging
+
+Three flags enable verbose MVC lifecycle tracing. All default off:
+
+**JS (`CollectionView.tsx`):**
+```typescript
+const RNCV_MVC_TRACE = false;  // logs: snapshotAnchor call
+```
+
+**JS (`src/layouts/list.ts`):**
+```typescript
+const RNCV_MVC_TRACE_LAYOUT = false;  // logs: fingerprint change, stash/clear, first 5 heights per section
+```
+
+**C++ (`LayoutCache.cpp`, `ListLayout.cpp`, `CollectionViewContainerShadowNode.cpp`):**
+```
+RNCV_ENABLE_MVC_TRACE = 0  // logs: stashHeights count, cache.clear count,
+                            //       snapshotAnchor found/not-found,
+                            //       snapshotAnchorIfNeeded skip reason,
+                            //       computeCorrection delta + consumed,
+                            //       computeSectionFromCache height source per item,
+                            //       applyMeasurements delta count
+```
+
+**ObjC (`RNCollectionViewContainerView.mm`):**
+```
+RNCV_ENABLE_MVC_TRACE = 0  // logs: updateState computeCorrection value,
+                            //       layoutSubviews pendingMVCCorrection,
+                            //       scrollTo target coordinates
+```
+
+To enable all trace: set all four flags to `true`/`1` and clean-build. Expected log sequence for a delete:
+```
+[MVC-TRACE] prepare: calling snapshotAnchor() (MVC enabled, correctionConsumed reset)
+[MVC-TRACE] snapshotAnchor: correctionConsumed reset, hasAnchor was=NO mvcEnabled=YES
+[MVC-TRACE] snapshotAnchor: FOUND key=item-0-5 pos=280.0 scrollOffset=280.0
+[MVC-TRACE] prepare: fingerprintChanged=true sections=1 totalItems=97
+[MVC-TRACE] prepare: stashHeights + clear (fingerprint changed)
+[MVC-TRACE] stashHeights: 52 entries stashed (of 60 total)
+[MVC-TRACE] cache.clear: removing 60 entries
+[MVC-TRACE] computeSections begin: 1 sections horizontal=0
+[MVC-TRACE] computeSectionFromCache s[0][0] key=item-0-0 source=stash sz=62.0
+[MVC-TRACE] computeSectionFromCache s[0][1] key=item-0-1 source=stash sz=56.0
+...
+[MVC-TRACE] snapshotAnchorIfNeeded: SKIP hasAnchor=YES
+[MVC-TRACE] applyMeasurements: 3 deltas first={key=item-0-2 old=56.0 new=62.0}
+[MVC-TRACE] computeCorrection: key=item-0-5 oldPos=280.0 newPos=280.0 correction=0.0 → correctionConsumed=YES
+[MVC-TRACE] updateState: computeCorrection=0.0 pendingMVCBefore=0.0
+[MVC-TRACE] layoutSubviews: pendingMVCCorrection=0.0 offset=(0.0,280.0)
+```
+
+---
+
+## Unit Tests for Layout Calculation + MVC
+
+Located in `packages/rn-collection-view/cpp/tests/`. Pure C++ tests, no native module required.
+
+### Layout Calculation Parity (`ListLayoutTest.cpp`)
+
+Tests that verify all three layout paths produce consistent results for identical inputs:
+
+| Test | Verifies |
+|------|---------|
+| `FreshAndCacheIdentical` | `computeSection` and `computeSectionFromCache` produce identical Y positions given same item heights |
+| `StashFallback_UsesStashedHeight` | After `stashHeights()` + `clear()`, `computeSectionFromCache` uses stashed heights, not estimates |
+| `FallbackChain_Cache_Stash_ItemHeights_Scalar` | Tests each level: cache hit → stash hit → itemHeights[i] → scalar |
+| `InsertAtStart_PositionsShift` | Insert 3 items at index 0 → items 3+ shift by exactly 3 × (itemHeight + spacing) |
+| `DeleteAtStart_PositionsShiftUp` | Delete 3 items from index 0 → items below shift up by correct amount |
+| `InsertInMiddle_PreservedBefore_ShiftedAfter` | Items before insertion point: positions unchanged; items after: shifted |
+
+### MVC Correction Math (`MVCCorrectionTest.cpp`)
+
+| Test | Verifies |
+|------|---------|
+| `SnapshotThenCorrection_ZeroIfUnchanged` | snapshotAnchor → no position change → computeCorrection returns 0 |
+| `SnapshotThenCorrection_DeltaOnShift` | snapshotAnchor → positions shift by D → computeCorrection returns D |
+| `CorrectionConsumed_PreventsRearm` | After computeCorrection, _correctionConsumed=true → snapshotAnchorIfNeeded no-ops |
+| `SnapshotAnchor_ResetsCorrectionConsumed` | snapshotAnchor() resets _correctionConsumed → subsequent snapshotAnchorIfNeeded can fire |
+| `AnchorDeleted_ReturnsZero` | Anchor key deleted before computeCorrection → returns 0 (no crash) |
+| `MVCDisabled_SnapshotAnchorIfNeeded_NoOp` | _mvcEnabled=false → snapshotAnchorIfNeeded always skips |
+
+### applyMeasurements Cascade (`ApplyMeasurementsTest.cpp`)
+
+| Test | Verifies |
+|------|---------|
+| `SingleDelta_ShiftsBelow` | One item height change → all items below shift by exact delta, items above unchanged |
+| `MultipleDelta_AggregateShift` | Multiple items change → aggregate shift accumulates from top to bottom correctly |
+| `ItemAboveFirstDelta_Unchanged` | Items before the first delta: position untouched |
+
+### JS Unit Tests (`SlotManagerTest.ts`, `LayoutKeyTest.ts`)
+
+Run with Jest (no native module; cache methods are mocked).
+
+| Test | Verifies |
+|------|---------|
+| `SlotManager_Phase3CaseB_NoDuplicateRender` | Phase 3 Case B guard prevents `dataKeyToSlot` corruption on insert→delete in same render |
+| `SlotManager_Recycle_CorrectType` | Slots only recycled within same itemType pool |
+| `SectionedKeyExtractor_FlowsFromLayoutContext` | `sectionedKeyExtractorCb` reads `layoutContextRef.current.itemKeys`, not reconstructs |
+
+---
+
+
 
 The library is NOT in `node_modules`. Auto-linking and codegen are driven by:
 

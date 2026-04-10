@@ -33,10 +33,23 @@ using namespace facebook::react;
 #define RNCV_ENABLE_NATIVE_LOGS 1
 #endif
 
+// Set RNCV_ENABLE_MVC_TRACE=1 to enable verbose MVC lifecycle tracing.
+// Covers updateState:, layoutSubviews, scrollTo, and scrollViewDidScroll.
+// Keep 0 in normal development; enable only to debug insert/delete/correction bugs.
+#ifndef RNCV_ENABLE_MVC_TRACE
+#define RNCV_ENABLE_MVC_TRACE 0
+#endif
+
 #if DEBUG && RNCV_ENABLE_NATIVE_LOGS
 #define RNCV_LOG(fmt, ...) NSLog(@"[RNCV] " @ fmt, ##__VA_ARGS__)
 #else
 #define RNCV_LOG(fmt, ...) ((void)0)
+#endif
+
+#if DEBUG && RNCV_ENABLE_MVC_TRACE
+#define RNCV_MVC_TRACE(fmt, ...) NSLog(@"[MVC-TRACE] " @ fmt, ##__VA_ARGS__)
+#else
+#define RNCV_MVC_TRACE(fmt, ...) ((void)0)
 #endif
 
 @interface RNCollectionViewContainerView () <RCTRNCollectionViewContainerViewProtocol>
@@ -143,6 +156,8 @@ using namespace facebook::react;
     MAX(0.0, MIN((CGFloat)x, maxX)),
     MAX(0.0, MIN((CGFloat)y, maxY))
   );
+  RNCV_MVC_TRACE("scrollTo x=%.1f y=%.1f animated=%s target=(%.1f,%.1f)",
+                 x, y, animated ? "YES" : "NO", target.x, target.y);
   [_scrollView setContentOffset:target animated:animated];
 }
 
@@ -280,6 +295,8 @@ using namespace facebook::react;
     auto cache = facebook::react::layoutCacheForId(_layoutCacheId);
     if (cache) {
       double correction = cache->computeCorrection();
+      RNCV_MVC_TRACE("updateState: computeCorrection=%.1f pendingMVCBefore=%.1f",
+                     correction, _pendingMVCCorrection);
       if (std::abs(correction) > 0.5) {
         _pendingMVCCorrection = correction;
       }
@@ -420,15 +437,21 @@ using namespace facebook::react;
   // observe contentOffset via KVO and call _applyTransform when it changes. By deferring until
   // here, their center/bounds already reflect final post-Yoga layout, so _applyTransform reads
   // the correct naturalY and produces the right sticky transform.
+  RNCV_MVC_TRACE("layoutSubviews: pendingMVCCorrection=%.1f offset=(%.1f,%.1f)",
+                 _pendingMVCCorrection, _scrollView.contentOffset.x, _scrollView.contentOffset.y);
   if (std::abs(_pendingMVCCorrection) > 0.5) {
     CGPoint offset = _scrollView.contentOffset;
     if (_horizontal) {
       RNCV_LOG("applying MVC correction=%.1f oldX=%.1f newX=%.1f",
                _pendingMVCCorrection, offset.x, offset.x + _pendingMVCCorrection);
+      RNCV_MVC_TRACE("layoutSubviews: APPLYING correction=%.1f oldX=%.1f newX=%.1f",
+                     _pendingMVCCorrection, offset.x, offset.x + _pendingMVCCorrection);
       offset.x += (CGFloat)_pendingMVCCorrection;
     } else {
       RNCV_LOG("applying MVC correction=%.1f oldY=%.1f newY=%.1f",
                _pendingMVCCorrection, offset.y, offset.y + _pendingMVCCorrection);
+      RNCV_MVC_TRACE("layoutSubviews: APPLYING correction=%.1f oldY=%.1f newY=%.1f",
+                     _pendingMVCCorrection, offset.y, offset.y + _pendingMVCCorrection);
       offset.y += (CGFloat)_pendingMVCCorrection;
     }
     _applyingCorrection = YES;

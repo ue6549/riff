@@ -577,6 +577,16 @@ interface FlattenResult<T> {
 }
 
 const RNCV_DEBUG_LOGS = false;
+// Set to true to enable verbose MVC lifecycle tracing across the JS layer.
+// Covers: snapshotAnchor, fingerprint change + stash, computeSections heights,
+// measuredHeightForItem lookups, processScroll ranges, onScroll events.
+// Keep false in normal development; enable only to debug insert/delete/correction bugs.
+const RNCV_MVC_TRACE = false;
+
+function rncvMvcTrace(msg: string) {
+  if (!__DEV__ || !RNCV_MVC_TRACE) return;
+  console.log(`[MVC-TRACE] ${msg}`);
+}
 
 function rncvLog(tag: string, payload: Record<string, unknown>) {
   if (!__DEV__ || !RNCV_DEBUG_LOGS) return;
@@ -1230,6 +1240,7 @@ export function Riff<T = unknown>({
     // Only when maintainVisibleContentPosition is enabled. The anchor is the item
     // with the smallest Y >= current scrollY — the first fully-visible item.
     if (maintainVisibleContentPosition) {
+      rncvMvcTrace('prepare: calling snapshotAnchor() (MVC enabled, correctionConsumed reset)');
       nativeLayoutCache.snapshotAnchor();
     }
     effectiveLayout.prepare(layoutContext);

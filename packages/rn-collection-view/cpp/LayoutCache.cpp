@@ -8,6 +8,14 @@
 #define RNCV_ENABLE_NATIVE_LOGS 0
 #endif
 
+// Set RNCV_ENABLE_MVC_TRACE=1 to enable verbose MVC lifecycle tracing.
+// Covers: stashHeights, cache.clear, snapshotAnchor, snapshotAnchorIfNeeded,
+// computeCorrection, and height source in computeSectionFromCache.
+// Keep 0 in normal development; enable only to debug insert/delete/correction bugs.
+#ifndef RNCV_ENABLE_MVC_TRACE
+#define RNCV_ENABLE_MVC_TRACE 0
+#endif
+
 #if DEBUG && RNCV_ENABLE_NATIVE_LOGS
   #ifdef __APPLE__
     #include <os/log.h>
@@ -18,6 +26,21 @@
   #endif
 #else
   #define RNCV_MVC_LOG(fmt, ...) ((void)0)
+#endif
+
+#if DEBUG && RNCV_ENABLE_MVC_TRACE
+  #ifdef __APPLE__
+    #ifndef RNCV_MVC_LOG_HEADER_INCLUDED
+    #define RNCV_MVC_LOG_HEADER_INCLUDED
+    #include <os/log.h>
+    #endif
+    #define RNCV_MVC_TRACE(fmt, ...) os_log_info(os_log_create("com.rncv", "mvc-trace"), "[MVC-TRACE] " fmt, ##__VA_ARGS__)
+  #else
+    #include <android/log.h>
+    #define RNCV_MVC_TRACE(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "MVC-TRACE", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_MVC_TRACE(fmt, ...) ((void)0)
 #endif
 
 namespace rncv {
@@ -67,6 +90,7 @@ void LayoutCache::removeAttributes(const std::string& key) {
 
 void LayoutCache::clear() {
   std::lock_guard<std::mutex> lock(_mutex);
+  RNCV_MVC_TRACE("cache.clear: removing %zu entries", _map.size());
   _map.clear();
   _insertionOrder.clear();
   _index.clear();
@@ -86,6 +110,8 @@ void LayoutCache::stashHeights() {
       _heightStash[kv.first] = sz;
     }
   }
+  RNCV_MVC_TRACE("stashHeights: %zu entries stashed (of %zu total)",
+                  _heightStash.size(), _map.size());
 }
 
 double LayoutCache::getStashedHeight(const std::string& key) const {
@@ -265,15 +291,22 @@ void LayoutCache::_snapshotAnchorLocked() {
     _hasAnchor = true;
     RNCV_MVC_LOG("snapshotAnchor: key=%s oldY=%.1f scrollOffset=%.1f",
                  _anchorKey.c_str(), bestPrimary, scrollPrimary);
+    RNCV_MVC_TRACE("snapshotAnchor: FOUND key=%s pos=%.1f scrollOffset=%.1f",
+                   _anchorKey.c_str(), bestPrimary, scrollPrimary);
   } else {
     _hasAnchor = false;
     RNCV_MVC_LOG("snapshotAnchor: no anchor found (scrollOffset=%.1f mapSize=%zu)",
                  scrollPrimary, _map.size());
+    RNCV_MVC_TRACE("snapshotAnchor: NOT FOUND scrollOffset=%.1f mapSize=%zu",
+                   scrollPrimary, _map.size());
   }
 }
 
 void LayoutCache::snapshotAnchor() {
   std::lock_guard<std::mutex> lock(_mutex);
+  _correctionConsumed = false;  // new transaction — re-arm allowed
+  RNCV_MVC_TRACE("snapshotAnchor: correctionConsumed reset, hasAnchor was=%s mvcEnabled=%s",
+                  _hasAnchor ? "YES" : "NO", _mvcEnabled ? "YES" : "NO");
   _snapshotAnchorLocked();
 }
 
@@ -289,15 +322,27 @@ void LayoutCache::setHorizontal(bool horizontal) {
 
 void LayoutCache::snapshotAnchorIfNeeded() {
   std::lock_guard<std::mutex> lock(_mutex);
-  if (_hasAnchor) return;   // JS already snapshotted before prepare()
-  if (!_mvcEnabled) return; // MVC disabled — don't auto-snapshot
+  if (_hasAnchor) {
+    RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP hasAnchor=YES");
+    return;   // JS already snapshotted before prepare()
+  }
+  if (!_mvcEnabled) {
+    RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP mvcEnabled=NO");
+    return;   // MVC disabled — don't auto-snapshot
+  }
+  if (_correctionConsumed) {
+    RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP correctionConsumed=YES (prevents re-arm during scrollTo)");
+    return;   // already corrected this transaction — don't re-arm
+  }
+  RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SNAPSHOTTING (size-change path)");
   _snapshotAnchorLocked();
 }
 
 double LayoutCache::computeCorrection() {
   std::lock_guard<std::mutex> lock(_mutex);
   if (!_hasAnchor) return 0;
-  _hasAnchor = false; // one-shot
+  _hasAnchor = false;          // one-shot
+  _correctionConsumed = true;  // prevent snapshotAnchorIfNeeded re-arming this transaction
   auto it = _map.find(_anchorKey);
   if (it == _map.end()) {
     // Anchor was deleted — no correction
@@ -306,8 +351,10 @@ double LayoutCache::computeCorrection() {
   const double newPos = _horizontal ? it->second.frame.x : it->second.frame.y;
   const double oldPos = _horizontal ? _anchorX : _anchorY;
   const double correction = newPos - oldPos;
-  RNCV_MVC_LOG("computeCorrection: key=%s oldY=%.1f newY=%.1f correction=%.1f",
+  RNCV_MVC_LOG("computeCorrection: key=%s oldY=%.1f newY=%.1f correction=%.1f consumed=true",
                _anchorKey.c_str(), oldPos, newPos, correction);
+  RNCV_MVC_TRACE("computeCorrection: key=%s oldPos=%.1f newPos=%.1f correction=%.1f → correctionConsumed=YES",
+                  _anchorKey.c_str(), oldPos, newPos, correction);
   _pendingCorrectionY   = correction;
   _hasPendingCorrection = true;
   return correction;

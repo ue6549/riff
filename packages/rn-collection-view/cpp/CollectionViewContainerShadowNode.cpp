@@ -14,6 +14,11 @@
 #define RNCV_ENABLE_NATIVE_LOGS 1
 #endif
 
+// Set RNCV_ENABLE_MVC_TRACE=1 to enable verbose MVC lifecycle tracing.
+#ifndef RNCV_ENABLE_MVC_TRACE
+#define RNCV_ENABLE_MVC_TRACE 0
+#endif
+
 #if DEBUG && RNCV_ENABLE_NATIVE_LOGS
   #ifdef __APPLE__
     #include <cstdio>
@@ -24,6 +29,18 @@
   #endif
 #else
   #define RNCV_SN_LOG(fmt, ...) ((void)0)
+#endif
+
+#if DEBUG && RNCV_ENABLE_MVC_TRACE
+  #ifdef __APPLE__
+    #include <cstdio>
+    #define RNCV_SN_MVC_TRACE(fmt, ...) do { fprintf(stderr, "[MVC-TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+  #else
+    #include <android/log.h>
+    #define RNCV_SN_MVC_TRACE(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "MVC-TRACE", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_SN_MVC_TRACE(fmt, ...) ((void)0)
 #endif
 
 namespace facebook::react {
@@ -296,6 +313,8 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     const auto cacheVersionBeforeApply = cache->version();
     RNCV_SN_LOG("applyMeasurements: %zu deltas (first: key=%s old=%.1f new=%.1f)",
                 deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
+    RNCV_SN_MVC_TRACE("applyMeasurements: %zu deltas first={key=%s old=%.1f new=%.1f}",
+                      deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
     bool handled = engine->applyMeasurements(deltas, *cache);
     RNCV_SN_LOG("applyMeasurements handled=%s cacheVersionBefore=%llu cacheVersionAfter=%llu",
                 handled ? "YES" : "NO",
