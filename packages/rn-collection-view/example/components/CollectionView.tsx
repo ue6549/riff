@@ -1133,6 +1133,10 @@ export function Riff<T = unknown>({
   const lastCacheVersionRef = useRef(0);
   const nativeLayoutCache = nativeMod.layoutCache;
 
+  // Scroll diagnostic counters — only allocated when RNCV_DEBUG_LOGS is true.
+  // Accumulates per-second stats: total onScroll calls, band-skips, lcv re-renders, rr re-renders.
+  const _diagRef = useRef({ totalScroll: 0, bandSkip: 0, lcvRender: 0, rrRender: 0, windowStart: Date.now() });
+
   // M4.1 measure-range — computed inside the layout effect (same batch as
   // renderRange) to prevent a render cascade. Extends the render range by
   // measureAhead viewport-heights in both directions.
@@ -1651,15 +1655,51 @@ export function Riff<T = unknown>({
 
       // Cache version — check after processScroll so we read the same version
       // that was active during the spatial queries.
-      if (scrollResult.cacheVersion !== lastCacheVersionRef.current) {
+      const _lcvChanged = scrollResult.cacheVersion !== lastCacheVersionRef.current;
+      if (_lcvChanged) {
         lastCacheVersionRef.current = scrollResult.cacheVersion;
         setLayoutCacheVersion(v => v + 1);
       }
 
       const budgetedR = { first: scrollResult.renderFirst, last: scrollResult.renderLast };
-      if (rangeChanged(prevRenderRef.current, budgetedR)) {
+      const _rrChanged = rangeChanged(prevRenderRef.current, budgetedR);
+      if (_rrChanged) {
         prevRenderRef.current = budgetedR;
         setRenderRange(budgetedR);
+      }
+
+      // ── Scroll diagnostic (RNCV_DEBUG_LOGS) ────────────────────────────────
+      // Logs a per-second summary: scroll rate, band-skip rate, and which state
+      // changes are driving React re-renders. Use to confirm Opt 6 (band-skip)
+      // and diagnose what's causing JS thread load.
+      //
+      // Band-skip: processScroll returned the same cacheVersion as last frame AND
+      // the same render range → C++ skipped all spatial queries (Opt 6 fired).
+      // lcvRender: Yoga measured a cell, cacheVersion bumped → full React re-render.
+      // rrRender:  render window boundary moved → React re-render for new cells.
+      //
+      // Healthy steady-state scroll: bandSkip/s ≈ totalScroll/s, lcvRender/s ≈ 0.
+      // Variable-height initial scroll: lcvRender/s ≈ totalScroll/s (measurements).
+      if (__DEV__ && RNCV_DEBUG_LOGS) {
+        const d = _diagRef.current;
+        d.totalScroll++;
+        const _isBandSkip = !_lcvChanged && !_rrChanged &&
+          scrollResult.renderFirst === prevRenderRef.current.first &&
+          scrollResult.renderLast  === prevRenderRef.current.last;
+        if (_isBandSkip) d.bandSkip++;
+        if (_lcvChanged) d.lcvRender++;
+        if (_rrChanged)  d.rrRender++;
+        const elapsed = Date.now() - d.windowStart;
+        if (elapsed >= 1000) {
+          const s = (elapsed / 1000).toFixed(1);
+          console.log(
+            `[RNCV-SCROLL] per ${s}s: scroll=${d.totalScroll} bandSkip=${d.bandSkip}` +
+            ` lcvRender=${d.lcvRender} rrRender=${d.rrRender}` +
+            ` (recycling: see [RNCV-CACHE] hitRate)`
+          );
+          d.totalScroll = 0; d.bandSkip = 0; d.lcvRender = 0; d.rrRender = 0;
+          d.windowStart = Date.now();
+        }
       }
 
       // Measure range — returned by processScroll when measureAheadMult > 0.
