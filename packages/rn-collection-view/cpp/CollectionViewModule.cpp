@@ -576,7 +576,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             rFirst = std::numeric_limits<int>::max();
             rLast  = std::numeric_limits<int>::min();
             for (const auto& a : renderAttrs) {
-              int fi = toFlatIdx(a);
+              int fi = a.flatIndex >= 0 ? a.flatIndex : toFlatIdx(a);
               if (fi < 0) continue;
               if (fi < rFirst) rFirst = fi;
               if (fi > rLast)  rLast  = fi;
@@ -588,7 +588,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             vFirst = std::numeric_limits<int>::max();
             vLast  = std::numeric_limits<int>::min();
             for (const auto& a : visAttrs) {
-              int fi = toFlatIdx(a);
+              int fi = a.flatIndex >= 0 ? a.flatIndex : toFlatIdx(a);
               if (fi < 0) continue;
               if (fi < vFirst) vFirst = fi;
               if (fi > vLast)  vLast  = fi;
