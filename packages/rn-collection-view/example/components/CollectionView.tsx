@@ -578,7 +578,7 @@ interface FlattenResult<T> {
   declaredHeights:           Map<string, number>;
 }
 
-const RNCV_DEBUG_LOGS = true;
+const RNCV_DEBUG_LOGS = false;
 // Set to true to enable verbose MVC lifecycle tracing across the JS layer.
 // Covers: snapshotAnchor, fingerprint change + stash, computeSections heights,
 // measuredHeightForItem lookups, processScroll ranges, onScroll events.
