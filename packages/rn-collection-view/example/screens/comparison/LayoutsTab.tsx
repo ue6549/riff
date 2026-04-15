@@ -819,7 +819,7 @@ export function MasonryDemo() {
   const [ms0Items, setMs0Items] = useState<MasonryItem[]>(MS0_INIT);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
-  const [decoFirst, setDecoFirst] = useState(false);
+  const [decoFirst, setDecoFirst] = useState(true); // POC test 2: decorations first
   const [decoCount, setDecoCount] = useState(0);
   const [resizedIds, setResizedIds] = useState(() => new Set<string>());
   const insertCounter = useRef(MS0_INIT.length);
