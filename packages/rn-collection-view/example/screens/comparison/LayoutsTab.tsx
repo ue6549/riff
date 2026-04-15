@@ -609,7 +609,7 @@ export function ListDemo() {
         __debugNoContentWrapper={listUsePressable}
         stickyMode="push"
         estimatedItemHeight={56}
-        extraData={resizedIds}
+        extraData={`${resizedIds.size}-${listUsePressable}`}
         scrollViewProps={{ style: { backgroundColor: '#2a2a3e' }, indicatorStyle: 'white' }}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
@@ -994,7 +994,7 @@ export function MasonryDemo() {
         layout={masonryLayout}
         stickyMode="push"
         estimatedItemHeight={120}
-        extraData={resizedIds}
+        extraData={`${resizedIds.size}-${cellMode}`}
         __debugNoContentWrapper={noWrapper}
         maintainVisibleContentPosition={mvcEnabled}
         decorationRenderers={decorationRenderers}
