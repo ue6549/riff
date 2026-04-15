@@ -67,9 +67,19 @@ using namespace facebook::react;
 {
   auto adjusted = layoutMetrics;
   // Preserve the current native position — it was set by applyPositionsFromState
-  // and is the source of truth.  Only let Yoga-measured SIZE through.
+  // and is the source of truth for POSITION.
   adjusted.frame.origin.x = self.frame.origin.x;
   adjusted.frame.origin.y = self.frame.origin.y;
+  // Also preserve the current native size if Yoga reports 0.
+  // Yoga may measure a cell as 0-height before content is committed.
+  // applyPositionsFromState sets the correct size from the LayoutCache.
+  // Letting Yoga overwrite with 0 makes children invisible.
+  if (adjusted.frame.size.height <= 0 && self.frame.size.height > 0) {
+    adjusted.frame.size.height = self.frame.size.height;
+  }
+  if (adjusted.frame.size.width <= 0 && self.frame.size.width > 0) {
+    adjusted.frame.size.width = self.frame.size.width;
+  }
   [super updateLayoutMetrics:adjusted oldLayoutMetrics:oldLayoutMetrics];
 }
 
