@@ -951,6 +951,11 @@ export function Riff<T = unknown>({
   const sectionedRenderItem = useCallback((info: RenderItemInfo<any>) => {
     if (!propSections) return propRenderItem(info);
     const fi = info.item as FlatItem<T>;
+#region agent log
+    if (__DEV__) {
+      fetch('http://127.0.0.1:7432/ingest/64432855-ad97-450d-9bb5-1794433e180b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'17d73b'},body:JSON.stringify({sessionId:'17d73b',runId:'pre-fix-1',hypothesisId:'H4',location:'CollectionView.tsx:sectionedRenderItem',message:'sectioned dispatch path',data:{kind:fi?._kind,sectionIndex:fi?.sectionIndex,itemIndex:(fi as any)?.itemIndex,flatIndex:info.index},timestamp:Date.now()})}).catch(()=>{});
+    }
+#endregion
     if (fi._kind === 'header') return propSections[fi.sectionIndex]?.header?.render() ?? null;
     if (fi._kind === 'footer') return propSections[fi.sectionIndex]?.footer?.render() ?? null;
     return propRenderItem({ item: fi.item, sectionIndex: fi.sectionIndex, itemIndex: fi.itemIndex });
@@ -1973,6 +1978,11 @@ export function Riff<T = unknown>({
       attrH: attr?.frame?.height,
       cellWidth,
     });
+#region agent log
+    if (__DEV__ && effectiveLayout.type === 'masonry') {
+      fetch('http://127.0.0.1:7432/ingest/64432855-ad97-450d-9bb5-1794433e180b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'17d73b'},body:JSON.stringify({sessionId:'17d73b',runId:'pre-fix-1',hypothesisId:'H2',location:'CollectionView.tsx:renderCell',message:'masonry cell input layout values',data:{index,measureOnly,mode,kind:fiDesc?._kind,sectionIndex:fiDesc?.sectionIndex,cacheKey,attrHeight:attr?.frame?.height,attrWidth:attr?.frame?.width,cellWidth},timestamp:Date.now()})}).catch(()=>{});
+    }
+#endregion
 
     // For horizontal layouts the cross-axis dimension (height) is determined by the engine:
     //
@@ -1996,7 +2006,9 @@ export function Riff<T = unknown>({
     // ShadowNode measures via Yoga — no RNMeasuredCell wrapping needed.
     const content = (
       <CellWrapper mode={mode}>
-        <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} extraData={extraData} />
+        <View collapsable={false}>
+          <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} extraData={extraData} />
+        </View>
       </CellWrapper>
     );
 
@@ -2051,6 +2063,9 @@ export function Riff<T = unknown>({
         onLayout={effectiveLayout.type === 'masonry' && __DEV__ ? (e: any) => {
           const { width, height } = e.nativeEvent.layout;
           console.log(`[CELL-LAYOUT] key=${key} ck=${cacheKey} w=${width.toFixed(0)} h=${height.toFixed(0)} mo=${measureOnly}`);
+#region agent log
+          fetch('http://127.0.0.1:7432/ingest/64432855-ad97-450d-9bb5-1794433e180b',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'17d73b'},body:JSON.stringify({sessionId:'17d73b',runId:'pre-fix-1',hypothesisId:'H3',location:'CollectionView.tsx:RNMeasuredCell.onLayout',message:'masonry measured cell layout',data:{key,cacheKey,measureOnly,width,height,mode},timestamp:Date.now()})}).catch(()=>{});
+#endregion
         } : undefined}
       >
         {content}
