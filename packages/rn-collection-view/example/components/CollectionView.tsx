@@ -2006,10 +2006,12 @@ export function Riff<T = unknown>({
     // ShadowNode measures via Yoga — no RNMeasuredCell wrapping needed.
     // The View wrapper prevents Fabric view flattening from collapsing content
     // into RNMeasuredCellView, which causes Yoga to compute height=0 for children.
+    // POC: set to true to test without View wrapper
+    const _SKIP_VIEW_WRAPPER = true;
     const innerContent = <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} extraData={extraData} />;
     const content = (
       <CellWrapper mode={mode}>
-        {__debugNoContentWrapper ? innerContent : <View>{innerContent}</View>}
+        {_SKIP_VIEW_WRAPPER ? innerContent : <View>{innerContent}</View>}
       </CellWrapper>
     );
 
