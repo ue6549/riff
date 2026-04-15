@@ -52,9 +52,8 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class MasonryLayoutEngine implements CollectionViewLayout {
   readonly type = 'masonry';
   readonly horizontal: boolean;
-  // Masonry uses shortest-column placement — items are NOT sorted by primary position
-  // within a single column order. Binary search path works but let's use spatial queries
-  // for correctness until binary search is verified for multi-column layouts.
+  // TODO: verify binary search works for masonry, then remove this.
+  // Temporarily using spatial queries to unblock masonry rendering.
   readonly needsSpatialQuery = true;
   private readonly delegate: MasonryLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
