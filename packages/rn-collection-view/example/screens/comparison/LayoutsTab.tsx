@@ -895,7 +895,9 @@ export function MasonryDemo() {
   // ── POC cell modes for Fabric flattening diagnosis ─────────────────────────
   type CellMode = 'default' | 'pressable' | 'view' | 'flexShrink0' | 'collapsable' | 'natural' | 'redundant';
   const CELL_MODES: CellMode[] = ['default', 'pressable', 'view', 'flexShrink0', 'collapsable', 'natural', 'redundant'];
-  const [cellMode, setCellMode] = useState<CellMode>('default');
+  // ── POC: change this default to test each mode on fresh reload ──
+  // Options: 'default' | 'pressable' | 'view' | 'flexShrink0' | 'collapsable' | 'natural' | 'redundant'
+  const [cellMode, setCellMode] = useState<CellMode>('pressable');
   const cycleCellMode = useCallback(() => {
     setCellMode(prev => {
       const idx = CELL_MODES.indexOf(prev);
