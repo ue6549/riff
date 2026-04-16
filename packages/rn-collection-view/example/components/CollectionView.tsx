@@ -891,7 +891,7 @@ export function Riff<T = unknown>({
   sectionInsetLeft = 0,
   sectionInsetRight = 0,
   renderMultiplier = 0.5,
-  mountedWindowSize = 3.0,
+  mountedWindowSize = 4.0,
   measureAhead = 0,
   initialNumToRender = 10,
   onRenderCountChange,

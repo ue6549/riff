@@ -52,9 +52,6 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class MasonryLayoutEngine implements CollectionViewLayout {
   readonly type = 'masonry';
   readonly horizontal: boolean;
-  // TODO: verify binary search works for masonry, then remove this.
-  // Temporarily using spatial queries to unblock masonry rendering.
-  readonly needsSpatialQuery = true;
   private readonly delegate: MasonryLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
 
