@@ -21,6 +21,14 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @interface RNMeasuredCellView : RCTViewComponentView
 
+/**
+ * Set to YES by RNCollectionViewContainerView.applyPositionsFromState when this
+ * cell is a direct container child and the ShadowNode is the position authority.
+ * When NO (default), Fabric/Yoga CSS absolute position is used — this is the case
+ * for H-section cells that are children of RNOrthogonalSectionView.
+ */
+@property (nonatomic) BOOL shadowNodePositioned;
+
 @end
 
 NS_ASSUME_NONNULL_END

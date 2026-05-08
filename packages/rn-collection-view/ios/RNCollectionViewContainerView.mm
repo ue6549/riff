@@ -1,4 +1,5 @@
 #import "RNCollectionViewContainerView.h"
+#import "RNMeasuredCellView.h"
 
 // Our custom ShadowNode and ComponentDescriptor (NOT the codegen-generated ones).
 #import "CollectionViewContainerComponentDescriptor.h"
@@ -592,6 +593,11 @@ using namespace facebook::react;
 
     if (targetW > 0 && targetH > 0 &&
         (differsX || differsY || differsW || differsH)) {
+      // Mark as ShadowNode-positioned so updateLayoutMetrics: preserves this origin
+      // rather than letting Fabric's Yoga layout overwrite it.
+      if ([child isKindOfClass:[RNMeasuredCellView class]]) {
+        ((RNMeasuredCellView *)child).shadowNodePositioned = YES;
+      }
       if (hasActiveTransform) {
         // Keep transformed sticky views stable by updating their natural geometry
         // (bounds + center) instead of transformed frame.

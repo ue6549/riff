@@ -56,7 +56,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class FlowLayoutEngine implements CollectionViewLayout {
   readonly type = 'flow';
   readonly horizontal: boolean;
-  private readonly delegate: FlowLayoutDelegate;
+  readonly delegate: FlowLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: FlowLayoutDelegate) {

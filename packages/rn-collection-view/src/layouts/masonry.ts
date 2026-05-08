@@ -52,7 +52,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class MasonryLayoutEngine implements CollectionViewLayout {
   readonly type = 'masonry';
   readonly horizontal: boolean;
-  private readonly delegate: MasonryLayoutDelegate;
+  readonly delegate: MasonryLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: MasonryLayoutDelegate) {

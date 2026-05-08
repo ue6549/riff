@@ -125,12 +125,15 @@ CollectionViewModule::CollectionViewModule(
     , _masonryLayout(std::make_shared<rncv::MasonryLayout>(_layoutCache))
     , _gridLayout(std::make_shared<rncv::GridLayout>(_layoutCache))
     , _flowLayout(std::make_shared<rncv::FlowLayout>(_layoutCache))
+    , _compositionalLayout(std::make_shared<rncv::CompositionalLayout>(
+          _layoutCache, _listLayout, _gridLayout, _flowLayout, _masonryLayout))
 {
   _layoutCacheId = registerLayoutCache(_layoutCache);
   registerLayoutEngine(_layoutCacheId, "list", _listLayout);
   registerLayoutEngine(_layoutCacheId, "grid", _gridLayout);
   registerLayoutEngine(_layoutCacheId, "masonry", _masonryLayout);
   registerLayoutEngine(_layoutCacheId, "flow", _flowLayout);
+  registerLayoutEngine(_layoutCacheId, "compositional", _compositionalLayout);
 }
 
 std::string CollectionViewModule::ping() {
@@ -148,6 +151,7 @@ void CollectionViewModule::invalidate() {
   _masonryLayoutJSI.reset();
   _gridLayoutJSI.reset();
   _flowLayoutJSI.reset();
+  _compositionalLayoutJSI.reset();
 
   _memoryPressureJsFn.reset();
   _memoryPressureRt = nullptr;
@@ -596,11 +600,19 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             if (vFirst == std::numeric_limits<int>::max()) { vFirst = rFirst; vLast = rLast; }
           }
 
-          // Apply budget
+          // Apply budget.
+          // Derive effective cols from actual layout data: how many items the
+          // binary search / spatial query returned vs how many a single-column
+          // layout would have in the same pixel window. This is exact for all
+          // layout types (list=1, grid=N, flow=variable) without any estimation.
           rncv::Range render  = { rFirst, rLast };
           rncv::Range visible = { vFirst, vLast };
+          double renderRectSize = vpPrimary + abovePad + belowPad;
+          double effectiveCols = (stride > 0.0 && renderRectSize > 0.0)
+            ? std::max(1.0, static_cast<double>(rLast - rFirst + 1) * stride / renderRectSize)
+            : static_cast<double>(budgetCols);
           auto budgeted = rncv::WindowController::applyBudget(
-            render, visible, mountedWindowSz, vpPrimary, stride, budgetCols);
+            render, visible, mountedWindowSz, vpPrimary, stride, effectiveCols);
 
           // Measure range (optional — only when measureAheadMult > 0 and stride known)
           int mFirst = budgeted.first, mLast = budgeted.last;
@@ -676,6 +688,77 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           return Value(rt, result);
         }));
 
+    // processHScroll(sectionIndex, scrollX, vpWidth, renderMult,
+    //                sectionY, sectionHeight, flatBase, itemCount)
+    //   → { renderFirst, renderLast }
+    //
+    // Computes the H-axis render range for a single orthogonal section.
+    // Called from JS on every onHScroll event from RNOrthogonalSectionView.
+    //
+    // Uses a spatial rect query over the section's V band (sectionY..sectionY+sectionHeight)
+    // × H render window (scrollX ± renderMult*vpWidth), then clamps to the section's
+    // flat index range [flatBase, flatBase+itemCount). This correctly excludes items
+    // from adjacent V-sections that share the same X coordinates.
+    obj.setProperty(rt, "processHScroll",
+      Function::createFromHostFunction(rt,
+        PropNameID::forAscii(rt, "processHScroll"), 8,
+        [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+          auto makeEmpty = [&](int base) -> Value {
+            Object r(rt);
+            r.setProperty(rt, "renderFirst", Value(base));
+            r.setProperty(rt, "renderLast",  Value(base - 1));
+            return Value(rt, r);
+          };
+
+          if (count < 8) return makeEmpty(0);
+
+          double scrollX       = args[1].isNumber() ? args[1].getNumber() : 0.0;
+          double vpWidth       = args[2].isNumber() ? args[2].getNumber() : 0.0;
+          double renderMult    = args[3].isNumber() ? args[3].getNumber() : 0.5;
+          double sectionY      = args[4].isNumber() ? args[4].getNumber() : 0.0;
+          double sectionHeight = args[5].isNumber() ? args[5].getNumber() : 0.0;
+          int    flatBase      = args[6].isNumber() ? static_cast<int>(args[6].getNumber()) : 0;
+          int    itemCount     = args[7].isNumber() ? static_cast<int>(args[7].getNumber()) : 0;
+
+          if (vpWidth <= 0.0 || itemCount == 0) return makeEmpty(flatBase);
+
+          // Velocity-adaptive padding along H axis.
+          // H-sections don't yet write velocity to LayoutCache, so use a fixed
+          // multiplier. TODO: extend setScrollOffset to track per-section H velocity.
+          double pad = renderMult * vpWidth;
+
+          // Spatial rect: H render window × section V band.
+          rncv::Rect queryRect = {
+            scrollX - pad,          // x (may be negative — clamped by getAttributesInRect)
+            sectionY,               // y
+            vpWidth + 2.0 * pad,    // width
+            sectionHeight           // height
+          };
+
+          auto attrs = _layoutCache->getAttributesInRect(queryRect);
+
+          int rFirst = std::numeric_limits<int>::max();
+          int rLast  = std::numeric_limits<int>::min();
+
+          for (const auto& a : attrs) {
+            if (a.isDecoration || a.isSupplementary) continue;
+            // flatIndex is pre-computed for compositional layouts; fall back to
+            // section-relative index + flatBase for standalone H layouts.
+            int fi = (a.flatIndex >= 0) ? a.flatIndex : (flatBase + a.index);
+            // Clamp to this section's flat range.
+            if (fi < flatBase || fi >= flatBase + itemCount) continue;
+            if (fi < rFirst) rFirst = fi;
+            if (fi > rLast)  rLast  = fi;
+          }
+
+          if (rFirst == std::numeric_limits<int>::max()) return makeEmpty(flatBase);
+
+          Object r(rt);
+          r.setProperty(rt, "renderFirst", Value(rFirst));
+          r.setProperty(rt, "renderLast",  Value(rLast));
+          return Value(rt, r);
+        }));
+
     _windowControllerJSI = std::move(obj);
   }
   return Value(rt, *_windowControllerJSI);
@@ -701,9 +784,10 @@ Value CollectionViewModule::get(Runtime& rt, const PropNameID& name) {
   if (prop == "signpost")         return getSignpostObject(rt);
   if (prop == "diffEngine")       return getDiffEngineObject(rt);
   if (prop == "memory")           return getMemoryObject(rt);
-  if (prop == "masonryLayout")    return getMasonryLayoutObject(rt);
-  if (prop == "gridLayout")       return getGridLayoutObject(rt);
-  if (prop == "flowLayout")       return getFlowLayoutObject(rt);
+  if (prop == "masonryLayout")         return getMasonryLayoutObject(rt);
+  if (prop == "gridLayout")            return getGridLayoutObject(rt);
+  if (prop == "flowLayout")            return getFlowLayoutObject(rt);
+  if (prop == "compositionalLayout")   return getCompositionalLayoutObject(rt);
 
   // scrollTo(cacheId, x, y, animated) — triggers programmatic scroll on the
   // native container view via the scroll handler registry.
@@ -945,6 +1029,17 @@ Value CollectionViewModule::getFlowLayoutObject(Runtime& rt) {
     _flowLayoutJSI = std::move(obj);
   }
   return Value(rt, *_flowLayoutJSI);
+}
+
+// ── Compositional layout JSI object ──────────────────────────────────────────
+
+Value CollectionViewModule::getCompositionalLayoutObject(Runtime& rt) {
+  if (!_compositionalLayoutJSI.has_value()) {
+    Object obj(rt);
+    _compositionalLayout->installJSIBindings(rt, obj);
+    _compositionalLayoutJSI = std::move(obj);
+  }
+  return Value(rt, *_compositionalLayoutJSI);
 }
 
 // ── P4.1: memory JSI object ───────────────────────────────────────────────────

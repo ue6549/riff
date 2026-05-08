@@ -14,6 +14,7 @@
 #include "layouts/MasonryLayout.h"
 #include "layouts/GridLayout.h"
 #include "layouts/FlowLayout.h"
+#include "layouts/CompositionalLayout.h"
 #include "WindowController.h"
 #include "MetricCollector.h"
 #include "DiffEngine.h"
@@ -119,10 +120,11 @@ public:
 private:
   int32_t _layoutCacheId = 0;
   std::shared_ptr<rncv::LayoutCache>   _layoutCache;
-  std::shared_ptr<rncv::ListLayout>    _listLayout;
-  std::shared_ptr<rncv::MasonryLayout> _masonryLayout;
-  std::shared_ptr<rncv::GridLayout>    _gridLayout;
-  std::shared_ptr<rncv::FlowLayout>    _flowLayout;
+  std::shared_ptr<rncv::ListLayout>          _listLayout;
+  std::shared_ptr<rncv::MasonryLayout>       _masonryLayout;
+  std::shared_ptr<rncv::GridLayout>          _gridLayout;
+  std::shared_ptr<rncv::FlowLayout>          _flowLayout;
+  std::shared_ptr<rncv::CompositionalLayout> _compositionalLayout;
 
   // Scroll position — written from UI thread (M2.2b) or JS thread (M2.2).
   std::atomic<double> _scrollY{0.0};
@@ -177,6 +179,7 @@ private:
   std::optional<jsi::Object> _masonryLayoutJSI;
   std::optional<jsi::Object> _gridLayoutJSI;
   std::optional<jsi::Object> _flowLayoutJSI;
+  std::optional<jsi::Object> _compositionalLayoutJSI;
 
   jsi::Value getLayoutCacheObject(jsi::Runtime& rt);
   jsi::Value getListLayoutObject(jsi::Runtime& rt);
@@ -188,6 +191,7 @@ private:
   jsi::Value getMasonryLayoutObject(jsi::Runtime& rt);
   jsi::Value getGridLayoutObject(jsi::Runtime& rt);
   jsi::Value getFlowLayoutObject(jsi::Runtime& rt);
+  jsi::Value getCompositionalLayoutObject(jsi::Runtime& rt);
 };
 
 } // namespace facebook::react

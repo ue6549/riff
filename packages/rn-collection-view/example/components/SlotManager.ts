@@ -51,6 +51,8 @@ export class SlotManager<T> {
   private slotCounter = 0;
   /** Max idle slots per type kept alive between renders. Default 4. */
   maxPoolSize = 4;
+  /** Number of fresh slot Fibers created in the most recent sync() call (Case C). */
+  lastColdMounts = 0;
 
   // Short-circuit state — when all inputs match, sync() returns cached result in O(1).
   private _prevFirst = -1;
@@ -89,6 +91,9 @@ export class SlotManager<T> {
     dataLength: number,
     stickySet: Set<number> | null,
   ): Map<string, SlotInfo<T>> {
+    // Reset per-call counter before any early return so callers never double-count.
+    this.lastColdMounts = 0;
+
     // ── Short-circuit: if all inputs match previous call, return cached result ─
     // Safe because: when data content changes (same length), the consumer changes
     // data reference or extraData → Riff calls prepare() → layoutContext changes →
@@ -209,6 +214,7 @@ export class SlotManager<T> {
       };
       this.activeSlots.set(slotKey, slot);
       this.dataKeyToSlot.set(dataKey, slotKey);
+      this.lastColdMounts++;
       _p3C++;
     }
 

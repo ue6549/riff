@@ -45,8 +45,18 @@ using namespace facebook::react;
     static const auto defaultProps = std::make_shared<const RNMeasuredCellProps>();
     _props = defaultProps;
     _lastFiredSize = CGSizeZero;
+    _shadowNodePositioned = NO;
   }
   return self;
+}
+
+// ── Fabric recycling ───────────────────────────────────────────────────────────
+
+- (void)prepareForRecycle
+{
+  [super prepareForRecycle];
+  _shadowNodePositioned = NO;
+  _lastFiredSize = CGSizeZero;
 }
 
 // ── Fabric layout metrics ──────────────────────────────────────────────────────
@@ -66,10 +76,16 @@ using namespace facebook::react;
            oldLayoutMetrics:(const facebook::react::LayoutMetrics &)oldLayoutMetrics
 {
   auto adjusted = layoutMetrics;
-  // Preserve the current native position — it was set by applyPositionsFromState
-  // and is the source of truth.  Only let Yoga-measured SIZE through.
-  adjusted.frame.origin.x = self.frame.origin.x;
-  adjusted.frame.origin.y = self.frame.origin.y;
+  if (_shadowNodePositioned) {
+    // ShadowNode (applyPositionsFromState) is the position authority for V-section
+    // cells that are direct children of RNCollectionViewContainerView.
+    // Preserve the native origin — it was set by applyPositionsFromState and is
+    // the source of truth. Only let Yoga-measured SIZE through.
+    adjusted.frame.origin.x = self.frame.origin.x;
+    adjusted.frame.origin.y = self.frame.origin.y;
+  }
+  // else: Fabric/Yoga CSS absolute position is the authority (H-section cells inside
+  // RNOrthogonalSectionView). Let layoutMetrics.frame.origin through unchanged.
   [super updateLayoutMetrics:adjusted oldLayoutMetrics:oldLayoutMetrics];
 }
 

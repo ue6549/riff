@@ -88,13 +88,7 @@ public:
 
   void installJSIBindings(facebook::jsi::Runtime& rt, facebook::jsi::Object& target);
 
-private:
-  std::shared_ptr<LayoutCache> _cache;
-  bool   _horizontal         = false;
-  double _viewportHeight     = 0.0;
-  double _maxCrossAxisHeight = 0.0;  // H-masonry: global max Yoga-measured item height
-  std::vector<MasonryLayoutParams> _sectionParams; // stored for applyMeasurements
-
+  // ── Compositional access (used by CompositionalLayout) ─────────────────
   /** Layout one section from scratch. Returns next section's startPrimary. */
   double computeSection(const MasonryLayoutParams& p, int sectionIndex, double startPrimary);
 
@@ -103,6 +97,14 @@ private:
 
   static MasonryLayoutParams paramsFromJSI(facebook::jsi::Runtime& rt,
                                             const facebook::jsi::Object& obj);
+
+private:
+  std::shared_ptr<LayoutCache> _cache;
+  bool   _horizontal         = false;
+  double _viewportHeight     = 0.0;
+  double _maxCrossAxisHeight = 0.0;  // H-masonry: global max Yoga-measured item height
+  std::vector<MasonryLayoutParams> _sectionParams; // stored for applyMeasurements
+
   static std::vector<MasonryLayoutParams> sectionsFromJSI(facebook::jsi::Runtime& rt,
                                                            const facebook::jsi::Array& arr);
 };

@@ -102,6 +102,23 @@ export interface CollectionViewLayout {
    * Default: false for built-in layouts, true for custom layouts (safe default).
    */
   readonly needsSpatialQuery?: boolean;
+
+  /**
+   * Per-section LayoutCache key prefix.
+   * Compositional layouts use different prefixes per section (e.g. "item" for list
+   * sections, "grid" for grid sections). CollectionView.tsx calls this to derive
+   * cacheKey for headers/footers and fallback item keys.
+   * If absent, falls back to `type === 'list' ? 'item' : type`.
+   */
+  keyPrefixForSection?(section: number): string;
+
+  /**
+   * Maximum column count used across all sections.
+   * Used by processScroll to scale the application budget — returning the max ensures
+   * the render window covers all visible items in the widest section.
+   * If absent, CollectionView reads `delegate.columns` directly (existing behaviour).
+   */
+  budgetColumns?(viewportWidth: number): number;
 }
 
 // ═══════════════════════════════════════════════════════════════

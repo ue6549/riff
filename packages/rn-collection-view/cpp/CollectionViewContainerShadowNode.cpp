@@ -83,12 +83,13 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
 
   // Determine layout type string from the enum prop.
-  // codegen generates: 0=list, 1=grid, 2=masonry, 3=flow
+  // codegen generates: 0=list, 1=grid, 2=masonry, 3=flow, 4=compositional
   std::string layoutType = "list";
   switch (props.layoutType) {
-    case RNCollectionViewContainerLayoutType::Grid:    layoutType = "grid";    break;
-    case RNCollectionViewContainerLayoutType::Masonry: layoutType = "masonry"; break;
-    case RNCollectionViewContainerLayoutType::Flow:    layoutType = "flow";    break;
+    case RNCollectionViewContainerLayoutType::Grid:          layoutType = "grid";          break;
+    case RNCollectionViewContainerLayoutType::Masonry:       layoutType = "masonry";       break;
+    case RNCollectionViewContainerLayoutType::Flow:          layoutType = "flow";          break;
+    case RNCollectionViewContainerLayoutType::Compositional: layoutType = "compositional"; break;
     default: break;
   }
 
@@ -96,10 +97,12 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
       props.layoutCacheId, layoutType);
 
   // Key prefix: must match what the JS layout engine wrote to cache.
+  // For compositional, each child carries its own cacheKey prop (per-section prefix varies),
+  // so the keyPrefix fallback is only used for cells missing a cacheKey.
   std::string keyPrefix = "item-0-";
-  if (layoutType == "grid")    keyPrefix = "grid-";
-  else if (layoutType == "masonry") keyPrefix = "masonry-";
-  else if (layoutType == "flow")    keyPrefix = "flow-";
+  if (layoutType == "grid")          keyPrefix = "grid-";
+  else if (layoutType == "masonry")  keyPrefix = "masonry-";
+  else if (layoutType == "flow")     keyPrefix = "flow-";
 
   RNCV_SN_LOG("correctPositions cacheId=%d cache=%s engine=%s layout=%s renderStart=%d children=%zu containerW=%.1f",
               props.layoutCacheId, cache ? "YES" : "NO", engine ? "YES" : "NO",
@@ -177,6 +180,12 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
         fallbackKey = keyPrefix + std::to_string(p.index >= 0 ? p.index : (renderRangeStart + static_cast<int32_t>(i)));
         key = fallbackKey;
       }
+    } else if (auto hSecProps = std::dynamic_pointer_cast<const RNOrthogonalSectionViewProps>(children[i]->getProps())) {
+      // Phase 2: RNOrthogonalSectionView — position from h-section-wrapper-{sIdx} cache entry.
+      component = "RNOrthogonalSectionView";
+      const auto sIdx = hSecProps->sectionIndex;
+      fallbackKey = "h-section-wrapper-" + std::to_string(sIdx);
+      key = fallbackKey;
     } else {
       // Unknown child type — use positional fallback
       const auto dataIndex = renderRangeStart + static_cast<int32_t>(i);
@@ -356,6 +365,9 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
           warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
           warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
           key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
+        } else if (auto hSecProps = std::dynamic_pointer_cast<const RNOrthogonalSectionViewProps>(children[i]->getProps())) {
+          // Phase 2: re-read wrapper position after MVC reflow.
+          key = "h-section-wrapper-" + std::to_string(hSecProps->sectionIndex);
         } else {
           continue;
         }

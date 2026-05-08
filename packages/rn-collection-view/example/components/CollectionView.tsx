@@ -61,6 +61,8 @@ import NativeCollectionViewModule from './NativeCollectionViewModule';
 import RNMeasuredCell from './RNMeasuredCellNativeComponent';
 import RNScrollCoordinatedView from './RNScrollCoordinatedViewNativeComponent';
 import RNCollectionViewContainer from './RNCollectionViewContainerNativeComponent';
+import RNOrthogonalSectionView from './RNOrthogonalSectionNativeComponent';
+import type { HSectionMeta } from '@riff/layouts/compositional';
 import { RiffSnapshot } from './CollectionSnapshot';
 import { SlotManager } from './SlotManager';
 import type { SlotInfo } from './SlotManager';
@@ -172,6 +174,13 @@ const nativeMod = NativeCollectionViewModule as unknown as {
       // Absent on Opt-6 band-skip early returns (frameDataRef stays valid in that case).
       frames?: number[]; framesFirst?: number;
     };
+    // Phase 2: H-section render range computation from scroll offset.
+    processHScroll(
+      sectionIndex: number, scrollX: number,
+      vpWidth: number, renderMult: number,
+      sectionY: number, sectionHeight: number,
+      flatBase: number, itemCount: number,
+    ): { renderFirst: number; renderLast: number };
   };
 };
 const nativeWindowController = nativeMod.windowController;
@@ -301,6 +310,27 @@ export interface RiffProps<T = unknown> {
    */
   renderItem: (info: any) => React.ReactElement | null;
   keyExtractor?: (item: T, ...args: any[]) => string;
+  /**
+   * Returns a string type identifier for an item. Items with the same type
+   * share a recycle pool — a slot vacated by one item can be reused by another
+   * of the same type without remounting the inner component.
+   *
+   * Identical to FlashList's getItemType. Use this whenever your list renders
+   * heterogeneous cell components (e.g. banners, products, ads) to prevent
+   * cross-type recycling, which is no cheaper than a cold mount.
+   *
+   * Default: all items share a single 'item' pool (no segregation).
+   */
+  getItemType?: (item: T, index: number) => string;
+  /**
+   * Returns a string type identifier for a supplementary view (header or footer).
+   * Supplementary views with the same type share a recycle pool — matches
+   * UICollectionView's reuseIdentifier per supplementary kind.
+   *
+   * Receives the kind ('header' | 'footer') and the section index.
+   * Default: all headers share 'header' pool, all footers share 'footer' pool.
+   */
+  getSupplementaryType?: (kind: 'header' | 'footer', sectionIndex: number) => string;
   /** Like FlatList's extraData — pass any value here to force re-renders when it changes. */
   extraData?: unknown;
 
@@ -354,6 +384,20 @@ export interface RiffProps<T = unknown> {
    * Default 10. Set to 0 to disable (renders nothing until layout is known).
    */
   initialNumToRender?: number;
+
+  /**
+   * Maximum number of idle slots kept alive (Activity=hidden) per item type
+   * between render-window updates. Idle slots let items re-enter the window
+   * as a cheap prop update (Fiber reuse) rather than a cold mount.
+   *
+   * Default: undefined = auto (tracks the current render window size). This
+   * guarantees zero steady-state cold mounts on revisit at negligible memory
+   * cost — Activity=hidden cells don't participate in layout or GPU rendering.
+   *
+   * Set to a fixed number to cap memory usage at the cost of more cold mounts.
+   * Set to 0 to disable pooling entirely (every revisit is a cold mount).
+   */
+  recyclePoolSize?: number;
 
   /**
    * Called whenever the number of rendered items changes.
@@ -890,6 +934,8 @@ export function Riff<T = unknown>({
   layout: layoutProp,
   renderItem: propRenderItem,
   keyExtractor: propKeyExtractor,
+  getItemType: propGetItemType,
+  getSupplementaryType: propGetSupplementaryType,
   itemHeight,
   estimatedItemHeight,
   itemSpacing = 0,
@@ -901,6 +947,7 @@ export function Riff<T = unknown>({
   mountedWindowSize = 2.0,
   measureAhead = 0,
   initialNumToRender = 10,
+  recyclePoolSize,
   onRenderCountChange,
   onBlankArea,
   handle,
@@ -1060,6 +1107,7 @@ export function Riff<T = unknown>({
   // React keys so the Fiber survives recycling (prop UPDATE, not DELETE+CREATE).
   const slotManagerRef = useRef<SlotManager<any>>(null as any);
   if (!slotManagerRef.current) slotManagerRef.current = new SlotManager();
+  // recyclePoolSize=undefined → auto mode: updated to window size just before sync().
 
   // Opt 7: element cache for incremental render loop.
   // Maps slotKey → cached ReactElement. If slot state is unchanged AND no
@@ -1197,10 +1245,10 @@ export function Riff<T = unknown>({
     // The closure captures layoutContext from the render scope; by the time prepare() calls this
     // callback, layoutContext has already been computed (prepare useMemo depends on it).
     const sectionKeys = layoutContext?.sections[section]?.itemKeys;
-    const key = sectionKeys?.[index]
-      ?? (effectiveLayout.type === 'list'
-        ? `item-${section}-${index}`
-        : `${effectiveLayout.type}-${section}-${index}`);
+    const kPrefix = effectiveLayout.keyPrefixForSection
+      ? effectiveLayout.keyPrefixForSection(section)
+      : (effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type);
+    const key = sectionKeys?.[index] ?? `${kPrefix}-${section}-${index}`;
     const attr = nativeMod.layoutCache.getAttributes(key);
     return attr ? attr.frame.height : undefined;
   };
@@ -1325,10 +1373,14 @@ export function Riff<T = unknown>({
   // Budget stride for applyBudget: estimated stride for budget calculation.
   const budgetStride = stride;
 
-  // Resolve grid columns to scale the application budget natively
-  const budgetCols = typeof (effectiveLayout as any).delegate?.columns === 'function'
-    ? (effectiveLayout as any).delegate.columns(viewportWidth)
-    : ((effectiveLayout as any).delegate?.columns ?? 1);
+  // Resolve grid columns to scale the application budget natively.
+  // budgetColumns() is the clean protocol path; fall back to reading delegate.columns
+  // directly for single-layout engines (grid/masonry/compositional all expose it).
+  const budgetCols = effectiveLayout.budgetColumns
+    ? effectiveLayout.budgetColumns(viewportWidth)
+    : (typeof (effectiveLayout as any).delegate?.columns === 'function'
+      ? (effectiveLayout as any).delegate.columns(viewportWidth)
+      : ((effectiveLayout as any).delegate?.columns ?? 1));
 
   // ── processScroll inputs ─────────────────────────────────────────────────────
   // Packed section info for processScroll: [start0, headerOffset0, dataCount0, ...]
@@ -1871,6 +1923,29 @@ export function Riff<T = unknown>({
     },
   };
 
+  // ── Phase 2: H-section helpers ───────────────────────────────────────────────
+  // Expose isHSection / hSectionInfo from CompositionalLayoutEngine when present.
+  // CollectionView.tsx is layout-agnostic; these are optional protocol extensions.
+  const isHSectionFn = ((effectiveLayout as any).isHSection as
+    ((s: number) => boolean) | undefined)?.bind(effectiveLayout);
+  const hSectionInfoFn = ((effectiveLayout as any).hSectionInfo as
+    ((s: number) => HSectionMeta | null) | undefined)?.bind(effectiveLayout);
+
+  const handleHScroll = useCallback((event: any) => {
+    // Phase 2: onHScroll fires from RNOrthogonalSectionView on every H scroll tick.
+    // For now we log and call processHScroll (result unused — no H windowing yet).
+    // Phase 3 will update per-section H render ranges here.
+    if (!viewportWidth) return;
+    const { sectionIndex, scrollX } = event.nativeEvent;
+    const meta = hSectionInfoFn?.(sectionIndex);
+    if (!meta || !meta.itemCount) return;
+    nativeWindowController.processHScroll(
+      sectionIndex, scrollX, viewportWidth, renderMultiplier,
+      meta.sectionY, meta.sectionHeight, meta.flatBase, meta.itemCount,
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewportWidth, renderMultiplier, hSectionInfoFn]);
+
   // ── Sticky supplementary config for ScrollCoordinatedView ───────────────────
   // Build a map: flatIndex → { kind, naturalY, boundaryY, primaryAxisExtent }
   // Each sticky cell is wrapped in RNScrollCoordinatedView in renderCell.
@@ -2011,6 +2086,9 @@ export function Riff<T = unknown>({
     let cellWidth = itemWidth;
     // attrHeight: cross-axis (height for V, width for H) — only used for H supplementaries.
     let attrHeight = 0;
+    // frameX/frameY: absolute position from LayoutCache — used for H-section absolute CSS.
+    let frameX = 0;
+    let frameY = 0;
 
     // Change C: read width/height from the frame array returned by processScroll
     // (single bulk JSI call) instead of making a per-cell JSI call here.
@@ -2034,6 +2112,8 @@ export function Riff<T = unknown>({
     ) {
       frameSource = 'fd';
       const off = (index - fd.first) * 4;
+      frameX = fd.frames[off];
+      frameY = fd.frames[off + 1];
       const w = fd.frames[off + 2];
       if (w > 0) cellWidth = w;
       attrHeight = fd.frames[off + 3];
@@ -2053,6 +2133,8 @@ export function Riff<T = unknown>({
         attr = effectiveLayout.attributesForItem(index, 0);
       }
       if (attr) {
+        frameX = attr.frame.x;
+        frameY = attr.frame.y;
         cellWidth = attr.frame.width;
         attrHeight = attr.frame.height;
       }
@@ -2077,10 +2159,29 @@ export function Riff<T = unknown>({
     const isHorizLayout = (effectiveLayout.horizontal ?? false);
     const isHorizSupplementary = isHorizLayout &&
         (fiDesc?._kind === 'header' || fiDesc?._kind === 'footer');
+
+    // Phase 2: H-section cells (orthogonal sections in compositional layout).
+    // Cells inside RNOrthogonalSectionView need position: absolute with section-relative
+    // coordinates, since applyPositionsFromState only reaches direct container children.
+    // LayoutCache item frames have frame.y = sectionY + localY (V-absolute, for processScroll).
+    // Subtracting sectionOriginY (= sectionY from h-section-wrapper) gives the section-local Y.
+    const cellSectionIndex = fiDesc?.sectionIndex ?? 0;
+    const isHSectionCell = !measureOnly && !!isHSectionFn?.(cellSectionIndex);
+    const sectionOriginY = isHSectionCell ? (hSectionInfoFn?.(cellSectionIndex)?.sectionY ?? 0) : 0;
+
     // Cells in horizontal layouts are always Yoga-measured (no height constraint).
     // Only supplementaries get their cross-axis height locked (engine computes full cross extent).
-    // Position (left, top) is set natively by ShadowNode applyPositionsFromState — not needed in JS.
-    const containerStyle = [
+    // Position (left, top) is set natively by ShadowNode applyPositionsFromState — not needed in JS
+    // (except for H-section cells which use CSS absolute positioning within RNOrthogonalSectionView).
+    const containerStyle: StyleProp<ViewStyle> = isHSectionCell ? [
+      {
+        position: 'absolute' as const,
+        left: frameX,
+        top: frameY - sectionOriginY,  // convert V-absolute Y → section-local Y
+        ...(viewportWidth > 0 ? { width: cellWidth } : {}),
+        ...(attrHeight > 0 ? { height: attrHeight } : {}),
+      },
+    ] : [
       {
         ...(viewportWidth > 0 ? { width: cellWidth } : {}),
         ...(isHorizSupplementary && attrHeight > 0 ? { height: attrHeight } : {}),
@@ -2199,21 +2300,24 @@ export function Riff<T = unknown>({
     const fd = isSectioned ? flattenResult?.flatData[index] : null;
     const sk = fd ? fd.sectionIndex : 0;
     const ik = fd && fd._kind === 'item' ? fd.itemIndex : index;
+    // Derive key without JSI: matches each layout engine's attributesForSupplementary format.
+    // list → "item-{s}-header", grid/masonry/flow → "{type}-{s}-header"
+    // compositional → per-section prefix via keyPrefixForSection()
+    const sectionPrefix = effectiveLayout.keyPrefixForSection
+      ? effectiveLayout.keyPrefixForSection(sk)
+      : (effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type);
     if (fd?._kind === 'header') {
-      // Derive key without JSI: matches each layout engine's attributesForSupplementary format.
-      // list → "item-{s}-header", grid/masonry/flow → "{type}-{s}-header"
-      const prefix = effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type;
-      return `${prefix}-${sk}-header`;
+      // Compositional layout owns supplementaries at the parent level:
+      // "comp-{section}-header". Non-compositional: "{prefix}-{section}-header".
+      const suppPrefix = effectiveLayout.type === 'compositional' ? 'comp' : sectionPrefix;
+      return `${suppPrefix}-${sk}-header`;
     }
     if (fd?._kind === 'footer') {
-      const prefix = effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type;
-      return `${prefix}-${sk}-footer`;
+      const suppPrefix = effectiveLayout.type === 'compositional' ? 'comp' : sectionPrefix;
+      return `${suppPrefix}-${sk}-footer`;
     }
     const sectionKeys = layoutContext?.sections[sk]?.itemKeys;
-    const defaultKey = effectiveLayout.type === 'list'
-      ? `item-${sk}-${ik}`
-      : `${effectiveLayout.type}-${sk}-${ik}`;
-    return sectionKeys?.[ik] ?? defaultKey;
+    return sectionKeys?.[ik] ?? `${sectionPrefix}-${sk}-${ik}`;
   };
 
   let effFirst = 0;
@@ -2318,21 +2422,41 @@ export function Riff<T = unknown>({
       : Math.min(initialNumToRender - 1, data.length - 1);
     const hasMR = measureRange.last >= measureRange.first;
 
+    // Auto pool size: track render window so all exiting items can be pooled,
+    // guaranteeing zero steady-state cold mounts. Consumer can override with
+    // recyclePoolSize prop to cap memory at the cost of more cold mounts.
+    slotManagerRef.current.maxPoolSize =
+      recyclePoolSize !== undefined ? recyclePoolSize : Math.max(smLast - smFirst + 1, 4);
+
     const activeSlots: Map<string, SlotInfo<any>> = slotManagerRef.current.sync(
       smFirst,
       smLast,
       hasMR ? measureRange.first : null,
       hasMR ? measureRange.last  : null,
       (i) => keyExtractor ? keyExtractor(data[i], i) : String(i),
-      (i) => { const fd = isSectioned ? (flattenResult?.flatData[i] as any) : null; return fd?._kind ?? 'item'; },
+      (i) => {
+        const fd = isSectioned ? (flattenResult?.flatData[i] as any) : null;
+        const kind = fd?._kind;
+        if (kind === 'header' || kind === 'footer') {
+          // Use consumer-supplied supplementary type when provided.
+          return propGetSupplementaryType
+            ? propGetSupplementaryType(kind, fd.sectionIndex ?? 0)
+            : kind;
+        }
+        // Items use consumer-supplied type when provided, else single 'item' pool.
+        return propGetItemType ? propGetItemType(data[i], i) : 'item';
+      },
       computeCacheKey,
       (i) => data[i],
       data.length,
       mountedStickySet,
     );
+    coldMountCountRef.current += slotManagerRef.current.lastColdMounts;
 
     // Build cells array from slots, using element cache for unchanged slots.
+    // H-section cells are grouped by section index for RNOrthogonalSectionView wrapping.
     const cells: React.ReactElement[] = [];
+    const hSectionCells = new Map<number, React.ReactElement[]>();
     let minIdx = data.length;
     let maxIdx = -1;
     let _cacheHits = 0, _cacheMisses = 0; // Opt 7 hit counter
@@ -2354,6 +2478,7 @@ export function Riff<T = unknown>({
       // produces a new object for a changed item, this misses and the cell
       // re-renders. See COLLECTIONVIEW_INTERNALS.md § "Consumer mutation contract".
       const prev = elementCacheRef.current.get(slotKey);
+      let el: React.ReactElement;
       if (
         prev &&
         prev.gen         === renderGen &&
@@ -2362,20 +2487,33 @@ export function Riff<T = unknown>({
         prev.measureOnly === slot.measureOnly &&
         prev.item        === slot.item
       ) {
-        cells.push(prev.element);
+        el = prev.element;
         _cacheHits++;
-        continue;
+      } else {
+        // Slot changed — (re-)render and update cache.
+        el = renderCell(slot.item as T, slot.dataIndex, slot.measureOnly, slotKey);
+        elementCacheRef.current.set(slotKey, {
+          gen: renderGen, dataKey: slot.dataKey, cacheKey: slot.cacheKey,
+          measureOnly: slot.measureOnly,
+          item: slot.item, element: el,
+        });
+        _cacheMisses++;
       }
 
-      // Slot changed — (re-)render and update cache.
-      const el = renderCell(slot.item as T, slot.dataIndex, slot.measureOnly, slotKey);
-      elementCacheRef.current.set(slotKey, {
-        gen: renderGen, dataKey: slot.dataKey, cacheKey: slot.cacheKey,
-        measureOnly: slot.measureOnly,
-        item: slot.item, element: el,
-      });
-      cells.push(el);
-      _cacheMisses++;
+      // Phase 2: route H-section item cells into their section bucket.
+      // Pooled cells always go to the V array (they're measure-only, hidden).
+      // Headers/footers stay in the V array — they are V-positioned above/below
+      // the UIScrollView, not inside it.
+      const slotFd = isSectioned ? (flattenResult?.flatData[slot.dataIndex]) : null;
+      const slotSectionIdx = (slotFd as any)?.sectionIndex ?? 0;
+      const slotKind: string = (slotFd as any)?._kind ?? 'item';
+      if (!slot.isPooled && slotKind === 'item' && isHSectionFn?.(slotSectionIdx)) {
+        const bucket = hSectionCells.get(slotSectionIdx) ?? [];
+        bucket.push(el);
+        hSectionCells.set(slotSectionIdx, bucket);
+      } else {
+        cells.push(el);
+      }
     }
 
 
@@ -2393,6 +2531,24 @@ export function Riff<T = unknown>({
 
     effFirst = minIdx <= maxIdx ? minIdx : smFirst;
     effLast  = minIdx <= maxIdx ? maxIdx : smLast;
+
+    // ── Phase 2: Build RNOrthogonalSectionView wrappers for H-sections ────────
+    const hSectionWrappers: React.ReactElement[] = [];
+    if (hSectionCells.size > 0) {
+      for (const [sIdx, sectionCells] of hSectionCells) {
+        const meta = hSectionInfoFn?.(sIdx);
+        hSectionWrappers.push(
+          <RNOrthogonalSectionView
+            key={`h-section-${sIdx}`}
+            sectionIndex={sIdx}
+            contentWidth={meta?.contentWidth ?? 0}
+            onHScroll={handleHScroll}
+          >
+            {sectionCells}
+          </RNOrthogonalSectionView>
+        );
+      }
+    }
 
     // ── Decoration views ─────────────────────────────────────────────────────
     // Query the layout cache for decoration entries (section backgrounds,
@@ -2495,7 +2651,7 @@ export function Riff<T = unknown>({
     }
 
     decorationCountRef.current = decorationElements.length;
-    return <>{decorationElements}{stickyHeaderCells}{stickyFooterCells}{cells}</>;
+    return <>{decorationElements}{stickyHeaderCells}{stickyFooterCells}{hSectionWrappers}{cells}</>;
   })();
 
   // ── P5.1: HUD snapshot ───────────────────────────────────────────────────────

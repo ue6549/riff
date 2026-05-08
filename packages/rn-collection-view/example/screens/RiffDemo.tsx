@@ -13,8 +13,9 @@ import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import { ListDemo, HorizontalListDemo, GridDemo, HorizontalGridDemo, MasonryDemo, FlowDemo } from './comparison/LayoutsTab';
 import { CircularList } from '../components/CircularList';
 import { Carousel3D } from '../components/Carousel3D';
+import { CompositionalDemo } from './CompositionalDemo';
 
-type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'flow-v' | 'circular' | 'carousel';
+type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'flow-v' | 'circular' | 'carousel' | 'compose';
 
 const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d', '#6a4c93', '#1982c4'];
 const CIRCULAR_DATA = Array.from({ length: 12 }, (_, i) => ({ id: i, label: `${i}`, color: COLORS[i % COLORS.length]! }));
@@ -29,10 +30,11 @@ const TABS: { key: DemoTab; label: string; detail: string }[] = [
   { key: 'flow-v',    label: 'Flow ↕',    detail: 'Flow · product cards + tags · two-pass · sticky · section bkg · mutations · MVC' },
   { key: 'circular',  label: 'Radial',    detail: 'Radial arc · TS custom layout · arbitrary (x, y) — impossible in FlashList' },
   { key: 'carousel',  label: '3D Carousel', detail: '3D perspective carousel · TS custom layout · rotateY + scale per item' },
+  { key: 'compose',   label: 'Compose ↕',  detail: 'Compositional · list + grid + flow + masonry · one scroll · shared recycling pool' },
 ];
 
 // Which tabs benefit visually from the resize toggle
-const RESIZE_TABS: DemoTab[] = ['grid-v', 'masonry-v', 'list-v', 'flow-v'];
+const RESIZE_TABS: DemoTab[] = ['grid-v', 'masonry-v', 'list-v', 'flow-v', 'compose'];
 
 export default function RiffDemo() {
   const [tab, setTab] = useState<DemoTab>('list-v');
@@ -99,6 +101,7 @@ export default function RiffDemo() {
           {tab === 'grid-h'    && <HorizontalGridDemo />}
           {tab === 'masonry-v' && <MasonryDemo />}
           {tab === 'flow-v'    && <FlowDemo />}
+          {tab === 'compose'  && <CompositionalDemo />}
 
           {tab === 'circular' && (
             <CircularList

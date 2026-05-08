@@ -55,7 +55,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class GridLayoutEngine implements CollectionViewLayout {
   readonly type = 'grid';
   readonly horizontal: boolean;
-  private readonly delegate: GridLayoutDelegate;
+  readonly delegate: GridLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: GridLayoutDelegate) {
