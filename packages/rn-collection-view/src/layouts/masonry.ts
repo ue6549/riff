@@ -149,14 +149,20 @@ class MasonryLayoutEngine implements CollectionViewLayout {
     return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
+  cacheKeyForItem(index: number, section: number): string {
+    return this.lastSectionKeys[section]?.[index] ?? `masonry-${section}-${index}`;
+  }
+
+  cacheKeyForSupplementary(kind: string, section: number): string {
+    return `masonry-${section}-${kind}`;
+  }
+
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    const sectionKeys = this.lastSectionKeys[section];
-    const key = sectionKeys?.[index] ?? `masonry-${section}-${index}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(`masonry-${section}-${kind}`);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {

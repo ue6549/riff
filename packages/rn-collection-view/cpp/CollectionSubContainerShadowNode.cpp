@@ -24,6 +24,38 @@
   #define RNCV_SUB_LOG(fmt, ...) ((void)0)
 #endif
 
+// Targeted H sub-container scroll diagnostics. Independent from the broader
+// RNCV_ENABLE_NATIVE_LOGS so we can crank these up without re-enabling every
+// generic native log site in the codebase.
+//
+// Flip to 1 to enable. Sister flags:
+//   - example/components/CollectionView.tsx          → RNCV_HSUB_LOGS
+//   - cpp/CollectionViewModule.cpp                   → RNCV_ENABLE_HSUB_LOGS
+//   - ios/RNCollectionSubContainerView.mm            → RNCV_ENABLE_HSUB_LOGS
+//
+// Filterable tags emitted from this file:
+//   RNCV-HSUB-CPP-LAYOUT   per-layout child cv.x/y/w/h, ySectionShift, cache hit/miss
+//   RNCV-HSUB-CPP-STATE    correctedContentSize → state.contentSize transitions,
+//                          defensive retain decisions, childTags hash
+#ifndef RNCV_ENABLE_HSUB_LOGS
+#define RNCV_ENABLE_HSUB_LOGS 1
+#endif
+
+// Intentionally NOT gated on DEBUG — the flag is opt-in (default 0). Some
+// Pods are built without DEBUG defined even in dev configurations, and
+// requiring both gates silently swallows the user's flag flip.
+#if RNCV_ENABLE_HSUB_LOGS
+  #ifdef __APPLE__
+    #include <cstdio>
+    #define RNCV_HSUB_LOG(fmt, ...) do { fprintf(stderr, "[RNCV-HSUB-CPP] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+  #else
+    #include <android/log.h>
+    #define RNCV_HSUB_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "RNCV-HSUB-CPP", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_HSUB_LOG(fmt, ...) ((void)0)
+#endif
+
 namespace facebook::react {
 
 // Must match the string used in codegenNativeComponent('RNCollectionSubContainer').
@@ -56,19 +88,74 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   childTags_.clear();
   correctedBoundingRect_ = Rect{};
 
-  if (children.empty()) {
-    // Use props if present; the defensive retain in updateStateIfNeeded picks
-    // up the slack for any axis that's still zero. We deliberately do NOT
-    // collapse to Size{} here because that would tear down the scrollview's
-    // bounds before the next valid layout pass arrives.
-    correctedContentSize_ = Size{
+  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
+
+  // ── Read section size from cache (H-2.1 round-trip cut) ──────────────────
+  //
+  // Compositional H sections write two cache entries from
+  // `CompositionalLayout::finalizeHSection`:
+  //   - `h-section-wrapper-{N}` → frame { 0, contentCursorY, vpW, sectionH }
+  //                                (Y-position + cross-axis section height)
+  //   - `h-section-cw-{N}`      → frame { 0, 0, totalContentW, 0 }
+  //                                (full content extent on the scroll axis)
+  //
+  // BEFORE H-2.1, this ShadowNode read section size from props
+  // (`props.contentWidth` / `props.contentHeight`), which JS populated by
+  // reading these same cache entries via `compositional.hSectionInfo()` and
+  // forwarding them as Fabric props. That JS round-trip created a feedback
+  // loop:
+  //   cell measures (Yoga) → cache write → finalizeHSection updates section
+  //   size → JS reads cache → JS re-renders <RNCollectionSubContainer> with
+  //   new contentHeight prop → Fabric commits the new prop → wrapper view
+  //   bounds change → Yoga re-runs on subtree → cell measures again →
+  //   pixel-grid rounding lands differently → goto step 1.
+  // Symptoms: unnatural slow-decay bounce, gestures wedged after edge bounce,
+  // JS render storm during deceleration (lcv climbing 20-30× per bounce).
+  //
+  // FIX: read section size directly from the cache here. The C++ ShadowNode
+  // already reads `h-section-wrapper-{N}` for ySectionShift below, so it has
+  // everything it needs without going through JS. Standalone consumers (e.g.
+  // CollectionSubContainer.tsx for radial / spiral / carousel3D demos) still
+  // pass props.contentWidth/Height — they have no compositional cache entry,
+  // so the props serve as the standalone fallback.
+  Float ySectionShift = 0;
+  Size cacheSectionSize{0, 0};
+  if (cache) {
+    auto wrapperKey = std::string("h-section-wrapper-") +
+                      std::to_string(props.sectionIndex);
+    auto wrapperAttrs = cache->getAttributes(wrapperKey);
+    if (wrapperAttrs) {
+      ySectionShift           = static_cast<Float>(wrapperAttrs->frame.y);
+      cacheSectionSize.height = static_cast<Float>(wrapperAttrs->frame.height);
+    }
+    auto cwKey = std::string("h-section-cw-") +
+                 std::to_string(props.sectionIndex);
+    auto cwAttrs = cache->getAttributes(cwKey);
+    if (cwAttrs) {
+      cacheSectionSize.width = static_cast<Float>(cwAttrs->frame.width);
+    }
+  }
+
+  // Helper: pick cache size when present, else props (standalone path).
+  auto resolveContentSize = [&]() -> Size {
+    if (cacheSectionSize.width > 0 || cacheSectionSize.height > 0) {
+      return cacheSectionSize;
+    }
+    return Size{
       props.contentWidth  > 0 ? props.contentWidth  : 0,
       props.contentHeight > 0 ? props.contentHeight : 0,
     };
+  };
+
+  if (children.empty()) {
+    // Initial layout pass before cells mount: use cache (compositional) or
+    // props (standalone). The defensive retain in updateStateIfNeeded covers
+    // any axis still zero. We deliberately do NOT collapse to Size{} —
+    // that would tear down the scrollview's bounds before the next valid
+    // layout pass arrives.
+    correctedContentSize_ = resolveContentSize();
     return;
   }
-
-  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
 
   // Sub-containers in compositional layouts use the compositional engine for
   // measurement cascade — it knows how to dispatch deltas to the per-section
@@ -100,26 +187,28 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     bulkFrames = cache->getFramesForKeys(keys);
   }
 
-  // ── Phase 2b: Resolve Y-shift for compositional H-sections ───────────────
-  // When this sub-container hosts a compositional H section, the cache stores
-  // each cell's Y in V-absolute coordinates (after CompositionalLayout::
-  // finalizeHSection shifts them by the section's contentCursorY). The cells
-  // live INSIDE this sub-container's contentView, whose origin is the section's
-  // top-left in scroll content space — so we must subtract the section Y to
-  // get section-local Y for placement.
-  //
-  // Standalone use of the sub-container (RiffDemo H-2 tabs) has no compositional
+  // ── Phase 2b: Y-shift for compositional H-sections (already resolved) ────
+  // ySectionShift was computed above alongside the section size lookup.
+  // Standalone sub-containers (RiffDemo H-2 tabs) have no compositional
   // wrapper entry → ySectionShift stays 0 → cache positions are used as-is
   // (those layouts already write section-local positions).
-  Float ySectionShift = 0;
-  if (cache) {
-    auto sectionWrapperKey =
-        std::string("h-section-wrapper-") + std::to_string(props.sectionIndex);
-    auto sectionAttrs = cache->getAttributes(sectionWrapperKey);
-    if (sectionAttrs) {
-      ySectionShift = static_cast<Float>(sectionAttrs->frame.y);
+
+#if RNCV_ENABLE_HSUB_LOGS
+  {
+    int hits = 0, misses = 0;
+    for (size_t i = 0; i < N; ++i) {
+      if (i < bulkFrames.found.size() && bulkFrames.found[i]) hits++;
+      else misses++;
     }
+    RNCV_HSUB_LOG(
+      "LAYOUT s=%d N=%zu cacheHits=%d cacheMisses=%d ySectionShift=%.1f "
+      "cacheCS=(%.1fx%.1f) propCS=(%.1fx%.1f) scrollDir=%d",
+      props.sectionIndex, N, hits, misses, ySectionShift,
+      cacheSectionSize.width, cacheSectionSize.height,
+      props.contentWidth, props.contentHeight,
+      static_cast<int>(props.scrollDirection));
   }
+#endif
 
   // ── Phase 3: Initialize correctedChildren_ from cache + Yoga deltas ──────
   // For dimensions that are content-determined (Yoga measures), build deltas
@@ -161,14 +250,30 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     }
 
     // Compare Yoga measurement against cache for content-determined axes.
+    //
+    // The 0.5pt threshold filters writing essentially-the-same-value back to
+    // the cache on every commit (sub-pixel jitter from text rendering / image
+    // sizing rounding accumulates differently pass-to-pass). Above 0.5pt is
+    // a real measurement signal worth cascading.
+    //
+    // Note: an earlier iteration applied std::ceil to yoga values + a 1.5pt
+    // threshold to dampen a feedback loop (cache change → JS render → Fabric
+    // commit → Yoga re-run → goto). That loop was a symptom of round-tripping
+    // section size through JS as a Fabric prop. H-2.1 cuts the round-trip at
+    // its source — section size now flows cache → C++ ShadowNode → state →
+    // iOS view, with no JS in between. Cell measurements can drift sub-pixel
+    // freely; the wrapper view's bounds update natively without re-rendering
+    // the React tree, so there's no loop to dampen.
     const auto& childMetrics = children[i]->getLayoutMetrics();
     const auto yogaWidth  = childMetrics.frame.size.width;
     const auto yogaHeight = childMetrics.frame.size.height;
 
+    static constexpr Float kCellMVCThresholdPt = 0.5f;
+
     if ((contentDim == rncv::ContentDimension::Height ||
          contentDim == rncv::ContentDimension::Both) &&
         yogaHeight > 0 &&
-        std::abs(yogaHeight - cv.h) > 0.5f &&
+        std::abs(yogaHeight - cv.h) > kCellMVCThresholdPt &&
         !keys[i].empty()) {
       deltas.push_back({
         keys[i],
@@ -183,7 +288,7 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     if ((contentDim == rncv::ContentDimension::Width ||
          contentDim == rncv::ContentDimension::Both) &&
         yogaWidth > 0 &&
-        std::abs(yogaWidth - cv.w) > 0.5f &&
+        std::abs(yogaWidth - cv.w) > kCellMVCThresholdPt &&
         !keys[i].empty()) {
       deltas.push_back({
         keys[i],
@@ -197,6 +302,17 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
 
     correctedChildren_.push_back(cv);
     childTags_.push_back(static_cast<int32_t>(children[i]->getTag()));
+
+#if RNCV_ENABLE_HSUB_LOGS
+    RNCV_HSUB_LOG(
+      "LAYOUT-CHILD s=%d i=%zu key='%s' idx=%d tag=%d "
+      "cv=(x=%.1f y=%.1f w=%.1f h=%.1f) yoga=(w=%.1f h=%.1f) "
+      "found=%d",
+      props.sectionIndex, i, keys[i].c_str(), indices[i],
+      static_cast<int32_t>(children[i]->getTag()),
+      cv.x, cv.y, cv.w, cv.h, yogaWidth, yogaHeight,
+      (i < bulkFrames.found.size() && bulkFrames.found[i]) ? 1 : 0);
+#endif
   }
 
   // ── Phase 4: Apply cascade and re-read final attributes ──────────────────
@@ -238,27 +354,32 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
 
   // ── Phase 5: Compute content size + bounding rect ────────────────────────
   //
-  // Content size MUST be the layout-declared total extent (props.contentWidth /
-  // contentHeight), NOT a max() with the windowed-children bounding rect.
+  // Content size MUST be the layout-declared total extent — the section's
+  // full size as the layout engine computed it — NOT a max() of the windowed
+  // children's bounds.
   //
-  // Why: the ShadowNode's correctedChildren_ contains ONLY the items currently
-  // inside the H render window (windowing in handleHScroll excludes the rest).
-  // If we let `maxRight` grow to the rightmost windowed child's edge, the
-  // computed contentSize fluctuates as the window slides — UIScrollView re-
-  // clamps `contentOffset` to the new bounds on every state commit, which
-  // shows up as snap/cut during the bounce-back animation and gesture fight
+  // Why: correctedChildren_ contains ONLY the items currently inside the H
+  // render window. If we let `maxRight` track the rightmost windowed child's
+  // edge, the computed contentSize fluctuates as the window slides;
+  // UIScrollView re-clamps `contentOffset` to the new bounds on every state
+  // commit, which surfaces as snap/cut during bounce-back and gesture fight
   // when the user H-scrolls fast (H-3 amplifies via velocity-adaptive width;
   // H-3.5 amplifies further by mounting more cells).
   //
-  // The layout authority (CompositionalLayout::finalizeHSection in C++ +
-  // hSectionInfoFn in JS) is the single source of truth for the section's
-  // full content extent. We trust it. If it's 0 (transient — first layout
-  // pass before sections are sized), we fall back to children bounds purely
-  // so the scrollview is functional, but this is a degenerate case.
-  if (props.contentWidth > 0 || props.contentHeight > 0) {
-    correctedContentSize_ = Size{props.contentWidth, props.contentHeight};
+  // Source of truth — picked up-top via `resolveContentSize`:
+  //   - Compositional H section: cache `h-section-cw-{N}.frame.width` (total
+  //     scroll-axis extent) + `h-section-wrapper-{N}.frame.height` (cross-axis
+  //     section size). Written by CompositionalLayout::finalizeHSection.
+  //   - Standalone sub-container (radial / spiral / carousel3D demos):
+  //     props.contentWidth / contentHeight, set by the JS layout engine.
+  //
+  // If both signals are still zero (very first layout pass before sections
+  // are sized), fall back to the children bounding rect so the scrollview
+  // is at least functional. This is a degenerate edge case.
+  Size resolved = resolveContentSize();
+  if (resolved.width > 0 || resolved.height > 0) {
+    correctedContentSize_ = resolved;
   } else {
-    // Degenerate fallback only — props haven't been populated yet.
     Float maxRight = 0, maxBottom = 0;
     for (size_t i = 0; i < N; ++i) {
       const auto& cv = correctedChildren_[i];
@@ -295,18 +416,39 @@ void CollectionSubContainerShadowNode::updateStateIfNeeded() {
   //   - H gesture-stuck after right-edge bounce: contentSize.width <= vpWidth
   //     -> UIScrollView disables horizontal scroll entirely on that axis.
   //
-  // Causes the shrink existed at all: props.contentWidth/Height transiently 0
-  // (when JS meta is null momentarily during a re-render race), or the
-  // children-empty early return writing Size{}. We trust state.contentSize as
-  // the running source of truth — a zero value means "no signal this pass",
-  // not "set the scrollview to zero".
+  // Why a zero might still appear: cache `h-section-wrapper-{N}` /
+  // `h-section-cw-{N}` haven't been populated yet on the very first layout
+  // pass (compositional path), or the children-empty early return wrote
+  // Size{}. We trust state.contentSize as the running source of truth — a
+  // zero value means "no signal this pass", not "set the scrollview to zero".
   Size targetSize = correctedContentSize_;
+  bool retainedW = false, retainedH = false;
   if (targetSize.width  <= 0 && state.contentSize.width  > 0) {
     targetSize.width = state.contentSize.width;
+    retainedW = true;
   }
   if (targetSize.height <= 0 && state.contentSize.height > 0) {
     targetSize.height = state.contentSize.height;
+    retainedH = true;
   }
+
+#if RNCV_ENABLE_HSUB_LOGS
+  {
+    const auto &props =
+        *std::static_pointer_cast<const RNCollectionSubContainerProps>(getProps());
+    RNCV_HSUB_LOG(
+      "STATE s=%d corrected=(%.1fx%.1f) targetAfterRetain=(%.1fx%.1f) "
+      "prevState=(%.1fx%.1f) retainedW=%d retainedH=%d "
+      "childCount=%zu prevChildCount=%zu rev=%d",
+      props.sectionIndex,
+      correctedContentSize_.width, correctedContentSize_.height,
+      targetSize.width, targetSize.height,
+      state.contentSize.width, state.contentSize.height,
+      retainedW ? 1 : 0, retainedH ? 1 : 0,
+      correctedChildren_.size(), state.children.size(),
+      state.layoutRevision);
+  }
+#endif
 
   if (state.contentSize != targetSize) {
     state.contentSize = targetSize;

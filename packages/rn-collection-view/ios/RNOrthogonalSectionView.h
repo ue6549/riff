@@ -18,6 +18,14 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @interface RNOrthogonalSectionView : RCTViewComponentView <UIScrollViewDelegate>
 
+/**
+ * Set to YES by RNCollectionViewContainerView.applyPositionsFromState when the
+ * ShadowNode has positioned this wrapper from the LayoutCache.  Prevents
+ * Fabric's default updateLayoutMetrics: from overwriting the cache-based
+ * position with Yoga's sequential flex-column position.
+ */
+@property (nonatomic) BOOL shadowNodePositioned;
+
 @end
 
 NS_ASSUME_NONNULL_END

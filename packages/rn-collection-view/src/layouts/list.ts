@@ -235,15 +235,20 @@ class ListLayout implements CollectionViewLayout {
     return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
+  cacheKeyForItem(index: number, section: number): string {
+    return this.lastSectionKeys[section]?.[index] ?? `item-${section}-${index}`;
+  }
+
+  cacheKeyForSupplementary(kind: string, section: number): string {
+    return `item-${section}-${kind}`;
+  }
+
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    const sectionKeys = this.lastSectionKeys[section];
-    const key = sectionKeys?.[index] ?? `item-${section}-${index}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    const key = `item-${section}-${kind}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {

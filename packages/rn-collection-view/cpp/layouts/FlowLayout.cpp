@@ -337,12 +337,22 @@ double FlowLayout::computeSectionFromCache(const FlowLayoutParams& p, int sectio
   }
 
   // Write updated positions to cache.
+  // Create entries from scratch if not cached (e.g. after cache clear or insertions).
   for (int i = 0; i < p.itemCount; ++i) {
     const std::string key = (i < (int)p.keys.size()) ? p.keys[i]
                           : (p.keyPrefix.empty() ? sPrefix + std::to_string(i) : p.keyPrefix + std::to_string(i));
     auto cached = _cache->getAttributes(key);
-    if (!cached) continue;
-    auto updated = *cached;
+    LayoutAttributes updated;
+    if (cached) {
+      updated = *cached;
+    } else {
+      updated.key       = key;
+      updated.index     = i;
+      updated.flatIndex = p.flatIndexBase + i;
+      updated.section   = sectionIndex;
+      updated.zIndex    = 0;
+      updated.sizingState = SizingState::Placeholder;
+    }
     if (H) {
       updated.frame = { frames[i].primary, frames[i].cross, frames[i].primarySize, frames[i].crossSize };
     } else {

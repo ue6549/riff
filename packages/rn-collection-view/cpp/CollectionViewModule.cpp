@@ -1,8 +1,32 @@
 #include "CollectionViewModule.h"
 
 #include <chrono>
+#include <cstdio>
 #include <limits>
 #include <unordered_map>
+
+// Targeted H sub-container scroll diagnostics from the C++ TurboModule side.
+// Independent from generic native-log gating. Defaults OFF.
+//
+// Flip to 1 to enable. Sister flags:
+//   - example/components/CollectionView.tsx          → RNCV_HSUB_LOGS
+//   - cpp/CollectionSubContainerShadowNode.cpp       → RNCV_ENABLE_HSUB_LOGS
+//   - ios/RNCollectionSubContainerView.mm            → RNCV_ENABLE_HSUB_LOGS
+//
+// Filterable tags emitted from this file:
+//   RNCV-HSUB-MOD-IN     processHScroll input args (sectionIdx, scrollX, vpW, mult, sectionY/H, flat range)
+//   RNCV-HSUB-MOD-WIN    derived velocity, leadMult/trailMult/leftPad/rightPad,
+//                        queryRect, returned range + frame count
+#ifndef RNCV_ENABLE_HSUB_LOGS
+#define RNCV_ENABLE_HSUB_LOGS 1
+#endif
+
+#if RNCV_ENABLE_HSUB_LOGS
+#define RNCV_HSUB_MOD_LOG(fmt, ...) \
+  do { fprintf(stderr, "[RNCV-HSUB-MOD] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#else
+#define RNCV_HSUB_MOD_LOG(fmt, ...) ((void)0)
+#endif
 
 namespace facebook::react {
 
@@ -731,6 +755,13 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           double sectionHeight = args[5].isNumber() ? args[5].getNumber() : 0.0;
           int    flatBase      = args[6].isNumber() ? static_cast<int>(args[6].getNumber()) : 0;
           int    itemCount     = args[7].isNumber() ? static_cast<int>(args[7].getNumber()) : 0;
+          int    sectionIdx    = args[0].isNumber() ? static_cast<int>(args[0].getNumber()) : 0;
+
+          RNCV_HSUB_MOD_LOG(
+            "IN s=%d scrollX=%.1f vpW=%.1f mult=%.2f "
+            "sectionY=%.1f sectionH=%.1f flatBase=%d itemCount=%d",
+            sectionIdx, scrollX, vpWidth, renderMult,
+            sectionY, sectionHeight, flatBase, itemCount);
 
           if (vpWidth <= 0.0 || itemCount == 0) return makeEmpty(flatBase);
 
@@ -744,7 +775,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           // This guarantees the window is at least renderMult wide on the trailing
           // side, while expanding up to 2.5× renderMult on the leading side at
           // maximum velocity.
-          int sectionIdx = args[0].isNumber() ? static_cast<int>(args[0].getNumber()) : 0;
+          // (sectionIdx already extracted above for logging.)
 
           auto nowMs = static_cast<double>(
               std::chrono::duration_cast<std::chrono::microseconds>(
@@ -760,7 +791,24 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           hState.lastScrollX     = scrollX;
           hState.lastTimestampMs = nowMs;
 
-          double speed     = std::abs(hState.velocity);
+          double speed = std::abs(hState.velocity);
+
+          // Asymmetric lead/trail formula (mirrors V processScroll):
+          //   leadBoost = min(1.5, speed) * renderMult
+          //   leadMult  = renderMult + leadBoost   (grow toward direction of travel)
+          //   trailMult = max(0.75, renderMult - leadBoost * 0.5)  (shrink behind)
+          //
+          // An earlier iteration applied a low-velocity dead-zone here to
+          // stop boundary-cell flicker during bounce decay (range flipping
+          // 5..8 ↔ 4..8 as |vel| oscillated 0.05 ↔ 0.16 px/ms). That
+          // flicker was the surface symptom of a deeper feedback loop:
+          // round-tripping section size through JS as a Fabric prop
+          // re-rendered cells on every commit, which thrashed the bounce
+          // animation. H-2.1 cuts the round-trip at its source — section
+          // size now flows cache → C++ ShadowNode → state without React
+          // in the loop, so even when the H window range changes 1 cell
+          // per tick during decay, the cells just toggle visibility
+          // natively and UIKit's bounce timer is undisturbed.
           double leadBoost = std::min(1.5, speed) * renderMult;
           double leadMult  = renderMult + leadBoost;
           double trailMult = std::max(0.75, renderMult - leadBoost * 0.5);
@@ -781,6 +829,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
 
           int rFirst = std::numeric_limits<int>::max();
           int rLast  = std::numeric_limits<int>::min();
+          int matchedItems = 0;
 
           for (const auto& a : attrs) {
             if (a.isDecoration || a.isSupplementary) continue;
@@ -791,7 +840,18 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             if (fi < flatBase || fi >= flatBase + itemCount) continue;
             if (fi < rFirst) rFirst = fi;
             if (fi > rLast)  rLast  = fi;
+            matchedItems++;
           }
+
+          RNCV_HSUB_MOD_LOG(
+            "WIN s=%d vel=%.4f speed=%.4f goingRight=%d "
+            "leadMult=%.2f trailMult=%.2f leftPad=%.1f rightPad=%.1f "
+            "queryRect=(x=%.1f y=%.1f w=%.1f h=%.1f) "
+            "rawAttrs=%zu matched=%d range=%d..%d",
+            sectionIdx, hState.velocity, speed, goingRight ? 1 : 0,
+            leadMult, trailMult, leftPad, rightPad,
+            queryRect.x, queryRect.y, queryRect.width, queryRect.height,
+            attrs.size(), matchedItems, rFirst, rLast);
 
           if (rFirst == std::numeric_limits<int>::max()) return makeEmpty(flatBase);
 

@@ -79,6 +79,13 @@ struct LayoutAttributes {
   std::unordered_map<std::string, double> extras;
 };
 
+// ─── BulkFrameResult (Opt B — batch frame reads for ShadowNode) ─────────────
+
+struct BulkFrameResult {
+  std::vector<double> frames;  // flat [x0,y0,w0,h0, x1,y1,w1,h1, ...]
+  std::vector<bool>   found;   // which keys had cache entries
+};
+
 // ─── LayoutCache ─────────────────────────────────────────────────────────────
 
 /**
@@ -99,6 +106,13 @@ public:
   // ── Core CRUD ─────────────────────────────────────────────────────────────
 
   void setAttributes(const LayoutAttributes& attrs);
+  /**
+   * Batch update — applies all attribute updates under a single mutex
+   * acquisition. Used by scroll-driven sub-container layouts (radial,
+   * spiral, carousel3D) to commit N visible items per scroll tick in one
+   * JSI round-trip + one lock acquisition.
+   */
+  void setAttributesBatch(const std::vector<LayoutAttributes>& batch);
   std::optional<LayoutAttributes> getAttributes(const std::string& key) const;
   void removeAttributes(const std::string& key);
   void clear();
@@ -162,6 +176,14 @@ public:
   std::vector<double> getFramesForFlatRange(int firstFlat, int lastFlat) const;
 
   /**
+   * Opt B: Batch frame read by key names. Returns x,y,w,h for each key in a
+   * single mutex acquisition — eliminates per-key lock + LayoutAttributes copy.
+   * Used by ShadowNode::correctChildPositionsIfNeeded() to replace N individual
+   * getAttributes() calls.
+   */
+  BulkFrameResult getFramesForKeys(const std::vector<std::string>& keys) const;
+
+  /**
    * Returns heights for items 0..count-1 in the given section.
    * Items without cache entries get height 0.
    * Single-call alternative to N getAttributes() calls.
@@ -194,6 +216,21 @@ public:
   /// Atomic read of offset + velocity (single mutex acquisition).
   struct ScrollSnapshot { Point offset; double velocity; };
   ScrollSnapshot getScrollOffsetAndVelocity() const;
+
+  /// Opt D: Atomic read of offset + velocity + version (single lock, was 2).
+  struct ScrollSnapshotV { Point offset; double velocity; uint64_t version; };
+  ScrollSnapshotV getScrollSnapshotWithVersion() const;
+
+  /// Opt D: Two binary searches in one lock (sorted path, was 2 locks).
+  struct DualRange { PrimaryRange render; PrimaryRange visible; };
+  DualRange findDualRangeByPrimary(
+      double renderLo, double renderHi,
+      double visibleLo, double visibleHi,
+      bool horizontal) const;
+
+  /// Opt D: Frames + version in one lock (was 2 locks).
+  struct FramesWithVersion { std::vector<double> frames; uint64_t version; };
+  FramesWithVersion getFramesForFlatRangeWithVersion(int firstFlat, int lastFlat) const;
 
   // ── MVC (maintainVisibleContentPosition) correction ───────────────────
   // Three-step API called from the JS prepare() useMemo:
@@ -283,6 +320,9 @@ private:
   uint64_t                                          _version = 0;
   mutable std::mutex                                _mutex;
   SpatialIndex                                      _index;   // M1.4
+
+  // Opt C: flatIndex → key lookup for O(range) getFramesForFlatRange.
+  std::vector<std::string>                          _flatIndexToKey;
   Point                                             _scrollOffset{0, 0};
 
   // Velocity tracking — updated by setScrollOffset on every native scroll tick.

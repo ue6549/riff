@@ -49,6 +49,10 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getTotalContentSize(): Size;
     setHorizontal(horizontal: boolean): void;
     clear(): void;
+    /** Stash API: save primary-axis size for every Measured entry. Call before clear(). */
+    stashHeights(): void;
+    /** Stash API: release stash memory. Call after computeSections(). */
+    clearStash(): void;
   };
   compositionalLayout: {
     computeSections(sections: object[]): void;
@@ -446,6 +450,8 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
   private sectionTypes: string[] = [];
   /** Post-prepare metadata for H-sections (populated after each prepare()). */
   private hSectionMetaArr: (HSectionMeta | null)[] = [];
+  /** Fingerprint of the last prepare() call — skip redundant computeSections. */
+  private _lastFingerprint = '';
 
   constructor(entries: CompositionalEntry[]) {
     this.entries = entries;
@@ -470,9 +476,21 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     return this.resolveEntry(sectionIndex).horizontal === true;
   }
 
-  /** Returns H-section metadata populated after prepare(). Null for V-sections. */
+  /** Returns H-section metadata. Reads Y/height from cache wrapper entry (always fresh). */
   hSectionInfo(sectionIndex: number): HSectionMeta | null {
-    return this.hSectionMetaArr[sectionIndex] ?? null;
+    const cached = this.hSectionMetaArr[sectionIndex];
+    if (!cached) return null;
+    // Read wrapper Y and height from LayoutCache — always reflects latest
+    // applyMeasurements / invalidateSectionsFrom reflows (avoids stale sectionY).
+    const wrapperAttrs = nativeMod.layoutCache.getAttributes(`h-section-wrapper-${sectionIndex}`);
+    if (wrapperAttrs) {
+      return {
+        ...cached,
+        sectionY: wrapperAttrs.frame.y,
+        sectionHeight: wrapperAttrs.frame.height,
+      };
+    }
+    return cached;
   }
 
   keyPrefixForSection(section: number): string {
@@ -498,7 +516,25 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     const h = context.containerHeight;
     if (w <= 0 || context.sections.length === 0) return;
 
+    // Build fingerprint: width + per-section (type, itemCount, horizontal).
+    // If unchanged, skip the expensive computeSections JSI call.
+    const fpParts: string[] = [String(w)];
+    for (let s = 0; s < context.sections.length; s++) {
+      const entry = this.resolveEntry(s);
+      const sec = context.sections[s]!;
+      fpParts.push(`${entry.layout.type}:${sec.itemCount}:${entry.horizontal ? 'H' : 'V'}`);
+    }
+    const fingerprint = fpParts.join('|');
+    if (fingerprint === this._lastFingerprint) {
+      // Data shape unchanged — skip full recompute. hSectionInfo reads from cache (always fresh).
+      return;
+    }
+    this._lastFingerprint = fingerprint;
+
     nativeMod.layoutCache.setHorizontal(false);
+
+    // Stash Yoga-measured sizes before cache clear (computeSections clears).
+    nativeMod.layoutCache.stashHeights();
 
     this.sectionTypes = [];
     let runningFlatBase = 0;
@@ -602,6 +638,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
 
     this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
     nativeMod.compositionalLayout.computeSections(sections);
+    nativeMod.layoutCache.clearStash();
 
     // After computeSections(), populate H-section metadata from LayoutCache.
     // C++ wrote "h-section-wrapper-{sIdx}" and "h-section-cw-{sIdx}" entries.
@@ -620,10 +657,18 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
         if (lastItem) contentWidth = lastItem.frame.x + lastItem.frame.width;
       }
 
+      // flatBase must be the first DATA item's flat index (after header), not the
+      // section start.  C++ stores data items at flatIndexBase + i where
+      // flatIndexBase = sectionFlatBase + (hasHeader ? 1 : 0).  If flatBase
+      // includes the header, the last data item falls outside [flatBase,
+      // flatBase + itemCount) and is never excluded by H windowing.
+      const hasHeader = sec.supplementaryItems.some(s => s.kind === 'header');
+      const dataFlatBase = (sectionFlatBases[sIdx] ?? 0) + (hasHeader ? 1 : 0);
+
       return {
         sectionY:      wrapperAttrs?.frame.y  ?? 0,
         sectionHeight: wrapperAttrs?.frame.height ?? 0,
-        flatBase:      sectionFlatBases[sIdx] ?? 0,
+        flatBase:      dataFlatBase,
         itemCount:     sec.itemCount,
         contentWidth,
       };
@@ -634,16 +679,23 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
-  attributesForItem(index: number, section: number): LayoutAttributes | null {
+  cacheKeyForItem(index: number, section: number): string {
     const sectionKeys = this.lastSectionKeys[section];
     const prefix = this.keyPrefixForSection(section);
-    const key = sectionKeys?.[index] ?? `${prefix}-${section}-${index}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return sectionKeys?.[index] ?? `${prefix}-${section}-${index}`;
+  }
+
+  cacheKeyForSupplementary(kind: string, section: number): string {
+    // Level 1: compositional-owned supplementaries use "comp-{section}-{kind}" key.
+    return `comp-${section}-${kind}`;
+  }
+
+  attributesForItem(index: number, section: number): LayoutAttributes | null {
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    // Level 1: compositional-owned supplementaries use "comp-{section}-{kind}" key.
-    return nativeMod.layoutCache.getAttributes(`comp-${section}-${kind}`);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {

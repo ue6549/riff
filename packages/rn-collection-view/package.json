@@ -58,7 +58,8 @@
         "RNMeasuredCell": "RNMeasuredCellView",
         "RNScrollCoordinatedView": "RNScrollCoordinatedViewView",
         "RNCollectionViewContainer": "RNCollectionViewContainerView",
-        "RNOrthogonalSectionView": "RNOrthogonalSectionView"
+        "RNOrthogonalSectionView": "RNOrthogonalSectionView",
+        "RNCollectionSubContainer": "RNCollectionSubContainerView"
       }
     },
     "android": {

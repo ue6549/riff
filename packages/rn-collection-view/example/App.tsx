@@ -26,6 +26,9 @@ import {
 import SalientPoints  from './screens/SalientPoints';
 import Comparison     from './screens/Comparison';
 import RiffDemo       from './screens/RiffDemo';
+import StorefrontDemo from './screens/StorefrontDemo';
+import HomepageDemo from './screens/HomepageDemo';
+import SearchResultsDemo from './screens/SearchResultsDemo';
 
 // ── Phase 1 — Layout Engine ───────────────────────────────────────────────────
 import M1_1_LayoutCache            from './tests/M1_1_LayoutCache';
@@ -119,6 +122,24 @@ const SCREENS: ScreenEntry[] = [
     detail: 'List · Grid · Masonry · Flow · all orientations & features',
     group: 'Features & Comparison',
     component: RiffDemo,
+  },
+  {
+    key: 'storefront', label: 'Storefront Demo',
+    detail: 'App Store–style page · compositional H+V sections · single scroll',
+    group: 'Features & Comparison',
+    component: StorefrontDemo,
+  },
+  {
+    key: 'homepage', label: 'Homepage Demo',
+    detail: 'Flipkart/Amazon homepage · categories · banners · deals · reco masonry',
+    group: 'Features & Comparison',
+    component: HomepageDemo,
+  },
+  {
+    key: 'search_results', label: 'Search Results Demo',
+    detail: '150-card search page · 2-col grid · banner carousels · H product lists',
+    group: 'Features & Comparison',
+    component: SearchResultsDemo,
   },
 
   // ── Phase 1: Layout Engine ────────────────────────────────────────────────

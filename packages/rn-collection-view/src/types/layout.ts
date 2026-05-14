@@ -131,6 +131,46 @@ export interface LayoutAttributes {
    * "sectionBackground" | "separator" (or any custom string from a custom layout).
    */
   readonly decorationKind?: string;
+
+  // ─── Rich visual properties (sub-container layouts) ────────────────────────
+  // Used by scroll-driven layouts (radial, spiral, carousel3D) and any custom
+  // layout that needs to drive opacity / transform / z-ordering per scroll
+  // tick. Applied natively by RNCollectionSubContainerView via tag→view map.
+
+  /**
+   * Opacity in [0, 1]. When omitted, defaults to 1. The sub-container view
+   * skips assigning child.alpha when this is 1 to avoid no-op CALayer dirties.
+   * Distinct from the old `alpha` field above which is a layout-internal hint;
+   * sub-containers read this for visual application.
+   */
+  readonly opacity?: number;
+
+  /**
+   * 4x4 column-major transform matrix (16 floats). Defaults to identity.
+   * Layout: [m11,m12,m13,m14, m21,m22,m23,m24, m31,m32,m33,m34, m41,m42,m43,m44]
+   * Matches CATransform3D's column-major layout for a direct memcpy on iOS.
+   *
+   * Common builders (compose left-to-right):
+   *   identity    = [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+   *   translate   = [1,0,0,0, 0,1,0,0, 0,0,1,0, tx,ty,tz,1]
+   *   scale(s)    = [s,0,0,0, 0,s,0,0, 0,0,s,0, 0,0,0,1]
+   *   perspective = [1,0,0,0, 0,1,0,0, 0,0,1,-1/d, 0,0,0,1]
+   *
+   * The sub-container view skips assigning layer.transform when this matrix
+   * equals identity to avoid re-rasterisation cost.
+   */
+  readonly transform?: Readonly<[
+    number, number, number, number,
+    number, number, number, number,
+    number, number, number, number,
+    number, number, number, number,
+  ]>;
+
+  /**
+   * Anchor point for the transform. Default (0.5, 0.5) — centre of the cell's
+   * bounds. Layouts can override (e.g. (0, 0.5) for left-edge rotation).
+   */
+  readonly anchorPoint?: Readonly<{ x: number; y: number }>;
 }
 
 // ─── Section descriptor ──────────────────────────────────────────────────────

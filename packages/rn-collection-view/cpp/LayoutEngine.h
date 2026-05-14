@@ -43,6 +43,17 @@ enum class ContentDimension {
   Both,    // Flow: Yoga measures both width and height
 };
 
+/// Optional context for scroll-driven layouts. Layouts use this to know
+/// the current viewport size, scroll offset, and section the scroll applies
+/// to (when running inside a sub-container).
+struct ScrollLayoutContext {
+  double containerWidth  = 0;
+  double containerHeight = 0;
+  double offsetX         = 0;
+  double offsetY         = 0;
+  int    section         = -1;  // -1 for layouts not bound to a single section
+};
+
 class LayoutEngine {
 public:
   virtual ~LayoutEngine() = default;
@@ -68,6 +79,23 @@ public:
    * ShadowNode uses this to know which Yoga results to write back to cache.
    */
   virtual ContentDimension contentDeterminedDimension() const = 0;
+
+  /**
+   * Optional scroll-driven layout hook.
+   *
+   * Sub-container layouts (radial, spiral, carousel3D, ...) override this to
+   * recompute positions / transforms / opacity per scroll tick directly into
+   * the cache. Static layouts (list, grid, masonry, flow) leave it as a no-op.
+   *
+   * When this returns true, the sub-container ShadowNode skips its Yoga
+   * cascade and trusts the cache entirely.
+   *
+   * Default: no-op, returns false (so static layouts retain their behaviour).
+   */
+  virtual bool processScroll(LayoutCache& /*cache*/,
+                             const ScrollLayoutContext& /*ctx*/) {
+    return false;
+  }
 };
 
 } // namespace rncv

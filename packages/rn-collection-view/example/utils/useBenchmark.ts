@@ -40,11 +40,18 @@ export interface RunResult {
   p5FPS: number;
   avgJSIdle: number;
   avgCPU: number;
+  p75CPU: number;
+  p90CPU: number;
+  avgMemDeltaMB: number;
+  p75MemDeltaMB: number;
+  p90MemDeltaMB: number;
   peakMemDeltaMB: number;
   avgBlankPct: number;
   peakBlankPct: number;
   activeMountMin: number;
   activeMountMax: number;
+  activeMountAvg: number;
+  activeMountP75: number;
   durationMs: number;
 }
 
@@ -54,10 +61,18 @@ export interface AggregateResult {
   p5FPS: number;
   avgJSIdle: number;
   avgCPU: number;
+  p75CPU: number;
+  p90CPU: number;
+  avgMemDeltaMB: number;
+  p75MemDeltaMB: number;
+  p90MemDeltaMB: number;
   peakMemDeltaMB: number;
   avgBlankPct: number;
   peakBlankPct: number;
   totalMounts: number;
+  activeMountMax: number;
+  activeMountAvg: number;
+  activeMountP75: number;
 }
 
 export interface BenchmarkResult {
@@ -234,8 +249,7 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
       const cpuSamples:    number[] = [];
       const memSamples:    number[] = [];
       const blankSamples:  number[] = [];
-      let   activeMountMin = configRef.current.getActiveMounts();
-      let   activeMountMax = configRef.current.getActiveMounts();
+      const mountSamples:  number[] = [];
       const startTime = Date.now();
 
       const rounds = run.warmup ? 1 : ROUNDS_PER_RUN;
@@ -255,9 +269,7 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
             memSamples.push(lm.memoryDeltaMB);
             const blank = configRef.current.getBlankAreaPct();
             if (blank >= 0) blankSamples.push(blank);
-            const am = configRef.current.getActiveMounts();
-            activeMountMin = Math.min(activeMountMin, am);
-            activeMountMax = Math.max(activeMountMax, am);
+            mountSamples.push(configRef.current.getActiveMounts());
           }, 200);
         }
 
@@ -287,11 +299,18 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
           p5FPS:          percentile(fpsSamples, 5),
           avgJSIdle:      mean(idleSamples),
           avgCPU:         cpuSamples.length > 0 ? mean(cpuSamples) : -1,
+          p75CPU:         cpuSamples.length > 0 ? percentile(cpuSamples, 75) : -1,
+          p90CPU:         cpuSamples.length > 0 ? percentile(cpuSamples, 90) : -1,
+          avgMemDeltaMB:  memSamples.length > 0 ? Math.round(memSamples.reduce((s, v) => s + v, 0) / memSamples.length * 10) / 10 : 0,
+          p75MemDeltaMB:  memSamples.length > 0 ? Math.round(percentile(memSamples, 75) * 10) / 10 : 0,
+          p90MemDeltaMB:  memSamples.length > 0 ? Math.round(percentile(memSamples, 90) * 10) / 10 : 0,
           peakMemDeltaMB: memSamples.length > 0 ? Math.max(...memSamples) : 0,
           avgBlankPct:    blankSamples.length > 0 ? mean(blankSamples) : -1,
           peakBlankPct:   blankSamples.length > 0 ? Math.max(...blankSamples) : -1,
-          activeMountMin,
-          activeMountMax,
+          activeMountMin: mountSamples.length > 0 ? Math.min(...mountSamples) : 0,
+          activeMountMax: mountSamples.length > 0 ? Math.max(...mountSamples) : 0,
+          activeMountAvg: mean(mountSamples),
+          activeMountP75: percentile(mountSamples, 75),
           durationMs:     Date.now() - startTime,
         });
       }
@@ -306,6 +325,9 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
     const minFPS   = runResults.reduce((m, r) => Math.min(m, r.minFPS), Infinity);
     const p5FPS    = runResults.reduce((m, r) => Math.min(m, r.p5FPS), Infinity);
     const peakBlank = runResults.filter(r => r.peakBlankPct >= 0).reduce((m, r) => Math.max(m, r.peakBlankPct), 0);
+    const activeMountMax = runResults.reduce((m, r) => Math.max(m, r.activeMountMax), 0);
+    const activeMountAvg = mean(runResults.map(r => r.activeMountAvg));
+    const activeMountP75 = runResults.reduce((m, r) => Math.max(m, r.activeMountP75), 0);
 
     const benchResult: BenchmarkResult = {
       engine,
@@ -321,10 +343,18 @@ export function useBenchmark(config: BenchmarkConfig): BenchmarkHandle {
         p5FPS:          p5FPS === Infinity  ? 0 : Math.round(p5FPS),
         avgJSIdle:      mean(allIdle),
         avgCPU:         allCPU.length > 0 ? mean(allCPU) : -1,
+        p75CPU:         allCPU.length > 0 ? percentile(allCPU, 75) : -1,
+        p90CPU:         allCPU.length > 0 ? percentile(allCPU, 90) : -1,
+        avgMemDeltaMB:  allMem.length > 0 ? Math.round(mean(allMem) * 10) / 10 : 0,
+        p75MemDeltaMB:  allMem.length > 0 ? Math.round(percentile(allMem, 75) * 10) / 10 : 0,
+        p90MemDeltaMB:  allMem.length > 0 ? Math.round(percentile(allMem, 90) * 10) / 10 : 0,
         peakMemDeltaMB: allMem.length > 0 ? Math.max(...allMem) : 0,
         avgBlankPct:    allBlank.length > 0 ? mean(allBlank) : -1,
         peakBlankPct:   allBlank.length > 0 ? peakBlank : -1,
         totalMounts:    configRef.current.getTotalMounts(),
+        activeMountMax,
+        activeMountAvg,
+        activeMountP75,
       },
     };
 

@@ -678,6 +678,20 @@ const RNCV_MVC_TRACE = false;
 // Kept available behind this flag for future H-section gesture/scroll debugging.
 const RNCV_HGEST_DIAG = false;
 
+// H sub-container scroll diagnostics. Per-event verbose logs for the JS side
+// of the H windowing pipeline.
+//
+// Flip to true to enable. Sister flag in native code:
+//   - cpp/CollectionSubContainerShadowNode.cpp  → RNCV_ENABLE_HSUB_LOGS
+//   - cpp/CollectionViewModule.cpp              → RNCV_ENABLE_HSUB_LOGS
+//   - ios/RNCollectionSubContainerView.mm       → RNCV_ENABLE_HSUB_LOGS
+//
+// Filterable tags (grep these):
+//   RNCV-HSUB-JS-SCROLL    handleHScroll input + computed range + delta
+//   RNCV-HSUB-JS-WIN       Per-render H windowing decisions (re-entry, ranges, exclusions)
+//   RNCV-HSUB-JS-PROPS     Wrapper props handed to <RNCollectionSubContainer>
+const RNCV_HSUB_LOGS = true;
+
 function rncvMvcTrace(msg: string) {
   if (!__DEV__ || !RNCV_MVC_TRACE) return;
   console.log(`[MVC-TRACE] ${msg}`);
@@ -2124,6 +2138,20 @@ export function Riff<T = unknown>({
         `frames=${result.frames?.length ?? 0} cw=${meta.contentWidth.toFixed(1)} ` +
         `cv=${result.cacheVersion ?? 'n/a'} bumpRender=${rangeChanged}`);
     }
+    if (__DEV__ && RNCV_HSUB_LOGS) {
+      const prevRange = prev ? `${prev.first}..${prev.last}` : 'NONE';
+      const newRange  = `${result.renderFirst}..${result.renderLast}`;
+      // eslint-disable-next-line no-console
+      console.log(
+        `[RNCV-HSUB-JS-SCROLL] s=${sectionIndex} x=${scrollX.toFixed(1)} ` +
+        `vpW=${viewportWidth.toFixed(0)} mult=${sectionMult.toFixed(2)} ` +
+        `cw=${meta.contentWidth.toFixed(1)} sectionH=${meta.sectionHeight.toFixed(1)} ` +
+        `prevRange=${prevRange} newRange=${newRange} ` +
+        `delta=${rangeChanged ? 'CHANGED' : 'same'} ` +
+        `framesLen=${result.frames?.length ?? 0} cv=${result.cacheVersion ?? 'n/a'} ` +
+        `willReRender=${rangeChanged}`
+      );
+    }
     if (rangeChanged) {
       setHRangeVersion(v => v + 1);
     }
@@ -2661,8 +2689,23 @@ export function Riff<T = unknown>({
     // Auto pool size: track render window so all exiting items can be pooled,
     // guaranteeing zero steady-state cold mounts. Consumer can override with
     // recyclePoolSize prop to cap memory at the cost of more cold mounts.
+    //
+    // Floor includes max H render window. Each H section's render range fits
+    // entirely in one pool (cells of the same itemType), and during bounce
+    // the visible cells churn in and out of the pool a full window's worth.
+    // Without this floor, a pure-H demo with V window=1 (single section)
+    // would set maxPoolSize=4, overflow the pool on bounce-back, discard
+    // slots, and cold-mount the rebound cells — visible as the `MISSING tag`
+    // → new tag transition seen in user logs at the bounce edge.
+    let _maxHWindow = 0;
+    for (const [, r] of hRenderRangesRef.current) {
+      const span = r.last - r.first + 1;
+      if (span > _maxHWindow) _maxHWindow = span;
+    }
     slotManagerRef.current.maxPoolSize =
-      recyclePoolSize !== undefined ? recyclePoolSize : Math.max(smLast - smFirst + 1, 4);
+      recyclePoolSize !== undefined
+        ? recyclePoolSize
+        : Math.max(smLast - smFirst + 1, _maxHWindow * 2, 8);
 
     // H-section windowing: build exclusion set for items outside their H viewport.
     // Items in an H section that are within the V render range but outside the
@@ -2701,14 +2744,17 @@ export function Riff<T = unknown>({
         const sectionStartFi = meta.flatBase;
         const sectionEndFi   = meta.flatBase + meta.itemCount - 1;
         const isInVRange     = !(sectionEndFi < smFirst || sectionStartFi > smLast);
+        let didReEntryClear = false;
         if (isInVRange) {
           currHSectionsRendered.add(sIdx);
           if (!prevHSet.has(sIdx)) {
             hRenderRangesRef.current.delete(sIdx);
+            didReEntryClear = true;
           }
         }
 
         let hRange = hRenderRangesRef.current.get(sIdx);
+        let didInitCompute = false;
         if (!hRange && viewportWidth > 0) {
           // First render for this section: compute initial window at scrollX=0
           // so windowing applies immediately — no 1-frame all-items-mounted.
@@ -2728,14 +2774,43 @@ export function Riff<T = unknown>({
             cacheVersion: result.cacheVersion ?? lastCacheVersionRef.current,
           };
           hRenderRangesRef.current.set(sIdx, hRange);
+          didInitCompute = true;
         }
-        if (!hRange) continue;
+        if (!hRange) {
+          if (__DEV__ && RNCV_HSUB_LOGS && isInVRange) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `[RNCV-HSUB-JS-WIN] s=${sIdx} inV=YES vpW=${viewportWidth.toFixed(0)} ` +
+              `prevHSet=${prevHSet.has(sIdx) ? 'YES' : 'NO'} ` +
+              `reentry=${didReEntryClear ? 'YES' : 'no'} ` +
+              `hRange=NONE skipped (no viewport yet)`
+            );
+          }
+          continue;
+        }
 
+        let excludedForSection = 0;
         for (let fi = meta.flatBase; fi < meta.flatBase + meta.itemCount; fi++) {
           if (fi < hRange.first || fi > hRange.last) {
             if (!hExcludeIndices) hExcludeIndices = new Set<number>();
             hExcludeIndices.add(fi);
+            excludedForSection++;
           }
+        }
+
+        if (__DEV__ && RNCV_HSUB_LOGS) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `[RNCV-HSUB-JS-WIN] s=${sIdx} inV=${isInVRange ? 'YES' : 'no'} ` +
+            `prevHSet=${prevHSet.has(sIdx) ? 'YES' : 'NO'} ` +
+            `reentry=${didReEntryClear ? 'YES' : 'no'} ` +
+            `init=${didInitCompute ? 'YES' : 'no'} ` +
+            `range=${hRange.first}..${hRange.last} ` +
+            `flatBase=${meta.flatBase} itemCount=${meta.itemCount} ` +
+            `cw=${meta.contentWidth.toFixed(1)} sectionH=${meta.sectionHeight.toFixed(1)} ` +
+            `gen=${hRange.gen} cv=${hRange.cacheVersion} ` +
+            `excluded=${excludedForSection}`
+          );
         }
       }
       // Snapshot the current set for next render's re-entry detection.
@@ -2761,6 +2836,18 @@ export function Riff<T = unknown>({
         return propGetItemType ? propGetItemType(data[i], i) : 'item';
       },
       computeCacheKey,
+      // Section index source — captured once per assignment into SlotInfo
+      // so pooled slots route to their original H sub-container without
+      // re-reading the (possibly mutated) flat data on each render.
+      (i) => isSectioned ? ((flattenResult?.flatData[i] as any)?.sectionIndex ?? 0) : 0,
+      // Kind source — same rationale as sectionIndex. Pooled headers/footers
+      // must keep their kind across pooling so they aren't misrouted as items
+      // into an H sub-container's bucket.
+      (i) => {
+        if (!isSectioned) return 'item';
+        const k = (flattenResult?.flatData[i] as any)?._kind;
+        return k === 'header' || k === 'footer' ? k : 'item';
+      },
       (i) => data[i],
       data.length,
       mountedStickySet,
@@ -2788,11 +2875,16 @@ export function Riff<T = unknown>({
         if (slot.dataIndex > maxIdx) maxIdx = slot.dataIndex;
       }
 
-      // Detect H-section cells early — needed for both cache invalidation and routing.
-      const slotFd = isSectioned ? (flattenResult?.flatData[slot.dataIndex]) : null;
-      const slotSectionIdx = (slotFd as any)?.sectionIndex ?? 0;
-      const slotKind: string = (slotFd as any)?._kind ?? 'item';
-      const slotIsHCell = !slot.isPooled && slotKind === 'item' && !!isHSectionFn?.(slotSectionIdx);
+      // Detect H-section cells early — needed for both cache invalidation
+      // and routing. sectionIndex and kind both come from SlotInfo (single
+      // source of truth, captured at every slot assignment by SlotManager.sync
+      // and preserved across pooling). This makes routing of POOLED slots
+      // — H cells, headers, footers — survive arbitrary data mutations
+      // without re-reading flatData[slot.dataIndex] (which may be stale or
+      // out-of-bounds for pooled entries).
+      const slotSectionIdx = slot.sectionIndex;
+      const slotKind = slot.kind;
+      const slotIsHCell = slotKind === 'item' && !!isHSectionFn?.(slotSectionIdx);
 
       // Opt 7: reuse element if slot state and render gen are unchanged.
       // item reference check mirrors React.memo semantics — if the consumer
@@ -2827,7 +2919,12 @@ export function Riff<T = unknown>({
       }
 
       // Phase 2: route H-section item cells into their section bucket.
-      // Pooled cells always go to the V array (they're measure-only, hidden).
+      // POOLED H cells go to the same bucket as visible H cells of that
+      // section, so the H sub-container's ShadowNode owns their positioning
+      // (H-local coordinates) and Activity hides their content. Routing
+      // survives data mutations because slot.sectionIndex / slot.kind are
+      // captured at every assignment by SlotManager and preserved across
+      // pooling — see SlotInfo jsdoc for the underlying contract.
       // Headers/footers stay in the V array — they are V-positioned above/below
       // the UIScrollView, not inside it.
       if (slotIsHCell) {
@@ -2862,18 +2959,42 @@ export function Riff<T = unknown>({
     // in the per-frame apply path). The sub-container's onSubScroll event
     // is mapped through handleHSubScroll so existing windowing logic keeps
     // working unchanged (same handleHScroll under the hood).
+    //
+    // H-2.1: section content size (contentWidth / contentHeight) is NOT
+    // passed as props. The C++ ShadowNode reads it directly from the layout
+    // cache (`h-section-cw-{N}` for the scroll-axis extent and
+    // `h-section-wrapper-{N}` for the cross-axis section height — both
+    // written by CompositionalLayout::finalizeHSection). Round-tripping
+    // section size through JS as a Fabric prop created a feedback loop:
+    // cell measurements drift → cache update → finalizeHSection updates
+    // section size → JS reads cache → JS re-renders this wrapper with new
+    // contentHeight prop → Fabric commits the new prop → wrapper bounds
+    // change → Yoga re-runs on the subtree → cells re-measure → drift
+    // lands differently → loop. Symptoms: unnatural slow-decay bounce,
+    // gestures wedged after edge bounce, JS render storm during decel.
+    // Cutting the round-trip here lets the cache flow stay native end to
+    // end; section size updates appear as state-driven UIScrollView
+    // contentSize changes, never as React renders.
     const hSectionWrappers: React.ReactElement[] = [];
     if (hSectionCells.size > 0) {
       for (const [sIdx, sectionCells] of hSectionCells) {
-        const meta = hSectionInfoFn?.(sIdx);
+        if (__DEV__ && RNCV_HSUB_LOGS) {
+          const hRangeForLog = hRenderRangesRef.current.get(sIdx);
+          // eslint-disable-next-line no-console
+          console.log(
+            `[RNCV-HSUB-JS-PROPS] s=${sIdx} ` +
+            `cellCount=${sectionCells.length} ` +
+            `range=${hRangeForLog ? `${hRangeForLog.first}..${hRangeForLog.last}` : 'NONE'} ` +
+            `lcv=${layoutCacheVersion} ` +
+            `(content size flows native via cache; not passed as prop)`
+          );
+        }
         hSectionWrappers.push(
           <RNCollectionSubContainer
             key={`h-section-${sIdx}`}
             layoutCacheId={layoutCacheId}
             sectionIndex={sIdx}
             scrollDirection="horizontal"
-            contentWidth={meta?.contentWidth ?? 0}
-            contentHeight={meta?.sectionHeight ?? 0}
             onSubScroll={handleHSubScroll}
           >
             {sectionCells}

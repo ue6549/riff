@@ -445,6 +445,20 @@ double GridLayout::computeSectionFromCache(const GridLayoutParams& p,
     }
   }
 
+  // For H-grid: if any items have Yoga-measured cross sizes larger than the
+  // estimated itemCrossSize, update itemCrossSize and crossContent so that
+  // row Y positions use the actual max height (prevents overflow).
+  if (H && p.itemCount > 0) {
+    double actualMaxCross = 0;
+    for (int i = 0; i < p.itemCount; ++i) {
+      if (crossSizes[i] > actualMaxCross) actualMaxCross = crossSizes[i];
+    }
+    if (actualMaxCross > itemCrossSize) {
+      itemCrossSize = actualMaxCross;
+      crossContent  = itemCrossSize * cols + totalColSpacing;
+    }
+  }
+
   // ── Layout items using cached sizes ──────────────────────────────────────
   struct CellFrame { double x, y, width, height; };
   std::vector<CellFrame> frames(p.itemCount);

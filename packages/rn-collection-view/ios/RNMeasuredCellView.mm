@@ -21,6 +21,37 @@ using namespace facebook::react;
   #define RNCV_IOS_MEASURED_LOG(...) ((void)0)
 #endif
 
+// ── On-screen debug paints (DEBUG builds only) ────────────────────────────
+// RNMeasuredCellView: type-coloured tint + border + small index label.
+// RNCollectionSubContainerView: yellow / cyan / orange hierarchy outlines.
+//
+// Master switch — default OFF (no tints, no extra subviews, production look):
+//   #define RNCV_DEBUG_COLLECTION_VISUALS 1
+// in this file before the #ifndef below, or add to the pod target:
+//   OTHER_CFLAGS = $(inherited) -DRNCV_DEBUG_COLLECTION_VISUALS=1
+//
+// Optional NSLog for paint / layout / ancestry (only when visuals are ON):
+//   RNCV_CELL_DEBUG_LOGS 1  (see below)
+//
+// Legend when visuals are ON:
+//    type=cell           green   | decoration  magenta | supplementary  blue
+//    other / unset       orange  (recycled / missing type prop)
+#ifndef RNCV_DEBUG_COLLECTION_VISUALS
+#define RNCV_DEBUG_COLLECTION_VISUALS 1
+#endif
+
+#ifndef RNCV_CELL_DEBUG_LOGS
+#define RNCV_CELL_DEBUG_LOGS 0
+#endif
+
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS && RNCV_CELL_DEBUG_LOGS
+  #define RNCV_VIS_LOG(fmt, ...) NSLog(@"[RNCV-CELL-VIS] " fmt, ##__VA_ARGS__)
+  #define RNCV_ANC_LOG(fmt, ...) NSLog(@"[RNCV-CELL-ANCESTRY] " fmt, ##__VA_ARGS__)
+#else
+  #define RNCV_VIS_LOG(...) ((void)0)
+  #define RNCV_ANC_LOG(...) ((void)0)
+#endif
+
 @interface RNMeasuredCellView () <RCTRNMeasuredCellViewProtocol>
 @end
 
@@ -28,6 +59,19 @@ using namespace facebook::react;
   // Last size reported via onMeasured — used to suppress duplicate events
   // when layoutSubviews is called but the size hasn't actually changed.
   CGSize _lastFiredSize;
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
+  // Cached last paint inputs so we only relog when something actually
+  // changes.
+  NSString *_lastPaintedType;
+  // On-cell debug label (top-left). Shows type letter + dataIndex +
+  // measureOnly flag + tag so a rogue green block in the H list area
+  // immediately reveals whether it's a real visible cell that leaked
+  // (V) or a pooled measure-only cell parked at Yoga-default position (M).
+  UILabel *_debugLabel;
+  // Cached for label refreshes when only the layout (not the type) changed.
+  int     _lastIndex;
+  BOOL    _lastMeasureOnly;
+#endif
 }
 
 // ── Fabric registration ────────────────────────────────────────────────────────
@@ -46,6 +90,30 @@ using namespace facebook::react;
     _props = defaultProps;
     _lastFiredSize = CGSizeZero;
     _shadowNodePositioned = NO;
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
+    _lastPaintedType  = nil;
+    _lastIndex        = -1;
+    _lastMeasureOnly  = NO;
+
+    // Yellow-on-black 10pt monospace label, pinned to the top-left of the
+    // cell. Sits above the user's content (addSubview at end pushes it to
+    // the top of the subview stack on first layout). Background colour
+    // makes it readable on top of any real content.
+    _debugLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, 200, 14)];
+    _debugLabel.font = [UIFont fontWithName:@"Menlo-Bold" size:10] ?: [UIFont systemFontOfSize:10];
+    _debugLabel.textColor = [UIColor yellowColor];
+    _debugLabel.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.85];
+    _debugLabel.textAlignment = NSTextAlignmentLeft;
+    _debugLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    _debugLabel.userInteractionEnabled = NO;
+    _debugLabel.text = @"?";
+    [self addSubview:_debugLabel];
+
+    // Initial paint with the unknown / pre-prop look so even a freshly
+    // allocated view that never gets a `type` prop is identifiable in the
+    // Xcode View Hierarchy debugger as a "rogue" orange tint.
+    [self _rncvApplyVisualForType:nil];
+#endif
   }
   return self;
 }
@@ -57,6 +125,13 @@ using namespace facebook::react;
   [super prepareForRecycle];
   _shadowNodePositioned = NO;
   _lastFiredSize = CGSizeZero;
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
+  _lastPaintedType = nil;
+  // Reset to "unknown / rogue" orange so a recycled view that never gets a
+  // fresh updateProps: stands out immediately.
+  [self _rncvApplyVisualForType:nil];
+  RNCV_ANC_LOG(@"prepareForRecycle ptr=%p tag=%ld", (__bridge void *)self, (long)self.tag);
+#endif
 }
 
 // ── Fabric layout metrics ──────────────────────────────────────────────────────
@@ -87,6 +162,18 @@ using namespace facebook::react;
   // else: Fabric/Yoga CSS absolute position is the authority (H-section cells inside
   // RNOrthogonalSectionView). Let layoutMetrics.frame.origin through unchanged.
   [super updateLayoutMetrics:adjusted oldLayoutMetrics:oldLayoutMetrics];
+
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
+  // Frame log — useful when an "extra" coloured rectangle appears in the
+  // wrong place. Logs only when the resulting frame actually differs from
+  // what super produced, so it stays quiet during normal scrolling.
+  const auto &f = adjusted.frame;
+  RNCV_VIS_LOG(@"layout ptr=%p tag=%ld type=%@ frame=(%.1f,%.1f,%.1fx%.1f) snp=%d",
+               (__bridge void *)self, (long)self.tag, _lastPaintedType ?: @"(unset)",
+               (double)f.origin.x, (double)f.origin.y,
+               (double)f.size.width, (double)f.size.height,
+               _shadowNodePositioned ? 1 : 0);
+#endif
 }
 
 // ── Layout ─────────────────────────────────────────────────────────────────────
@@ -94,6 +181,21 @@ using namespace facebook::react;
 - (void)layoutSubviews
 {
   [super layoutSubviews];
+
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
+  if (_debugLabel) {
+    // Top-left corner, full text width, capped to cell width. Re-add
+    // ensures the label stays on top after Fabric mounts user content
+    // (which goes to the back of the subview stack).
+    CGSize textSize = [_debugLabel intrinsicContentSize];
+    CGFloat w = MIN(textSize.width + 6, self.bounds.size.width);
+    CGFloat h = MAX(textSize.height, 14);
+    _debugLabel.frame = CGRectMake(0, 0, w, h);
+    if (_debugLabel.superview != self || self.subviews.lastObject != _debugLabel) {
+      [self bringSubviewToFront:_debugLabel];
+    }
+  }
+#endif
 
   CGSize size = self.bounds.size;
 
@@ -124,6 +226,137 @@ using namespace facebook::react;
     emitter->onMeasured(event);
   }
 }
+
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
+
+// ── Visual diagnostics (DEBUG only) ────────────────────────────────────────
+// updateProps fires every time React commits new props for this view. Read
+// the `type` prop and repaint the type-coloured tint + the on-cell debug
+// label so a rogue rectangle in the H list area immediately reveals
+// whether it's a real visible cell that leaked (V) or a measure-only
+// cell parked in the wrong place (M).
+
+- (void)updateProps:(const facebook::react::Props::Shared &)props
+           oldProps:(const facebook::react::Props::Shared &)oldProps
+{
+  [super updateProps:props oldProps:oldProps];
+  const auto cellProps = std::static_pointer_cast<const RNMeasuredCellProps>(props);
+  if (!cellProps) return;
+  // ── Visual diagnostics (DEBUG only) ─────────────────────────────────
+  // Repaint type-coloured tint and refresh the on-cell debug label so a
+  // rogue green block in the H list area immediately reveals whether
+  // it's a real visible cell that leaked (V) or a pooled measure-only
+  // cell parked at Yoga-default position (M).
+  NSString *typeStr = [NSString stringWithUTF8String:cellProps->type.c_str()];
+  if (typeStr.length == 0) typeStr = @"(empty)";
+  const int  idx         = (int)cellProps->index;
+  const BOOL measureOnly = cellProps->isMeasureOnly;
+  const BOOL typeChanged   = ![typeStr isEqualToString:_lastPaintedType];
+  const BOOL labelChanged  = typeChanged || idx != _lastIndex || measureOnly != _lastMeasureOnly;
+  if (typeChanged) {
+    [self _rncvApplyVisualForType:typeStr];
+    _lastPaintedType = [typeStr copy];
+  }
+  if (labelChanged) {
+    _lastIndex       = idx;
+    _lastMeasureOnly = measureOnly;
+    // Type letter: c=cell, d=decoration, s=supp, ?=other.
+    char typeLetter =
+        [typeStr isEqualToString:@"cell"]          ? 'c' :
+        [typeStr isEqualToString:@"decoration"]    ? 'd' :
+        [typeStr isEqualToString:@"supplementary"] ? 's' : '?';
+    _debugLabel.text = [NSString stringWithFormat:@"%c i=%d %@ t=%ld",
+                        typeLetter, idx, measureOnly ? @"M" : @"V", (long)self.tag];
+    [_debugLabel sizeToFit];
+    [self setNeedsLayout];
+    // accessibilityLabel surfaces the same info in the Xcode View
+    // Hierarchy inspector right next to the class name.
+    self.accessibilityLabel = [NSString stringWithFormat:@"RNCell[type=%@ idx=%d %@ ck=%s tag=%ld]",
+                               typeStr, idx, measureOnly ? @"M" : @"V",
+                               cellProps->cacheKey.c_str(), (long)self.tag];
+  }
+}
+
+// type → color mapping. See header block at top of file for legend.
+- (void)_rncvApplyVisualForType:(NSString *)type
+{
+  UIColor *fill;
+  UIColor *border;
+  if ([type isEqualToString:@"cell"]) {
+    fill   = [UIColor colorWithRed:0.20 green:0.85 blue:0.20 alpha:0.18];
+    border = [UIColor colorWithRed:0.10 green:0.65 blue:0.10 alpha:0.95];
+  } else if ([type isEqualToString:@"decoration"]) {
+    // High-visibility magenta — current debugging hypothesis is that a
+    // decoration is overlapping an H section.
+    fill   = [UIColor colorWithRed:1.00 green:0.10 blue:0.85 alpha:0.30];
+    border = [UIColor colorWithRed:0.85 green:0.00 blue:0.65 alpha:1.00];
+  } else if ([type isEqualToString:@"supplementary"]) {
+    fill   = [UIColor colorWithRed:0.20 green:0.40 blue:0.95 alpha:0.18];
+    border = [UIColor colorWithRed:0.10 green:0.25 blue:0.80 alpha:0.95];
+  } else {
+    // Unset / unknown / recycled-not-yet-rebound. Should never appear in a
+    // healthy run; if you see orange tiles, a view leaked through Fabric
+    // recycling without receiving fresh props.
+    fill   = [UIColor colorWithRed:1.00 green:0.55 blue:0.00 alpha:0.40];
+    border = [UIColor colorWithRed:1.00 green:0.30 blue:0.00 alpha:1.00];
+  }
+  self.backgroundColor   = fill;
+  self.layer.borderColor = border.CGColor;
+  self.layer.borderWidth = 2.0;
+  RNCV_VIS_LOG(@"paint ptr=%p tag=%ld type=%@", (__bridge void *)self, (long)self.tag, type);
+}
+
+// ── Ancestry diagnostics ───────────────────────────────────────────────────
+// On every parent change we walk up the superview chain, marking the first
+// UIScrollView ancestor (this is the gesture-owning view — it tells us
+// whether this cell is "inside the H sub-container" or "loose in the main
+// scroll view"). The first known container view (sub vs main) is also
+// marked. Output format is purposely compact so multiple events fit on a
+// single line in Console.app.
+
+- (NSString *)_rncvAncestryString
+{
+  NSMutableArray<NSString *> *parts = [NSMutableArray array];
+  UIView *firstScroll = nil;
+  UIView *firstContainer = nil;
+  UIView *v = self.superview;
+  int depth = 0;
+  while (v && depth < 40) {
+    NSString *cls = NSStringFromClass([v class]);
+    [parts addObject:[NSString stringWithFormat:@"%@(t=%ld)", cls, (long)v.tag]];
+    if (!firstScroll && [v isKindOfClass:[UIScrollView class]]) firstScroll = v;
+    if (!firstContainer && ([cls isEqualToString:@"RNCollectionSubContainerView"] ||
+                            [cls isEqualToString:@"RNCollectionViewContainerView"])) {
+      firstContainer = v;
+    }
+    v = v.superview;
+    depth++;
+  }
+  return [NSString stringWithFormat:@"firstScroll=%@(t=%ld) firstContainer=%@ chain=[%@]",
+          firstScroll ? NSStringFromClass([firstScroll class]) : @"(none)",
+          firstScroll ? (long)firstScroll.tag : -1,
+          firstContainer ? NSStringFromClass([firstContainer class]) : @"(none)",
+          [parts componentsJoinedByString:@" <- "]];
+}
+
+- (void)didMoveToSuperview
+{
+  [super didMoveToSuperview];
+  RNCV_ANC_LOG(@"didMoveToSuperview ptr=%p tag=%ld type=%@ %@",
+               (__bridge void *)self, (long)self.tag, _lastPaintedType ?: @"(unset)",
+               [self _rncvAncestryString]);
+}
+
+- (void)didMoveToWindow
+{
+  [super didMoveToWindow];
+  RNCV_ANC_LOG(@"didMoveToWindow    ptr=%p tag=%ld type=%@ window=%@ %@",
+               (__bridge void *)self, (long)self.tag, _lastPaintedType ?: @"(unset)",
+               self.window ? @"YES" : @"NO",
+               [self _rncvAncestryString]);
+}
+
+#endif  // DEBUG && RNCV_DEBUG_COLLECTION_VISUALS (RNMeasuredCellView diagnostics)
 
 @end
 

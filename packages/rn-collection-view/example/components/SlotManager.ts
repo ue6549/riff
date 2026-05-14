@@ -36,6 +36,27 @@ export interface SlotInfo<T> {
   dataKey: string;
   /** Passed to RNMeasuredCell/RNScrollCoordinatedView as the LayoutCache identity. */
   cacheKey: string;
+  /**
+   * Section index this slot belongs to. Captured from getSectionIndex at every
+   * assignment (Phase 3 Cases A/B/C) and preserved across pooling so that
+   * downstream consumers can route POOLED slots back to their original
+   * section without re-reading the (possibly mutated) flat data.
+   *
+   * 0 for non-sectioned layouts. Never -1 in practice — a slot always passes
+   * through Case A/B/C before being pooled.
+   */
+  sectionIndex: number;
+  /**
+   * Slot kind: 'item' | 'header' | 'footer'. Captured from getKind at every
+   * assignment and preserved across pooling. Required for routing pooled
+   * slots — pooled headers/footers must stay routed as supplementaries (in
+   * the V `cells` array, V-positioned by the main container) and must NOT
+   * be misrouted into an H sub-container even when their section is an
+   * H section.
+   *
+   * Defaults to 'item' for non-sectioned data.
+   */
+  kind: 'item' | 'header' | 'footer';
   /** True → Activity=hidden (either in measure range or sitting idle in pool). */
   measureOnly: boolean;
   /** True → slot is idle in the recycle pool, not assigned to any visible index. */
@@ -60,6 +81,16 @@ export class SlotManager<T> {
   private _prevMF: number | null = null;
   private _prevML: number | null = null;
   private _prevLen = -1;
+  private _prevExcludeSize = 0;
+  // Order-independent content hash of excludeIndices. Required (not just size)
+  // because H-section windowing rotates the excluded set as the user H-scrolls
+  // (e.g. excludes {4..9} → {0,1,6..9} as window shifts) — same size, different
+  // contents. Comparing only size here would short-circuit and return stale
+  // activeSlots, leaving the H wrapper rendering yesterday's cells while the
+  // C++ window has moved on. Visible as: leading-edge whitespace, "items
+  // disappear", and (when combined with stale cell positions in the cache for
+  // newly-included indices) cells stacked at index-0 frame.
+  private _prevExcludeHash = 0;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -70,12 +101,20 @@ export class SlotManager<T> {
    * @param renderLast   Last index in the visible render range.
    * @param measureFirst First index in the measure-ahead range (null = none).
    * @param measureLast  Last index in the measure-ahead range (null = none).
-   * @param getDataKey   (i) → identity key from keyExtractor.
-   * @param getItemType  (i) → type string for pool segregation.
-   * @param getCacheKey  (i) → LayoutCache key for RNMeasuredCell.
-   * @param getItem      (i) → the actual data item.
-   * @param dataLength   Length of the data array (for bounds checking).
-   * @param stickySet    Indices managed as sticky cells (excluded from pool).
+   * @param getDataKey       (i) → identity key from keyExtractor.
+   * @param getItemType      (i) → type string for pool segregation.
+   * @param getCacheKey      (i) → LayoutCache key for RNMeasuredCell.
+   * @param getSectionIndex  (i) → section index of the item at flat index i
+   *                         (0 for non-sectioned layouts). Captured into
+   *                         SlotInfo.sectionIndex on assignment and preserved
+   *                         across pooling — see SlotInfo.sectionIndex jsdoc.
+   * @param getKind          (i) → 'item' | 'header' | 'footer' for the item at
+   *                         flat index i. Captured into SlotInfo.kind on
+   *                         assignment and preserved across pooling — see
+   *                         SlotInfo.kind jsdoc. 'item' for non-sectioned data.
+   * @param getItem          (i) → the actual data item.
+   * @param dataLength       Length of the data array (for bounds checking).
+   * @param stickySet        Indices managed as sticky cells (excluded from pool).
    * @returns Map of slotKey → SlotInfo for ALL slots that should be rendered
    *          (assigned + idle pool slots with Activity=hidden).
    */
@@ -87,9 +126,12 @@ export class SlotManager<T> {
     getDataKey: (i: number) => string,
     getItemType: (i: number) => string,
     getCacheKey: (i: number) => string,
+    getSectionIndex: (i: number) => number,
+    getKind: (i: number) => 'item' | 'header' | 'footer',
     getItem: (i: number) => T,
     dataLength: number,
     stickySet: Set<number> | null,
+    excludeIndices?: Set<number>,
   ): Map<string, SlotInfo<T>> {
     // Reset per-call counter before any early return so callers never double-count.
     this.lastColdMounts = 0;
@@ -99,11 +141,25 @@ export class SlotManager<T> {
     // data reference or extraData → Riff calls prepare() → layoutContext changes →
     // renderGen bumps → element cache misses → renderCell calls computeCacheKey
     // with new keys → Phase 3 Case A/B dataKey checks detect the change.
-    // This short-circuit only fires when the index ranges and array length are
-    // identical — the minimum condition for neededIndices to be the same Set.
+    // This short-circuit only fires when the index ranges, array length, and
+    // H-section exclusion set are identical.
+    //
+    // excludeHash: order-independent content hash. Pure size check is unsafe —
+    // H window rotation produces same-size sets with different contents.
+    const excludeSize = excludeIndices?.size ?? 0;
+    let excludeHash = 0;
+    if (excludeIndices) {
+      for (const i of excludeIndices) {
+        // boost::hash_combine variant; commutative-friendly via add (order-
+        // independent) so set iteration order doesn't change the digest.
+        excludeHash = (excludeHash + ((i + 0x9e3779b9) | 0)) | 0;
+      }
+    }
     if (renderFirst === this._prevFirst && renderLast === this._prevLast &&
         measureFirst === this._prevMF && measureLast === this._prevML &&
-        dataLength === this._prevLen) {
+        dataLength === this._prevLen &&
+        excludeSize === this._prevExcludeSize &&
+        excludeHash === this._prevExcludeHash) {
       return this.activeSlots;
     }
 
@@ -116,7 +172,9 @@ export class SlotManager<T> {
     const hi = Math.max(renderLast,  effectiveMeasureLast);
 
     for (let i = lo; i <= hi && i < dataLength; i++) {
-      if (!stickySet?.has(i)) neededIndices.add(i);
+      if (stickySet?.has(i)) continue;
+      if (excludeIndices?.has(i)) continue; // H-windowed out
+      neededIndices.add(i);
     }
 
     // ── Phase 2: Release slots no longer needed → pool or discard ──────────
@@ -165,6 +223,8 @@ export class SlotManager<T> {
           }
           slot.dataIndex = index;
           slot.cacheKey = getCacheKey(index);
+          slot.sectionIndex = getSectionIndex(index);
+          slot.kind = getKind(index);
           slot.measureOnly = this._isMeasureOnly(index, renderFirst, renderLast, measureFirst !== null);
           slot.item = getItem(index);
           _p3A++;
@@ -191,6 +251,8 @@ export class SlotManager<T> {
         slot.dataKey   = dataKey;
         slot.dataIndex = index;
         slot.cacheKey  = getCacheKey(index);
+        slot.sectionIndex = getSectionIndex(index);
+        slot.kind      = getKind(index);
         slot.itemType  = itemType;
         slot.measureOnly = this._isMeasureOnly(index, renderFirst, renderLast, measureFirst !== null);
         slot.isPooled  = false;
@@ -208,6 +270,8 @@ export class SlotManager<T> {
         dataIndex: index,
         dataKey,
         cacheKey: getCacheKey(index),
+        sectionIndex: getSectionIndex(index),
+        kind: getKind(index),
         measureOnly: this._isMeasureOnly(index, renderFirst, renderLast, measureFirst !== null),
         isPooled: false,
         item: getItem(index),
@@ -238,6 +302,8 @@ export class SlotManager<T> {
     this._prevMF = measureFirst;
     this._prevML = measureLast;
     this._prevLen = dataLength;
+    this._prevExcludeSize = excludeSize;
+    this._prevExcludeHash = excludeHash;
 
     return this.activeSlots;
   }
@@ -258,6 +324,7 @@ export class SlotManager<T> {
     this._prevMF = null;
     this._prevML = null;
     this._prevLen = -1;
+    this._prevExcludeSize = 0;
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

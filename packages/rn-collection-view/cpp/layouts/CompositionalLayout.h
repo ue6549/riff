@@ -135,9 +135,10 @@ private:
                                        int sectionIndex, double startPrimary);
 
   // H-section finalization: Y-shift items, write wrapper + cw entries.
-  void finalizeHSection(const CompositionalSectionInfo& info,
-                         int sectionIndex, double contentCursorY,
-                         double hContentEnd);
+  // Returns the actual V-height of the H-section (max cross extent or estimate).
+  float finalizeHSection(const CompositionalSectionInfo& info,
+                          int sectionIndex, double contentCursorY,
+                          double hContentEnd);
 
   // JSI parsing helpers.
   static CompositionalSectionInfo sectionInfoFromJSI(

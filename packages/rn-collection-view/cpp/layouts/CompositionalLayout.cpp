@@ -130,28 +130,81 @@ static void writeCompSectionBackground(
 }
 
 // H-section post-processing: shift item frame.y, write wrapper + cw entries.
-void CompositionalLayout::finalizeHSection(
+// Returns the actual V-height of this H-section (max cross-axis extent or estimate).
+float CompositionalLayout::finalizeHSection(
     const CompositionalSectionInfo& info,
     int sectionIndex,
     double contentCursorY,
     double hContentEnd) {
   float vpW      = viewportWidthFromParams(info);
-  float sectionH = hSectionVHeight(info);
+  float estimatedH = hSectionVHeight(info);
   float contentW = std::max(static_cast<float>(hContentEnd), vpW);
 
-  // Shift all H-section items' frame.y by contentCursorY so that processScroll
-  // (V-absolute coordinates) correctly includes them when section is visible.
-  // TS renderCell subtracts sectionOriginY to convert back to section-local Y.
-  if (contentCursorY > 0.0) {
-    auto hItems = _cache->getAttributesInRect({
-        -1e5f, 0.0f, 2e5f, std::max(sectionH, 1.0f)
-    });
-    for (const auto& a : hItems) {
-      if (a.section == sectionIndex && !a.isDecoration && !a.isSupplementary) {
+  // Scan H-section items: Y-shift for processScroll compatibility,
+  // and track actual cross-axis extent so the wrapper grows dynamically.
+  // For multi-row H layouts (e.g. 2-row grid H), items span multiple
+  // cross-axis rows, so we track max(item.y + item.height) — not just
+  // the tallest single item — to get the full section height.
+  // Leaf engines always write items at H-local Y near 0 (fresh from compute),
+  // so items are never at V-shifted positions when we reach this point.
+  float maxCrossExtent = 0.0f;
+  auto hItems = _cache->getAttributesInRect({
+      -1e5f, 0.0f, 2e5f, std::max(estimatedH, 1e4f)
+  });
+  for (const auto& a : hItems) {
+    if (a.section == sectionIndex && !a.isDecoration && !a.isSupplementary) {
+      float bottomEdge = a.frame.y + a.frame.height;
+      if (bottomEdge > maxCrossExtent) maxCrossExtent = bottomEdge;
+      if (contentCursorY > 0.0) {
         auto updated = a;
         updated.frame.y += static_cast<float>(contentCursorY);
         _cache->setAttributes(updated);
       }
+    }
+  }
+
+  // Section height = max of any (Yoga-reported) cell height the layout knows
+  // about. The std::ceil normalizes to integer points so the wrapper frame
+  // (and downstream UIScrollView frame) are stable across runs even
+  // when raw sub-pixel cell heights drift slightly between Yoga passes.
+  float rawSectionH = maxCrossExtent > 0.0f
+      ? std::ceil(maxCrossExtent)
+      : std::ceil(estimatedH);
+
+  // Hysteresis: suppress section-height changes < 2pt vs the previously cached
+  // wrapper height. This is a defensive guard against Yoga's intrinsic
+  // measurement non-determinism — the same React tree commit-after-commit can
+  // produce slightly different intrinsic heights at sub-pixel resolution
+  // (e.g. cell h=335.3 on one pass, 334.7 on the next), which after ceil()
+  // flips the per-section max between, say, 343 and 344.
+  //
+  // Why this matters mid-gesture: the wrapper frame flows
+  //   cache → CollectionSubContainerShadowNode::correctContentSize → iOS view,
+  // which on iOS sets the inner UIScrollView's frame via FlexibleHeight
+  // autoresize. A scroll view frame change while the user is touching CANCELS
+  // the active pan gesture recognizer (UIGestureRecognizerStateCancelled),
+  // which leaves UIKit in an isDragging=1 isDecel=1 isTracking=0 wedge state
+  // and makes subsequent gestures unrecognizable until the touch is fully
+  // released and re-acquired.
+  //
+  // 2pt threshold rationale: Yoga's sub-pixel drift is bounded by ~1px on
+  // either side of the rounding boundary, so a 2pt window absorbs all
+  // measurement noise. Real layout changes (insert/remove cell, content
+  // swap, image aspect change, font metric change) produce >= 4pt deltas
+  // and propagate immediately.
+  //
+  // NOTE: this is a tactical fix. The proper fix is for the leaf layout
+  // engines to push measured cell sizes back as explicit dimensions on the
+  // cell (FlashList/RecyclerListView model), so Yoga measures intrinsically
+  // exactly once per content version instead of every commit. Tracked as
+  // L-tier "Layout engine pushes measured size as explicit dimension" in
+  // cursor-plan.md / ethereal-seeking-willow.md.
+  float sectionH = rawSectionH;
+  auto prevWrapper = _cache->getAttributes(
+      "h-section-wrapper-" + std::to_string(sectionIndex));
+  if (prevWrapper && prevWrapper->frame.height > 0.0f) {
+    if (std::abs(rawSectionH - prevWrapper->frame.height) < 2.0f) {
+      sectionH = prevWrapper->frame.height;
     }
   }
 
@@ -171,6 +224,8 @@ void CompositionalLayout::finalizeHSection(
   cw.isDecoration  = true;
   cw.decorationKind = "h-section-cw";
   _cache->setAttributes(cw);
+
+  return sectionH;
 }
 
 // ── computeOneSection / computeOneSectionFromCache ─────────────────────────────
@@ -211,20 +266,15 @@ double CompositionalLayout::computeOneSection(
     cursor += info.headerHeight;
   }
 
-  double contentStartY = cursor;
-
   if (info.horizontal) {
     // H-section: sub-engine works in X-from-0 space.
     double hContentEnd = dispatchLeafCompute(info, sectionIndex, 0.0);
-    float sectionH = hSectionVHeight(info);
-    finalizeHSection(info, sectionIndex, cursor, hContentEnd);
+    float sectionH = finalizeHSection(info, sectionIndex, cursor, hContentEnd);
     cursor += sectionH;
   } else {
     // V-section: normal cursor chaining.
     cursor = dispatchLeafCompute(info, sectionIndex, cursor);
   }
-
-  double contentEndY = cursor;
 
   // Level 1: compositional-owned footer.
   if (info.footerHeight > 0 && info.footerFlatIndex >= 0) {
@@ -234,7 +284,7 @@ double CompositionalLayout::computeOneSection(
     cursor += info.footerHeight;
   }
 
-  // Level 1: section background decoration spanning header → footer.
+  // Level 1: section background decoration spanning header -> footer.
   if (info.emitSectionBackground && cursor > sectionTopY) {
     writeCompSectionBackground(*_cache, sectionIndex,
                                0.0f, static_cast<float>(sectionTopY),
@@ -267,8 +317,7 @@ double CompositionalLayout::computeOneSectionFromCache(
 
   if (info.horizontal) {
     double hContentEnd = dispatchLeafComputeFromCache(info, sectionIndex, 0.0);
-    float sectionH = hSectionVHeight(info);
-    finalizeHSection(info, sectionIndex, cursor, hContentEnd);
+    float sectionH = finalizeHSection(info, sectionIndex, cursor, hContentEnd);
     cursor += sectionH;
   } else {
     cursor = dispatchLeafComputeFromCache(info, sectionIndex, cursor);
@@ -301,6 +350,10 @@ void CompositionalLayout::computeSections(
   double cursor = 0.0;
   for (int s = 0; s < static_cast<int>(sections.size()); ++s) {
     _sectionStartPrimaries[s] = cursor;
+    // Use fresh path: creates entries from scratch using TS-provided params
+    // (which already include Yoga-measured heights via measuredHeightForItem).
+    // Must NOT use fromCache path here — after clear(), some engines (flow)
+    // skip items that don't exist in cache, producing empty sections.
     cursor = computeOneSection(sections[s], s, cursor);
   }
 }
@@ -320,13 +373,15 @@ void CompositionalLayout::invalidateSectionsFrom(
     startPrimary = _sectionStartPrimaries[fromSection];
   }
 
-  // Reflow: use fromCache for the first changed section (preserves measured heights),
-  // then fresh computeSection for all subsequent sections.
+  // Reflow ALL sections from fromSection onward using fromCache path.
+  // CRITICAL: must use computeOneSectionFromCache (not computeOneSection) for
+  // subsequent sections too — the fresh path overwrites Yoga-measured sizes
+  // with estimates, triggering infinite MVC loops.
   double cursor = computeOneSectionFromCache(sections[fromSection], fromSection, startPrimary);
 
   for (int s = fromSection + 1; s < static_cast<int>(sections.size()); ++s) {
     _sectionStartPrimaries[s] = cursor;
-    cursor = computeOneSection(sections[s], s, cursor);
+    cursor = computeOneSectionFromCache(sections[s], s, cursor);
   }
 }
 
@@ -348,22 +403,31 @@ bool CompositionalLayout::applyMeasurements(
     const bool matchesH = std::abs(updated.frame.height - d.oldValue) < 1.0;
     const bool matchesW = std::abs(updated.frame.width  - d.oldValue) < 1.0;
 
+    bool actuallyChanged = false;
     if (d.axis == MeasurementAxis::Height) {
+      actuallyChanged = std::abs(updated.frame.height - d.newValue) > 0.5;
       updated.frame.height = d.newValue;
     } else if (d.axis == MeasurementAxis::Width) {
+      actuallyChanged = std::abs(updated.frame.width - d.newValue) > 0.5;
       updated.frame.width = d.newValue;
     } else if (matchesH && !matchesW) {
+      actuallyChanged = std::abs(updated.frame.height - d.newValue) > 0.5;
       updated.frame.height = d.newValue;
     } else if (matchesW && !matchesH) {
+      actuallyChanged = std::abs(updated.frame.width - d.newValue) > 0.5;
       updated.frame.width = d.newValue;
     } else {
       // Ambiguous: default to height for vertical layouts.
+      actuallyChanged = std::abs(updated.frame.height - d.newValue) > 0.5;
       updated.frame.height = d.newValue;
     }
     updated.sizingState = SizingState::Measured;
     cache.setAttributes(updated);
 
-    if (!existing->isDecoration && !existing->isSupplementary) {
+    // Only count this section as changed if the value actually changed.
+    // Without this, no-op deltas (same value re-written) keep firstChangedSection
+    // pinned at early sections, causing unnecessary cascading reflows.
+    if (actuallyChanged && !existing->isDecoration && !existing->isSupplementary) {
       firstChangedSection = std::min(firstChangedSection, existing->section);
     }
   }
@@ -439,7 +503,7 @@ std::vector<CompositionalSectionInfo> CompositionalLayout::sectionsFromJSI(
 // ── JSI bindings ───────────────────────────────────────────────────────────────
 
 void CompositionalLayout::installJSIBindings(Runtime& rt, Object& target) {
-  // computeSections(sections: object[]) → undefined
+  // computeSections(sections: object[]) -> undefined
   target.setProperty(rt, "computeSections",
     Function::createFromHostFunction(rt,
       PropNameID::forAscii(rt, "computeSections"), 1,
@@ -450,7 +514,7 @@ void CompositionalLayout::installJSIBindings(Runtime& rt, Object& target) {
         return Value::undefined();
       }));
 
-  // invalidateSectionsFrom(fromSection: number, sections: object[]) → undefined
+  // invalidateSectionsFrom(fromSection: number, sections: object[]) -> undefined
   target.setProperty(rt, "invalidateSectionsFrom",
     Function::createFromHostFunction(rt,
       PropNameID::forAscii(rt, "invalidateSectionsFrom"), 2,
@@ -462,6 +526,7 @@ void CompositionalLayout::installJSIBindings(Runtime& rt, Object& target) {
         invalidateSectionsFrom(fromSection, sectionsFromJSI(rt, arr));
         return Value::undefined();
       }));
+
 }
 
 } // namespace rncv
