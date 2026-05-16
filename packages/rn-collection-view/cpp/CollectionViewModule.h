@@ -139,6 +139,10 @@ private:
     double lastScrollX     = 0.0;
     double lastTimestampMs = -1.0;  // -1 = uninitialized (first call)
     double velocity        = 0.0;   // px/ms, signed (+ve = scrolling right)
+    // H-4: Stable-band skip — cache last result to avoid redundant spatial queries.
+    int    prevRenderFirst = 0;
+    int    prevRenderLast  = -1;    // first > last = no previous result
+    uint64_t prevCacheVersion = 0;
   };
   std::unordered_map<int, HScrollState> _hScrollStates;
 

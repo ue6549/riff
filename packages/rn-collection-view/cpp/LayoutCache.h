@@ -283,6 +283,17 @@ public:
 
   uint64_t version() const;
 
+  // ── Batch mode ─────────────────────────────────────────────────────────────
+  // Coalesce multiple setAttributes writes into a single version bump.
+  // Without batching, applyMeasurements cascading one Yoga delta through N
+  // items produces N version bumps (one per shifted item). Batch mode defers
+  // the bump until endBatch(), reducing N bumps to 1 per layout pass.
+  //
+  // Nestable: beginBatch/endBatch pairs can nest; version bumps only on the
+  // outermost endBatch if any entry's frame changed during the batch.
+  void beginBatch();
+  void endBatch();
+
   // ── JSI bindings ──────────────────────────────────────────────────────────
 
   /**
@@ -318,6 +329,8 @@ private:
   mutable bool                                      _sortedDirty = true;
   mutable bool                                      _sortedHorizontal = false;
   uint64_t                                          _version = 0;
+  int                                               _batchDepth = 0;
+  bool                                              _batchDirty = false;
   mutable std::mutex                                _mutex;
   SpatialIndex                                      _index;   // M1.4
 

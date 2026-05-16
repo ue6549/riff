@@ -76,6 +76,14 @@ class CollectionSubContainerShadowNode final
    */
   void updateStateIfNeeded();
 
+  /// H-4b: Short-circuit — skip correctChildPositionsIfNeeded + updateState
+  /// when children and cache are unchanged from the previous layout pass.
+  /// Fabric clones ShadowNodes via copy ctor, so these fields carry forward.
+  bool shouldSkipCorrection();
+  uint64_t lastCacheVersion_{0};
+  size_t   lastChildCount_{0};
+  size_t   lastChildTagsHash_{0};
+
   /// Scratch storage — final per-child visual state for this section.
   std::vector<ChildVisualState> correctedChildren_;
   /// Fabric tags parallel to correctedChildren_.

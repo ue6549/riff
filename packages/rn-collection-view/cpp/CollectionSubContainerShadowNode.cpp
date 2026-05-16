@@ -38,7 +38,7 @@
 //   RNCV-HSUB-CPP-STATE    correctedContentSize → state.contentSize transitions,
 //                          defensive retain decisions, childTags hash
 #ifndef RNCV_ENABLE_HSUB_LOGS
-#define RNCV_ENABLE_HSUB_LOGS 1
+#define RNCV_ENABLE_HSUB_LOGS 0
 #endif
 
 // Intentionally NOT gated on DEBUG — the flag is opt-in (default 0). Some
@@ -61,11 +61,47 @@ namespace facebook::react {
 // Must match the string used in codegenNativeComponent('RNCollectionSubContainer').
 const char CollectionSubContainerComponentName[] = "RNCollectionSubContainer";
 
+// ── H-4b: Short-circuit check ──────────────────────────────────────────────
+// When the main container relayouts (V scroll cell churn), Yoga re-runs on
+// every sub-container as a side-effect even if their children + cache are
+// unchanged. This check avoids the expensive 4-phase correction + state
+// update in that common case.
+bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
+  const auto& props =
+      *std::static_pointer_cast<const RNCollectionSubContainerProps>(getProps());
+  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
+  if (!cache) return false;
+
+  uint64_t cv = cache->version();
+  if (cv != lastCacheVersion_) return false;
+
+  auto children = getLayoutableChildNodes();
+  size_t N = children.size();
+  if (N != lastChildCount_) return false;
+  if (N == 0) return true; // empty → nothing to correct
+
+  // Boost-style hash combine of child Fabric tags.
+  size_t hash = N;
+  for (size_t i = 0; i < N; ++i) {
+    auto tag = static_cast<size_t>(children[i]->getTag());
+    hash ^= std::hash<size_t>{}(tag) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+  }
+  return hash == lastChildTagsHash_;
+}
+
 void CollectionSubContainerShadowNode::layout(LayoutContext layoutContext) {
   RNCV_SUB_LOG("layout() BEGIN");
 
   // Step 1: Yoga sizes children.
   ConcreteViewShadowNode::layout(layoutContext);
+
+  // H-4b: Skip correction + state update when children + cache are unchanged.
+  // The state from the previous commit (carried forward by Fabric clone) is
+  // already correct — no need to re-read cache, compute deltas, or diff state.
+  if (shouldSkipCorrection()) {
+    RNCV_SUB_LOG("layout() SKIP — children + cache unchanged");
+    return;
+  }
 
   // Step 2: Read final visual state from cache, cascade Yoga deltas if any.
   correctChildPositionsIfNeeded();
@@ -318,7 +354,10 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   // ── Phase 4: Apply cascade and re-read final attributes ──────────────────
   if (!deltas.empty() && engine && cache) {
     cache->snapshotAnchorIfNeeded();
+    // Batch mode: coalesce all position writes into a single version bump.
+    cache->beginBatch();
     bool handled = engine->applyMeasurements(deltas, *cache);
+    cache->endBatch();
     RNCV_SUB_LOG("applyMeasurements deltas=%zu handled=%s",
                  deltas.size(), handled ? "YES" : "NO");
 
@@ -337,6 +376,7 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     }
   } else if (!deltas.empty() && cache) {
     // No engine — write Yoga measurements back to cache directly.
+    cache->beginBatch();
     for (const auto& d : deltas) {
       auto cached = cache->getAttributes(d.key);
       if (cached) {
@@ -350,6 +390,7 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
         cache->setAttributes(updated);
       }
     }
+    cache->endBatch();
   }
 
   // ── Phase 5: Compute content size + bounding rect ────────────────────────
@@ -399,6 +440,20 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
       Point{cv.x, cv.y},
       Size{cv.w, cv.h},
     });
+  }
+
+  // ── H-4b: Update tracking state for next layout's short-circuit check ────
+  lastChildCount_ = N;
+  {
+    size_t hash = N;
+    for (size_t i = 0; i < N; ++i) {
+      auto tag = static_cast<size_t>(children[i]->getTag());
+      hash ^= std::hash<size_t>{}(tag) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    }
+    lastChildTagsHash_ = hash;
+  }
+  if (cache) {
+    lastCacheVersion_ = cache->version();
   }
 }
 

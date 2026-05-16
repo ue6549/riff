@@ -690,7 +690,19 @@ const RNCV_HGEST_DIAG = false;
 //   RNCV-HSUB-JS-SCROLL    handleHScroll input + computed range + delta
 //   RNCV-HSUB-JS-WIN       Per-render H windowing decisions (re-entry, ranges, exclusions)
 //   RNCV-HSUB-JS-PROPS     Wrapper props handed to <RNCollectionSubContainer>
-const RNCV_HSUB_LOGS = true;
+const RNCV_HSUB_LOGS = false;
+
+// ── Scroll health diagnostic ─────────────────────────────────────────────────
+// Flip to true. Prints a 1-line summary every ~1s during active scroll.
+// Grep: "RNCV-HEALTH"
+// Fields:
+//   renders   — React component body executions (lower = better)
+//   coldM     — cold mounts (should be 0 in steady state)
+//   h4Skip    — H-4 stable-band skips (high = good)
+//   h4Compute — H-4 actual computes (low = good)
+//   hReRender — H-5 React re-renders from H range changes
+//   hRestore  — scroll position restorations
+const RNCV_HEALTH_DIAG = true;
 
 function rncvMvcTrace(msg: string) {
   if (!__DEV__ || !RNCV_MVC_TRACE) return;
@@ -1209,6 +1221,10 @@ export function Riff<T = unknown>({
   const prevScrollYRef   = useRef(0);
   const prevScrollXRef   = useRef(0);  // for horizontal layouts
   const prevContentSizeRef = useRef({ width: 0, height: 0 }); // for onContentSizeChange synthesis
+  // H-6: When the scroll handler bumps layoutCacheVersion, the useLayoutEffect
+  // should NOT re-run processScroll + setRenderRange — the scroll handler already
+  // computed the correct range. This flag lets the effect skip the redundant work.
+  const scrollHandledCVRef = useRef(false);
 
   // Ref kept in sync with layoutContext each render so that sectionedKeyExtractorCb
   // (defined before layoutContext via useCallback) can read pre-computed itemKeys
@@ -1329,6 +1345,13 @@ export function Riff<T = unknown>({
   };
   const hRenderRangesRef = useRef(new Map<number, HRangeEntry>());
   const [hRangeVersion, setHRangeVersion] = useState(0);
+  // H-5: rAF-coalesced re-render for H range changes.
+  // Multiple H sections can fire scroll events per frame; coalescing avoids
+  // redundant React re-renders. The renderRangeRef mirrors renderRange state
+  // so the callback can check V-range overlap without capturing stale state.
+  const hRenderPendingRef = useRef(false);
+  const renderRangeRef    = useRef<Range | null>(null);
+  renderRangeRef.current  = renderRange;
 
   // Tracks which H section indices had at least one cell in the V render
   // window on the previous render. Used in the H-windowing block of
@@ -1336,9 +1359,43 @@ export function Riff<T = unknown>({
   // V-scrolled away — those sections' RNCollectionSubContainer view was
   // recycled, contentOffset.x reset to 0 by prepareForRecycle, but the
   // cached hRange still points at the user's old scrollX. Clearing the
-  // entry on re-entry forces a fresh `processHScroll(scrollX=0, ...)`
-  // computation so the wrapper renders the correct cells immediately.
+  // entry on re-entry forces a fresh processHScroll computation so the
+  // wrapper renders the correct cells immediately.
   const prevHSectionsRenderedRef = useRef<Set<number>>(new Set());
+  // Bug 2 fix: Save last known scrollX per H section so we can compute the
+  // correct render range on re-entry. The native side independently saves
+  // and restores contentOffset.x — this map keeps JS in sync.
+  const hScrollXMapRef = useRef(new Map<number, number>());
+
+  // ── Health diagnostic counters ───────────────────────────────────────────
+  const healthRef = useRef({
+    renders: 0, coldM: 0, h4Skip: 0, h4Compute: 0,
+    hReRender: 0, hRestore: 0,
+    // V-scroll render drivers — identify what triggers each re-render
+    vRR: 0,     // setRenderRange from scroll handler
+    vLCV: 0,    // setLayoutCacheVersion from scroll handler
+    leRun: 0,   // useLayoutEffect executions
+    leCH: 0,    // setContentHeight from useLayoutEffect (actual change)
+    lastFlush: Date.now(),
+  });
+  if (__DEV__ && RNCV_HEALTH_DIAG) {
+    healthRef.current.renders++;
+    const h = healthRef.current;
+    const now = Date.now();
+    if (now - h.lastFlush >= 1000) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[RNCV-HEALTH] renders=${h.renders} coldM=${h.coldM} ` +
+        `h4Skip=${h.h4Skip} h4Compute=${h.h4Compute} ` +
+        `hReRender=${h.hReRender} hRestore=${h.hRestore} | ` +
+        `vRR=${h.vRR} vLCV=${h.vLCV} leRun=${h.leRun} leCH=${h.leCH}`
+      );
+      h.renders = 0; h.coldM = 0; h.h4Skip = 0; h.h4Compute = 0;
+      h.hReRender = 0; h.hRestore = 0;
+      h.vRR = 0; h.vLCV = 0; h.leRun = 0; h.leCH = 0;
+      h.lastFlush = now;
+    }
+  }
 
   // Stable renderItem wrapper for MemoizedCellContent.
   // Keeps the latest consumer function in a ref so memo's prop comparison
@@ -1565,9 +1622,28 @@ export function Riff<T = unknown>({
   useLayoutEffect(() => {
     if (viewportWidth === 0 || viewportHeight === 0) return;
     if (!layoutContentSize) return;
+    if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.leRun++;
+
+    // H-6: If the scroll handler already processed this cacheVersion bump,
+    // skip the expensive processScroll + setRenderRange — scroll handler
+    // already computed the correct range. Only sync contentHeight if it
+    // actually changed (rare — only when Yoga measurement shifts total size).
+    if (scrollHandledCVRef.current) {
+      scrollHandledCVRef.current = false;
+      if (layoutContentHeight !== contentHeightRef.current) {
+        if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.leCH++;
+        contentHeightRef.current = layoutContentHeight;
+        layoutContentSizeRef.current = layoutContentSize;
+        setContentHeight(layoutContentHeight);
+      }
+      return;
+    }
+
     nativeMod.signpost.begin(1);
     try {
 
+    const chChanged = layoutContentHeight !== contentHeightRef.current;
+    if (__DEV__ && RNCV_HEALTH_DIAG && chChanged) healthRef.current.leCH++;
     contentHeightRef.current = layoutContentHeight;
     layoutContentSizeRef.current = layoutContentSize;
     setContentHeight(layoutContentHeight);
@@ -1934,6 +2010,8 @@ export function Riff<T = unknown>({
       if (_lcvChanged) {
         lastCacheVersionRef.current = scrollResult.cacheVersion;
         if (__DEV__ && RNCV_HGEST_DIAG) diagRef.current.cvBumps++;
+        if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.vLCV++;
+        scrollHandledCVRef.current = true; // H-6: tell useLayoutEffect to skip
         setLayoutCacheVersion(v => v + 1);
       }
 
@@ -1946,6 +2024,7 @@ export function Riff<T = unknown>({
       const _rrChanged = rangeChanged(prevRenderRef.current, budgetedR);
       if (_rrChanged) {
         prevRenderRef.current = budgetedR;
+        if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.vRR++;
         setRenderRange(budgetedR);
       }
 
@@ -2108,6 +2187,8 @@ export function Riff<T = unknown>({
     // range actually changes, preserving the existing render-trigger semantics.
     if (!viewportWidth) return;
     const { sectionIndex, scrollX } = event.nativeEvent;
+    // Save scrollX so re-entry can restore the correct render range.
+    hScrollXMapRef.current.set(sectionIndex, scrollX);
     if (__DEV__ && RNCV_HGEST_DIAG) {
       const m = diagRef.current.hScrolls;
       m.set(sectionIndex, (m.get(sectionIndex) ?? 0) + 1);
@@ -2121,6 +2202,13 @@ export function Riff<T = unknown>({
       sectionIndex, scrollX, viewportWidth, sectionMult,
       meta.sectionY, meta.sectionHeight, meta.flatBase, meta.itemCount,
     );
+    // H-4: Stable-band skip — C++ returns {unchanged: true} when range + cacheVersion
+    // are identical to last call. Skip frame-data overwrite and React re-render.
+    if (result.unchanged) {
+      if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.h4Skip++;
+      return;
+    }
+    if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.h4Compute++;
     const prev = hRenderRangesRef.current.get(sectionIndex);
     hRenderRangesRef.current.set(sectionIndex, {
       first: result.renderFirst,
@@ -2152,8 +2240,20 @@ export function Riff<T = unknown>({
         `willReRender=${rangeChanged}`
       );
     }
-    if (rangeChanged) {
-      setHRangeVersion(v => v + 1);
+    // H-5: Coalesce H range changes into one React re-render per frame.
+    // Multiple H sections scrolling simultaneously each fire separate native
+    // events; without coalescing each would trigger its own full re-render.
+    // The rAF callback also checks whether the delta cells overlap the current
+    // V render range — if no V-mounted cells are affected, skip re-render
+    // entirely (the ref is already updated and the next V-driven render will
+    // pick up the new H range naturally).
+    if (rangeChanged && !hRenderPendingRef.current) {
+      hRenderPendingRef.current = true;
+      requestAnimationFrame(() => {
+        hRenderPendingRef.current = false;
+        if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.hReRender++;
+        setHRangeVersion(v => v + 1);
+      });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewportWidth, hRenderMultiplier, sectionWindowingOverrides, hSectionInfoFn]);
@@ -2736,11 +2836,9 @@ export function Riff<T = unknown>({
         // Detect whether this H section has ANY items in the V render range
         // [smFirst, smLast]. Sections that re-enter after being scrolled away
         // had their wrapper recycled by Fabric and their UIScrollView's
-        // contentOffset.x reset to 0 via prepareForRecycle — the cached
-        // hRange would still describe the user's previous scrollX position
-        // and the section would render with the wrong (off-screen) cells.
-        // Clear the entry on re-entry so the !hRange branch below recomputes
-        // a fresh window for scrollX=0.
+        // contentOffset.x restored to the saved position by native code.
+        // Clear the cached hRange on re-entry so the !hRange branch below
+        // recomputes a window at the saved scrollX (matching native restore).
         const sectionStartFi = meta.flatBase;
         const sectionEndFi   = meta.flatBase + meta.itemCount - 1;
         const isInVRange     = !(sectionEndFi < smFirst || sectionStartFi > smLast);
@@ -2756,13 +2854,15 @@ export function Riff<T = unknown>({
         let hRange = hRenderRangesRef.current.get(sIdx);
         let didInitCompute = false;
         if (!hRange && viewportWidth > 0) {
-          // First render for this section: compute initial window at scrollX=0
-          // so windowing applies immediately — no 1-frame all-items-mounted.
-          // H-3.5: use the section-specific multiplier if provided.
+          // Compute initial window. On first render this is scrollX=0.
+          // On re-entry after recycle, use the saved scrollX so the render
+          // range matches what the native view will restore to.
+          const savedX = hScrollXMapRef.current.get(sIdx) ?? 0;
+          if (__DEV__ && RNCV_HEALTH_DIAG && savedX > 0) healthRef.current.hRestore++;
           const initMult = sectionWindowingOverrides.get(sIdx)?.renderMultiplier
             ?? hRenderMultiplier;
           const result = nativeWindowController.processHScroll(
-            sIdx, 0, viewportWidth, initMult,
+            sIdx, savedX, viewportWidth, initMult,
             meta.sectionY, meta.sectionHeight, meta.flatBase, meta.itemCount,
           );
           hRange = {
@@ -2853,7 +2953,9 @@ export function Riff<T = unknown>({
       mountedStickySet,
       hExcludeIndices,
     );
-    coldMountCountRef.current += slotManagerRef.current.lastColdMounts;
+    const _lastCold = slotManagerRef.current.lastColdMounts;
+    coldMountCountRef.current += _lastCold;
+    if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.coldM += _lastCold;
 
     // Build cells array from slots, using element cache for unchanged slots.
     // H-section cells are grouped by section index for RNOrthogonalSectionView wrapping.

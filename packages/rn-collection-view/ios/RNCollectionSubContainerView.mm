@@ -29,7 +29,7 @@ using namespace facebook::react;
 // On-screen outlines for H sub-container (same switch as RNMeasuredCellView).
 // See RNMeasuredCellView.mm header: RNCV_DEBUG_COLLECTION_VISUALS.
 #ifndef RNCV_DEBUG_COLLECTION_VISUALS
-#define RNCV_DEBUG_COLLECTION_VISUALS 1
+#define RNCV_DEBUG_COLLECTION_VISUALS 0
 #endif
 
 // Targeted H sub-container scroll diagnostics. Independent from the broader
@@ -162,6 +162,16 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
 @interface RNCollectionSubContainerView () <RCTRNCollectionSubContainerViewProtocol>
 @end
 
+// ── Static scroll-offset registry ──────────────────────────────────────────
+// Persists the last contentOffset.x per (layoutCacheId, sectionIndex) across
+// Fabric recycle events so H sections can restore scroll position on remount.
+// Key: @"cacheId:sectionIndex"  Value: NSNumber(CGFloat)
+static NSMutableDictionary<NSString*, NSNumber*> *sSavedHScrollOffsets;
+
+static NSString *_hScrollKey(int32_t cacheId, int32_t sectionIdx) {
+  return [NSString stringWithFormat:@"%d:%d", cacheId, sectionIdx];
+}
+
 @implementation RNCollectionSubContainerView {
   // Optional UIScrollView (created when scrollDirection != 'none').
   UIScrollView *_scrollView;
@@ -176,6 +186,12 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
   int32_t       _layoutCacheId;
   RNCollectionSubContainerScrollDirection _scrollDirection;
   CGSize        _propContentSize;
+
+  // Scroll position restoration after Fabric recycle.
+  // Set in updateProps when sectionIndex is assigned; applied once in
+  // updateState after contentSize is valid so UIKit doesn't clamp the offset.
+  CGFloat       _pendingRestoreScrollX;
+  BOOL          _needsScrollRestore;
 
   // Throttle scroll events.
   NSTimeInterval _lastScrollEventTime;
@@ -285,6 +301,17 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
 {
   RNHGEST_TRACE_ENTER("prepareForRecycle");
   [super prepareForRecycle];
+
+  // Save scroll position before resetting so it can be restored when this
+  // section re-enters the V render range on a recycled native view.
+  if (_scrollView && _layoutCacheId > 0 && _sectionIndex >= 0) {
+    CGFloat ox = _scrollView.contentOffset.x;
+    if (ox > 0.5f) { // Don't save near-zero; default is already 0
+      if (!sSavedHScrollOffsets) sSavedHScrollOffsets = [NSMutableDictionary new];
+      sSavedHScrollOffsets[_hScrollKey(_layoutCacheId, _sectionIndex)] = @(ox);
+    }
+  }
+
   _state = nullptr;
   _shadowNodePositioned = NO;
   _lastScrollEventTime  = 0;
@@ -292,6 +319,8 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
   _lastAppliedBounds    = CGRectZero;
   _pendingScrollViewFrame = CGRectNull;
   _lastPanState         = UIGestureRecognizerStatePossible;
+  _needsScrollRestore   = NO;
+  _pendingRestoreScrollX = 0;
 
   if (_scrollView) {
     [_scrollView setContentOffset:CGPointZero animated:NO];
@@ -382,6 +411,19 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
   _sectionIndex   = p.sectionIndex;
   _layoutCacheId  = p.layoutCacheId;
 
+  // Check for a saved scroll offset from a previous recycle of this section.
+  // Defer actual application to updateState (after contentSize is set) so
+  // UIKit doesn't clamp the offset to a zero-sized content area.
+  if (_scrollView && sSavedHScrollOffsets) {
+    NSString *key = _hScrollKey(_layoutCacheId, _sectionIndex);
+    NSNumber *saved = sSavedHScrollOffsets[key];
+    if (saved) {
+      _pendingRestoreScrollX = saved.floatValue;
+      _needsScrollRestore = YES;
+      [sSavedHScrollOffsets removeObjectForKey:key]; // consume once
+    }
+  }
+
   // Lazily create / tear down the embedded scroll view based on scrollDirection.
   if (p.scrollDirection != _scrollDirection) {
     _scrollDirection = p.scrollDirection;
@@ -429,16 +471,23 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
   if (!CGSizeEqualToSize(newSize, _propContentSize)) {
     _propContentSize = newSize;
     if (_scrollView && newSize.width > 0 && newSize.height > 0) {
+      const CGSize svCS = _scrollView.contentSize;
+      const CGFloat widthDelta  = std::abs(newSize.width  - svCS.width);
+      const CGFloat heightDelta = std::abs(newSize.height - svCS.height);
+
+      // contentView.frame: update on either axis to fix cross-axis sizing.
+      if (widthDelta > 0.5f || heightDelta > 0.5f) {
+        _contentView.frame = CGRectMake(0, 0, newSize.width, newSize.height);
+      }
+
+      // contentSize: only update on scroll-axis change to avoid bounce
+      // disruption from cross-axis sub-pixel drift. See updateState for
+      // the full rationale.
       const BOOL isHScroll =
           (_scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
-      const CGSize svCS = _scrollView.contentSize;
-      const CGFloat scrollAxisDelta = isHScroll
-          ? std::abs(newSize.width  - svCS.width)
-          : std::abs(newSize.height - svCS.height);
-      const BOOL scrollAxisChanged = scrollAxisDelta > 0.5f;
-      if (scrollAxisChanged) {
+      const CGFloat scrollAxisDelta = isHScroll ? widthDelta : heightDelta;
+      if (scrollAxisDelta > 0.5f) {
         _scrollView.contentSize = newSize;
-        _contentView.frame = CGRectMake(0, 0, newSize.width, newSize.height);
         appliedToScrollView = YES;
       }
     }
@@ -623,16 +672,42 @@ static inline NSString *RNHGestStateToString(UIGestureRecognizerState s) {
     if (cs.height <= 0) cs.height = _propContentSize.height;
     csApplied = cs;
     if (cs.width > 0 && cs.height > 0) {
+      const CGFloat widthDelta  = std::abs(cs.width  - prevSVCS.width);
+      const CGFloat heightDelta = std::abs(cs.height - prevSVCS.height);
+
+      // _contentView.frame: update on EITHER axis change (fixes cross-axis
+      // height not filling the scrollview for H sections).
+      if (widthDelta > 0.5f || heightDelta > 0.5f) {
+        _contentView.frame = CGRectMake(0, 0, cs.width, cs.height);
+      }
+
+      // _scrollView.contentSize: ONLY update when the SCROLL-AXIS changes.
+      // Writing contentSize during bounce/decel makes UIKit re-clamp the
+      // offset and restart the rubber-band animation. Cross-axis drift from
+      // sub-pixel font rounding (342.7↔343.3) fires 6-10x/sec during a
+      // bounce, truncating it visibly. The cross-axis dimension of contentSize
+      // doesn't affect scroll bounds for single-axis scrollviews, so it's
+      // safe to defer.
       const BOOL isHScroll =
           (_scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
-      const CGFloat scrollAxisDelta = isHScroll
-          ? std::abs(cs.width  - prevSVCS.width)
-          : std::abs(cs.height - prevSVCS.height);
+      const CGFloat scrollAxisDelta = isHScroll ? widthDelta : heightDelta;
       if (scrollAxisDelta > 0.5f) {
         _scrollView.contentSize = cs;
-        _contentView.frame = CGRectMake(0, 0, cs.width, cs.height);
         didApplyCS = YES;
       }
+    }
+
+    // Restore saved scroll position after contentSize is valid.
+    // Deferred from updateProps so UIKit doesn't clamp to zero-size bounds.
+    // Guard against firing during active bounce — only restore when idle.
+    if (_needsScrollRestore && csApplied.width > 0 &&
+        !_scrollView.isDecelerating && !_scrollView.isDragging) {
+      CGFloat maxX = csApplied.width - _scrollView.bounds.size.width;
+      if (maxX < 0) maxX = 0;
+      CGFloat targetX = _pendingRestoreScrollX < maxX ? _pendingRestoreScrollX : maxX;
+      [_scrollView setContentOffset:CGPointMake(targetX, 0) animated:NO];
+      _needsScrollRestore = NO;
+      _pendingRestoreScrollX = 0;
     }
   }
 

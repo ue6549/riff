@@ -59,19 +59,43 @@ void LayoutCache::setAttributesBatch(
     const std::vector<LayoutAttributes>& batch) {
   if (batch.empty()) return;
   std::lock_guard<std::mutex> lock(_mutex);
+  // Batch mode: coalesce all writes into a single version bump.
+  _batchDepth++;
   for (const auto& attrs : batch) {
     _setAttributesLocked(attrs);
+  }
+  _batchDepth--;
+  if (_batchDepth == 0 && _batchDirty) {
+    ++_version;
+    _batchDirty = false;
+  }
+}
+
+void LayoutCache::beginBatch() {
+  // Caller must hold _mutex (or call from a path that already holds it).
+  // Public callers go through the ShadowNode which holds its own lock;
+  // the mutex is acquired here for safety.
+  std::lock_guard<std::mutex> lock(_mutex);
+  _batchDepth++;
+}
+
+void LayoutCache::endBatch() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (_batchDepth > 0) _batchDepth--;
+  if (_batchDepth == 0 && _batchDirty) {
+    ++_version;
+    _batchDirty = false;
   }
 }
 
 void LayoutCache::_setAttributesLocked(const LayoutAttributes& attrs) {
   auto it = _map.find(attrs.key);
   if (it == _map.end()) {
-    // New entry — always bump version.
+    // New entry — always bump version (or mark dirty in batch mode).
     _insertionOrder.push_back(attrs.key);
     _index.insert(attrs.key, attrs.frame);
     _map[attrs.key] = attrs;
-    ++_version;
+    if (_batchDepth > 0) _batchDirty = true; else ++_version;
     _sortedDirty = true;
   } else {
     // Existing entry — only bump version if frame changed.
@@ -84,7 +108,7 @@ void LayoutCache::_setAttributesLocked(const LayoutAttributes& attrs) {
                         oldFrame.height != attrs.frame.height;
     if (frameChanged) {
       _index.update(attrs.key, it->second.frame, attrs.frame);
-      ++_version;
+      if (_batchDepth > 0) _batchDirty = true; else ++_version;
       _sortedDirty = true;
     }
     it->second = attrs;

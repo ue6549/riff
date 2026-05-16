@@ -37,7 +37,7 @@ using namespace facebook::react;
 //    type=cell           green   | decoration  magenta | supplementary  blue
 //    other / unset       orange  (recycled / missing type prop)
 #ifndef RNCV_DEBUG_COLLECTION_VISUALS
-#define RNCV_DEBUG_COLLECTION_VISUALS 1
+#define RNCV_DEBUG_COLLECTION_VISUALS 0
 #endif
 
 #ifndef RNCV_CELL_DEBUG_LOGS

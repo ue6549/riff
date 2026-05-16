@@ -24,13 +24,14 @@ import { ListDemo, HorizontalListDemo, GridDemo, HorizontalGridDemo, MasonryDemo
 import { CircularList } from '../components/CircularList';
 import { Carousel3D } from '../components/Carousel3D';
 import { CompositionalDemo } from './CompositionalDemo';
+import { CompositionalLab } from './CompositionalLab';
 import { CollectionSubContainer } from '../components/CollectionSubContainer';
 import { radial } from '@riff/layouts/radial';
 import { carousel3D as carousel3DLayout } from '@riff/layouts/carousel3D';
 import { spiral } from '@riff/layouts/spiral';
 import { hex } from '@riff/layouts/hex';
 
-type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'flow-v' | 'circular' | 'carousel' | 'compose'
+type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'flow-v' | 'circular' | 'carousel' | 'compose' | 'lab'
   | 'h2-radial' | 'h2-carousel3d' | 'h2-spiral' | 'h2-hex';
 
 const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d', '#6a4c93', '#1982c4'];
@@ -53,6 +54,7 @@ const TABS: { key: DemoTab; label: string; detail: string }[] = [
   { key: 'circular',  label: 'Radial',    detail: 'Radial arc · legacy ScrollView · pre-H-2 implementation' },
   { key: 'carousel',  label: '3D Carousel', detail: 'Cover-flow · legacy ScrollView · pre-H-2 implementation' },
   { key: 'compose',   label: 'Compose ↕',  detail: 'Compositional · list + grid + flow + masonry · one scroll · shared recycling pool' },
+  { key: 'lab',       label: 'Lab',         detail: 'Test bench · all 7 layout types · per-section mutations · insert/delete/resize/update' },
   // H-2 framework demos — generic CollectionSubContainer + native frame/transform application.
   { key: 'h2-radial',     label: 'Radial (H-2)',     detail: 'H-2 · radial layout · native frame + transform per scroll tick · 1 JSI batch' },
   { key: 'h2-carousel3d', label: 'Carousel (H-2)',   detail: 'H-2 · cover-flow · perspective rotateY · native CATransform3D' },
@@ -61,7 +63,7 @@ const TABS: { key: DemoTab; label: string; detail: string }[] = [
 ];
 
 // Which tabs benefit visually from the resize toggle
-const RESIZE_TABS: DemoTab[] = ['grid-v', 'masonry-v', 'list-v', 'flow-v', 'compose'];
+const RESIZE_TABS: DemoTab[] = ['grid-v', 'masonry-v', 'list-v', 'flow-v', 'compose', 'lab'];
 
 export default function RiffDemo() {
   const [tab, setTab] = useState<DemoTab>('list-v');
@@ -129,6 +131,7 @@ export default function RiffDemo() {
           {tab === 'masonry-v' && <MasonryDemo />}
           {tab === 'flow-v'    && <FlowDemo />}
           {tab === 'compose'  && <CompositionalDemo />}
+          {tab === 'lab'      && <CompositionalLab />}
 
           {tab === 'circular' && (
             <CircularList

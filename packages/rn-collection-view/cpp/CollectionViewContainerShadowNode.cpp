@@ -426,7 +426,12 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
                 deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
     RNCV_SN_MVC_TRACE("applyMeasurements: %zu deltas first={key=%s old=%.1f new=%.1f}",
                       deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
+    // Batch mode: coalesce all position writes from the cascade into a single
+    // version bump. Without this, one Yoga delta cascading through N items
+    // produces N version bumps — the root cause of 50-60 JS re-renders/sec.
+    cache->beginBatch();
     bool handled = engine->applyMeasurements(deltas, *cache);
+    cache->endBatch();
     RNCV_SN_LOG("applyMeasurements handled=%s cacheVersionBefore=%llu cacheVersionAfter=%llu",
                 handled ? "YES" : "NO",
                 static_cast<unsigned long long>(cacheVersionBeforeApply),
@@ -458,6 +463,7 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     // The JS layout will recompute on the next tick.
   } else if (!deltas.empty() && cache) {
     // No engine available — just write Yoga measurements back to cache directly.
+    cache->beginBatch();
     for (const auto& d : deltas) {
       auto cached = cache->getAttributes(d.key);
       if (cached) {
@@ -467,6 +473,7 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
         cache->setAttributes(updated);
       }
     }
+    cache->endBatch();
   }
 
   // ══════════════════════════════════════════════════════════════════════════

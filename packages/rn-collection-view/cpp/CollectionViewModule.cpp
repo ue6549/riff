@@ -18,7 +18,7 @@
 //   RNCV-HSUB-MOD-WIN    derived velocity, leadMult/trailMult/leftPad/rightPad,
 //                        queryRect, returned range + frame count
 #ifndef RNCV_ENABLE_HSUB_LOGS
-#define RNCV_ENABLE_HSUB_LOGS 1
+#define RNCV_ENABLE_HSUB_LOGS 0
 #endif
 
 #if RNCV_ENABLE_HSUB_LOGS
@@ -853,7 +853,36 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             queryRect.x, queryRect.y, queryRect.width, queryRect.height,
             attrs.size(), matchedItems, rFirst, rLast);
 
-          if (rFirst == std::numeric_limits<int>::max()) return makeEmpty(flatBase);
+          if (rFirst == std::numeric_limits<int>::max()) {
+            // No items in range — also update stable-band state so next call
+            // with the same empty result skips the spatial query.
+            hState.prevRenderFirst  = flatBase;
+            hState.prevRenderLast   = flatBase - 1;
+            hState.prevCacheVersion = _layoutCache->version();
+            return makeEmpty(flatBase);
+          }
+
+          // H-4: Stable-band skip — if range and cacheVersion are unchanged,
+          // return a lightweight sentinel so JS skips the frame-data overwrite
+          // and React re-render. Saves the spatial query on ~80% of scroll ticks
+          // during steady H scrolling.
+          {
+            uint64_t curVersion = _layoutCache->version();
+            if (rFirst == hState.prevRenderFirst &&
+                rLast  == hState.prevRenderLast  &&
+                curVersion == hState.prevCacheVersion) {
+              Object r(rt);
+              r.setProperty(rt, "unchanged", Value(true));
+              // Include range values so callers that don't check `unchanged`
+              // (e.g. the render-body initial-compute path) still get valid data.
+              r.setProperty(rt, "renderFirst", Value(rFirst));
+              r.setProperty(rt, "renderLast",  Value(rLast));
+              return Value(rt, r);
+            }
+            hState.prevRenderFirst  = rFirst;
+            hState.prevRenderLast   = rLast;
+            hState.prevCacheVersion = curVersion;
+          }
 
           // H-1: Bulk-read frames for [rFirst, rLast] under a single mutex acquisition.
           // getFramesForFlatRangeWithVersion returns y in V-absolute coords (as stored

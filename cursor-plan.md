@@ -227,6 +227,96 @@ Build: new `.cpp` + `.mm` files → `pod install`, clean Xcode build (`Cmd+Shift
 
 UIKit-style `orthogonalScrollingBehavior` modes (paging, groupPaging, groupPagingCentered). This is a **feature**, not perf. Tracked here as future work; separate decision after the arc completes.
 
+### Tier H-2.1 — Cut the section-size round-trip (architectural fix for compositional H bounce)
+
+**Effort**: ~0.5 day. **Risk**: Low (two-file change, layout-engine agnostic). **Lands before H-3.**
+
+**Status**: ✅ implemented (2026-05-14, all 6 file edits + defenses reverted), ⬜ awaiting device verification.
+
+**Implementation summary**:
+| Layer | File | Change |
+|---|---|---|
+| Spec | `src/specs/RNCollectionSubContainerNativeComponent.ts` | JSDoc updated; `contentWidth`/`contentHeight` clearly marked STANDALONE-ONLY (still optional in spec for the radial / spiral / carousel3D consumers in `CollectionSubContainer.tsx`) |
+| C++ | `cpp/CollectionSubContainerShadowNode.cpp` | Hoisted cache lookup of `h-section-wrapper-{N}` + `h-section-cw-{N}` to top of `correctChildPositionsIfNeeded`. Both `ySectionShift` and section size read from cache; props are now standalone fallback. New `resolveContentSize()` helper picks cache when present, falls back to props. Reverted: cell-level `std::ceil` on Yoga heights and `kCellMVCThresholdPt` 1.5 → 0.5. Updated long comment block to explain the architectural fix instead of the threshold workaround. |
+| C++ | `cpp/CollectionViewModule.cpp` | Removed `kVelocityDeadZonePxMs` dead-zone branch in `processHScroll`. Asymmetric lead/trail formula always runs; dead-zone comment replaced with H-2.1 reference explaining why the boundary-cell flicker is now harmless. |
+| C++ | `cpp/layouts/CompositionalLayout.cpp` | Updated `finalizeHSection` comment to reference H-2.1 (kept the `std::ceil` itself as a defensive normalize). |
+| iOS | `ios/RNCollectionSubContainerView.mm` | Restored `_scrollView.autoresizingMask = FlexibleWidth \| FlexibleHeight`. Removed the IDLE/animating two-mode scroll-view-frame filter from `layoutSubviews` — `_scrollView` now follows `self.bounds` via standard autoresize. |
+| JS | `example/components/CollectionView.tsx` | Dropped `contentWidth={cw}` and `contentHeight={ch}` from the `<RNCollectionSubContainer>` JSX. Removed the now-dead `cw`/`ch` derivation. Replaced their values in the dev log with a clarifying note. Long comment block at the wrapper documents the round-trip-cut rationale. |
+
+**What was kept** (deliberately, scope-limited):
+- iOS `_contentView.autoresizingMask = None` (separate concern: prevents collapse during transient parent V relayout; pre-dates this work).
+- iOS `updateProps` / `updateState` cross-axis contentSize filters (defensive; harmless now since props are no longer set in compositional path; still useful for standalone path with sub-pixel callbacks).
+- C++ `finalizeHSection` `std::ceil` on `maxCrossExtent` (defensive normalize; cheap and gives stable integer-point wrapper height even with raw sub-pixel cell measurements).
+
+**Pre-existing typecheck errors confirmed unaffected** by the change (10+ errors elsewhere in `example/`, none in the edited JSX block at lines 2933–2982 or referencing `RNCollectionSubContainer` props).
+
+
+
+**Problem**: When a compositional H section's cells are intrinsically measured by Yoga, the section's outer size takes a 6-step round-trip on every commit:
+1. C++ leaf engine writes per-cell `(w, h)` to `LayoutCache`.
+2. C++ `finalizeHSection` writes section size to `h-section-wrapper-{N}` cache entry.
+3. JS reads it via `compositional.hSectionInfo()`.
+4. JS re-renders `<RNCollectionSubContainer contentWidth={w} contentHeight={h}>` with the new value as a **prop**.
+5. Fabric commits the new prop on the wrapper view.
+6. The wrapper's bounds change as a result of the prop commit → triggers Yoga on the subtree → cells re-measure → produces a slightly different value due to pixel-grid rounding → goto step 1.
+
+Steps 3–5 are dead weight — the C++ shadow node already has the cache and already reads `h-section-wrapper-{N}` for `ySectionShift` (see `CollectionSubContainerShadowNode.cpp:147-154`). The JS round-trip exists only because `contentWidth` / `contentHeight` were modeled as props in the original H-2 spec.
+
+This loop is the root cause of: unnatural bounce on compositional H sections, gestures freezing after edge bounce, JS render storm during deceleration (`lcv` climbing 20-30x in a single bounce), and `propContentHeight` flipping 343↔344 in logs.
+
+**Solution**:
+1. Drop `contentWidth` / `contentHeight` as Fabric props on `RNCollectionSubContainer` (or keep them as optional fallback for non-compositional consumers that don't have a cache).
+2. `CollectionSubContainerShadowNode::correctChildPositionsIfNeeded` reads `h-section-wrapper-{N}.frame.width/height` from the cache and writes to `correctedContentSize_` directly. Replace the `props.contentWidth/Height` read at lines 354-355.
+3. JS no longer needs to read `meta.sectionWidth/Height` and forward as props. `<RNCollectionSubContainer>` JSX in `CollectionView.tsx` (lines ~2957-2969) loses the two props.
+
+After this change: cell measurements can drift, cache updates, next state push updates wrapper bounds natively. No JS render. No Fabric prop commit. No bounce interruption.
+
+**Touched files**:
+| File | Change |
+|---|---|
+| `packages/rn-collection-view/src/specs/RNCollectionSubContainerNativeComponent.ts` | Make `contentWidth` / `contentHeight` optional or remove |
+| `packages/rn-collection-view/example/components/RNCollectionSubContainerNativeComponent.ts` | Mirror in wrapper |
+| `packages/rn-collection-view/cpp/CollectionSubContainerShadowNode.cpp` | Read section size from cache wrapper-key (extend existing `ySectionShift` lookup); replace prop-derived `correctedContentSize_` |
+| `packages/rn-collection-view/example/components/CollectionView.tsx` | Drop `contentWidth` / `contentHeight` props from `<RNCollectionSubContainer>` JSX |
+
+**Revert defenses** (no longer needed once the loop is gone):
+- `kCellMVCThresholdPt` back to 0.5pt (or remove the threshold knob entirely) in `CollectionSubContainerShadowNode.cpp`.
+- `std::ceil` on Yoga heights in the same file.
+- `_scrollView.frame` IDLE/animating two-mode filter in `RNCollectionSubContainerView.mm` (`UIViewAutoresizingFlexibleHeight` can come back).
+- `kVelocityDeadZonePxMs` in `CompositionalLayout.cpp` `processHScroll`.
+
+These were all dampening symptoms of the round-trip loop; without the loop they're noise.
+
+**Exit criteria**: Storefront H section bounces naturally on both edges with no slow-decay artifact. Gestures stay responsive after bounce. `lcv` stops climbing during a single bounce. Section content size oscillation in `[RNCV-HSUB-CPP] STATE` logs disappears (single value per measurement event, not flipping every commit).
+
+### Tier H-2.1.1 — Tactical fix for residual gesture-cancel during bounce (post H-2.1)
+
+**Effort**: ~0.25 day. **Risk**: Low (two-file change, pure defense). **Lands directly after H-2.1.** **Status**: ✅ implemented (2026-05-14), ⬜ awaiting device verification.
+
+**Problem (residual after H-2.1)**: H-2.1 cut the JS round-trip and the prop-induced bounce disruption. Bounce became natural. But on device, **gestures still stop registering** mid-bounce — the user has to lift their finger and re-tap to scroll again.
+
+Logs confirm:
+- `lcv` is stable (JS render storm gone — H-2.1 worked as intended).
+- Section height in cache flips 343 ↔ 344 across `finalizeHSection` calls.
+- `self.bounds` of the wrapper view follows that flip.
+- `_scrollView.frame.size.height` follows `self.bounds` via `FlexibleHeight` autoresize — **mid-gesture**.
+- `UIScrollView` ends up in `isDragging=1 isDecel=1 isTracking=0` (UIKit's "pan recognizer cancelled mid-gesture, internal scroll state still latched" wedge state).
+
+**Root cause**: Yoga's intrinsic content measurement for the same React subtree across consecutive Fabric commits is not deterministic at sub-pixel resolution. Cell height reports e.g. `335.3` on one pass, `334.7` on the next; after `std::ceil()` the section's `max(cell heights)` flips between 343 and 344. With `_scrollView` autoresizing to `self.bounds`, that flip becomes a frame-write to the scroll view, which UIKit treats as gesture-cancelling input.
+
+**Solution (two layers, both defensive)**:
+
+| Layer | File | Change |
+|---|---|---|
+| Source | `cpp/layouts/CompositionalLayout.cpp::finalizeHSection` | Section-level hysteresis. Suppress section-height changes < 2pt vs the previously cached `h-section-wrapper-{N}` value. Yoga sub-pixel jitter is bounded by ~1px on either side of the rounding boundary so 2pt absorbs it; real layout changes (cell insert/remove, content swap, image aspect change) produce ≥ 4pt deltas and propagate immediately. |
+| Defense | `ios/RNCollectionSubContainerView.mm` | Drop `_scrollView` autoresize entirely. Manage `_scrollView.frame` explicitly in `-layoutSubviews` with a busy-guard: if `isTracking || isDragging || isDecelerating`, defer the frame target into `_pendingScrollViewFrame` and apply it from `scrollViewDidEndDragging:willDecelerate:` (when no decel) / `scrollViewDidEndDecelerating:` / `scrollViewDidEndScrollingAnimation:`. The cropping mismatch during deferral is bounded by 1-2pt and hidden by `self.clipsToBounds = YES`. |
+
+**Why both?** The hysteresis cuts the flap at its source; the frame guard insulates UIKit's gesture machine from any future source of legitimate self.bounds churn (image load completing, real cell content swap, font scale change) that happens to land mid-gesture.
+
+**Acknowledged trade-off**: This is a tactical fix, not the proper one. The proper fix is L-7 (push measured cell sizes back as explicit dimensions on the cell, FlashList model). Once L-7 lands, the hysteresis becomes a no-op (cells don't intrinsic-remeasure across commits, so `max(cell heights)` is stable) and can be removed. The frame guard stays as defensive engineering.
+
+**Exit criteria**: After bounce-back at either edge of an H section, the next pan gesture is recognized immediately without lifting the finger first. `[RNCV-HSUB-IOS-LAYOUT]` logs no longer show `_scrollView.frame.size.height` flipping during `isDragging=1` or `isDecelerating=1`.
+
 ---
 
 ## Stage 2 — CompositionalLab (full manual scope) + F3.6 interludes
@@ -374,6 +464,44 @@ docs/CONTEXT-PACK.md           — derived
 ```
 
 `COLLECTIONVIEW_INTERNALS.md` stays as edge-case rules + bug log. LLDs handle design.
+
+---
+
+## Stage 4 — Layout intent cleanup (separate workstream, post-arc)
+
+**Why this is its own stage**: this is a correctness arc on the layout engines themselves, not on H sections or compositional. The bugs predate compositional H and exist in standalone H usage too. None of it blocks the H-2.1 round-trip fix or the rest of the H-tier perf arc — H-2.1 makes the *interaction* between any layout engine and the new sub-container clean; Stage 4 makes the *engines* themselves match the design intent.
+
+**Design intent (the law going forward)** — clarified by user 2026-05-14:
+
+| Layout | Width | Height | Notes |
+|---|---|---|---|
+| V list | container width (layout-determined; trivially "1 column") | Yoga | as today, OK |
+| V grid | `(container - spacing) / cols` (layout-determined) | Yoga | as today, OK |
+| V flow | Yoga | Yoga | **today violates** — `sizeForItem.width` is locked from JS |
+| V masonry | column-width (layout-determined) | Yoga | as today, OK |
+| H list | Yoga | Yoga | **today violates** — `style.width` locked from `estimatedItemHeight` |
+| H grid | Yoga | row-derived from container height (cross axis count) | **today violates** — `style.width` locked from `rowHeight`. New rule: width is Yoga-measured AND drives column width — that's what differentiates H grid from H flow. |
+| H flow | Yoga | Yoga | (not implemented yet — ignore) |
+
+**Estimates-only guarantee** — `itemHeight`, `estimatedItemHeight`, `rowHeight`, `sizeForItem`, `estimatedCrossAxisHeight`, etc. are first-pass *estimates only*. Real values come from Yoga. The engine cascades real values once measured. Even when the API name suggests "deterministic" (e.g. `itemHeight: 130`), it's still an estimate that Yoga can override.
+
+### Sub-tasks
+
+| # | Item | Where | Effort |
+|---|---|---|---|
+| L-1 | Drop `style.width` for H list cells everywhere (standalone V CollectionView with `horizontal: true`, and H sections inside compositional). Cells render with no externally-imposed dim. Engine reads Yoga's intrinsic width and cascades cumulative positions. | `CollectionView.tsx` renderCell, `cpp/layouts/ListLayout.cpp` measured-width cascade | ~1 day |
+| L-2 | Drop `style.width` for H grid cells. Engine derives column width from `max(measured cell width)` per column, recomputes positions on cascade. Height stays row-derived from container cross-axis. | `CollectionView.tsx` renderCell, `cpp/layouts/GridLayout.cpp` H-mode column-width derivation | ~1 day |
+| L-3 | Drop both `style.width` and `style.height` for V flow cells. Cells render naked, Yoga measures both. Engine packs into rows based on measured widths. `sizeForItem` becomes pure estimate (or removed in favor of `estimatedSizeForItem` for clarity). | `CollectionView.tsx` renderCell, `cpp/layouts/FlowLayout.cpp` measured-size cascade for both axes | ~1 day |
+| L-4 | Audit all "size config" entry points across layouts and rename / re-document so name reflects "estimate" not "deterministic" (e.g. consider `estimatedItemHeight` everywhere, deprecate `itemHeight: number`). | `src/types/protocol.ts`, `src/layouts/*.ts`, all demo screens | ~0.5 day |
+| L-5 | Demo/test updates: add a RiffDemo toggle that exercises H list / H grid container width changes (currently `RESIZE_TABS` only includes V layouts) so the new intrinsic-width path is exercised by smoke tests. | `example/screens/RiffDemo.tsx` | ~0.25 day |
+| L-6 | **Deliberate: do leaf engines need supplementary / sectionBackground suppression in compositional?** Today `compositional.ts` (lines 594-602) forces `headerHeight=0`, `footerHeight=0`, `headerFlatIndex=-1`, `footerFlatIndex=-1`, `emitSectionBackground=false`, `sectionSpacing=0` on every leaf section's params, then re-emits these at "Level 1" (compositional-owned). Two-level supplementary system. Question to revisit: is this two-level model genuinely necessary (e.g. for sticky headers spanning the full V coordinate space, or for sectionBackground that wraps the whole section), or is it a workaround for something we could solve more directly? Implications for the `RNCollectionSubContainer` model — H sections currently can't have their own header/footer rendered inside the sub-container; everything is hoisted to the outer V. Worth a fresh look once the round-trip and intent-matrix work is done. | `src/layouts/compositional.ts`, `cpp/layouts/CompositionalLayout.cpp`, `lld/Compositional.md` | TBD (deliberate first) |
+| L-7 | **Layout engine pushes measured cell size back as explicit dimension** (FlashList / RecyclerListView / UICollectionViewCompositionalLayout model). After Yoga first measures a cell intrinsically, the engine writes the measured `(w, h)` back to that cell as an explicit Yoga style on subsequent commits. Yoga then **respects** the explicit value instead of re-measuring intrinsically — eliminating the sub-pixel non-determinism that produces commit-to-commit cell-height drift. Drop the explicit dimension on cell-key change / content-version bump so a real content change re-runs intrinsic measurement exactly once. **Subsumes the H-2.1.1 section-level hysteresis hack**: with cells stable, `max(cell heights)` is stable, wrapper height doesn't flip, the hysteresis is a no-op and can be removed. Also subsumes any other place in the codebase that copes with Yoga's intrinsic-measurement non-determinism via `std::ceil` + thresholds. **This is the architecturally correct answer** — not a hack — and it's how every production virtualized list library handles this. | `cpp/CollectionSubContainerShadowNode.cpp` (or `RNMeasuredCellView` push-back), `CollectionView.tsx` cell renderer (apply explicit dim from registry), `cpp/LayoutCache.h` (per-cell content-version tracking), `cpp/layouts/*.cpp` (drop explicit dim on key-change / content-version bump) | ~2 days |
+
+**Pre-existing bugs in `ethereal-seeking-willow.md` items #3 and #4 (H-list cross-axis bounce, H-list S[0] header half height)** are likely subsumed by this cleanup — they trace back to "engine starts from estimate, grows as items measured" which is the cascade path L-1 / L-2 fix.
+
+**L-7 priority**: Higher than L-6 (deliberation) and roughly equal to L-1/L-2/L-3 (correctness work). L-7 is the **proper** fix for the cell-measurement non-determinism that we're currently masking with H-2.1.1's hysteresis + frame guard. As long as H-2.1.1 holds in practice it's not blocking, but the longer it's deferred the more places in the codebase will accumulate `std::ceil` + threshold workarounds for the same root cause.
+
+**Total effort**: ~5.75 days (incl. L-7). Land after Stage 3 docs (so the docs reflect the cleaned-up intent rather than today's violations).
 
 ---
 
