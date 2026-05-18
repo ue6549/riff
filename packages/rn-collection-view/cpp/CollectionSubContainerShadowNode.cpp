@@ -383,7 +383,7 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     // frames and updates only frame.height — no reflow, no cascade overhead.
     // Phase 4.5 below then re-reads the updated value into cacheSectionSize.
     cache->beginBatch();
-    CompositionalLayout::refreshHSectionWrapperHeight(*cache, props.sectionIndex);
+    rncv::CompositionalLayout::refreshHSectionWrapperHeight(*cache, props.sectionIndex);
     cache->endBatch();
 
   } else if (!deltas.empty() && cache) {
