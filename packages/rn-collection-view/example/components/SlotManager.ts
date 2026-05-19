@@ -91,6 +91,12 @@ export class SlotManager<T> {
   // disappear", and (when combined with stale cell positions in the cache for
   // newly-included indices) cells stacked at index-0 frame.
   private _prevExcludeHash = 0;
+  // Render generation — bumped by CollectionView when extraData/layout/vpWidth
+  // changes. Must be included in the short-circuit check so that in-place item
+  // mutations (resize: same range, same length, new item content) force a Phase 3
+  // run that refreshes slot.item references. Without this, renderCell receives the
+  // stale pre-mutation item, Yoga measures the old height, and no delta is produced.
+  private _prevRenderGen = -1;
 
   // ── Public API ─────────────────────────────────────────────────────────────
 
@@ -132,6 +138,7 @@ export class SlotManager<T> {
     dataLength: number,
     stickySet: Set<number> | null,
     excludeIndices?: Set<number>,
+    renderGen?: number,
   ): Map<string, SlotInfo<T>> {
     // Reset per-call counter before any early return so callers never double-count.
     this.lastColdMounts = 0;
@@ -159,7 +166,8 @@ export class SlotManager<T> {
         measureFirst === this._prevMF && measureLast === this._prevML &&
         dataLength === this._prevLen &&
         excludeSize === this._prevExcludeSize &&
-        excludeHash === this._prevExcludeHash) {
+        excludeHash === this._prevExcludeHash &&
+        (renderGen === undefined || renderGen === this._prevRenderGen)) {
       return this.activeSlots;
     }
 
@@ -304,6 +312,7 @@ export class SlotManager<T> {
     this._prevLen = dataLength;
     this._prevExcludeSize = excludeSize;
     this._prevExcludeHash = excludeHash;
+    if (renderGen !== undefined) this._prevRenderGen = renderGen;
 
     return this.activeSlots;
   }

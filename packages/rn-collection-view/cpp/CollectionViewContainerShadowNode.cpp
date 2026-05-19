@@ -265,8 +265,18 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     correctedPositions_.push_back(effectiveHeight);
     childTags_.push_back(static_cast<int32_t>(children[i]->getTag()));
 
-    // Diagnostic logging (first 8 + decorations + headers)
     const auto& ci = infos[i];
+
+    // Always log H-section sub-container children (regardless of position in list).
+    if (ci.kind == ChildInfo::OrthogonalSection) {
+      RNCV_SN_LOG("  [PARENT-P1] H-sub sIdx=%d key=%s cacheHit=%s "
+                  "wrapperH=%.1f wrapperY=%.1f cacheVersion=%llu",
+                  ci.sectionIndex, ci.key.c_str(), cacheHit ? "YES" : "NO",
+                  effectiveHeight, effectiveY,
+                  static_cast<unsigned long long>(cache ? cache->version() : 0ULL));
+    }
+
+    // Diagnostic logging (first 8 + decorations + headers)
     if (i < 8 || ci.propKind == "header" || ci.key.find("header") != std::string::npos ||
         ci.type == "decoration") {
       const auto& childMetrics = children[i]->getLayoutMetrics();
@@ -448,6 +458,13 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
         correctedPositions_[i * 4 + 3] = static_cast<Float>(reread.frames[i * 4 + 3]);
 
         const auto& ci = infos[i];
+
+        // Always log H-section sub-container children after re-read.
+        if (ci.kind == ChildInfo::OrthogonalSection) {
+          RNCV_SN_LOG("  [PARENT-P3-REREAD] H-sub sIdx=%d key=%s wrapperH=%.1f",
+                      ci.sectionIndex, ci.key.c_str(), reread.frames[i * 4 + 3]);
+        }
+
         if (i < 8 || ci.propKind == "header" || ci.key.find("header") != std::string::npos ||
             ci.type == "decoration") {
           RNCV_SN_LOG("  reread[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",

@@ -4,6 +4,23 @@
 #include <cmath>
 #include <string>
 
+// Mirrors the RNCV_ENABLE_HSUB_LOGS flag in CollectionSubContainerShadowNode.cpp.
+// Set to 1 to enable H-section wrapper diagnostics from inside the layout engine.
+#ifndef RNCV_ENABLE_HSUB_LOGS
+#define RNCV_ENABLE_HSUB_LOGS 0
+#endif
+#if RNCV_ENABLE_HSUB_LOGS
+  #ifdef __APPLE__
+    #include <cstdio>
+    #define RNCV_COMP_LOG(fmt, ...) do { fprintf(stderr, "[RNCV-COMP] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+  #else
+    #include <android/log.h>
+    #define RNCV_COMP_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "RNCV-COMP", fmt, ##__VA_ARGS__)
+  #endif
+#else
+  #define RNCV_COMP_LOG(fmt, ...) ((void)0)
+#endif
+
 namespace rncv {
 
 using namespace facebook;
@@ -151,9 +168,26 @@ float CompositionalLayout::finalizeHSection(
   auto hItems = _cache->getAttributesInRect({
       -1e5f, 0.0f, 2e5f, std::max(estimatedH, 1e4f)
   });
+
+  // Pass 1: find the tallest actually-measured cell height for this section.
+  // Used to cap Placeholder items so they don't inflate the wrapper past the
+  // real content height (B0.1), while still allowing Placeholder items at
+  // lower Y positions to contribute their Y to the extent (Grid H multi-row).
+  float maxMeasuredH = 0.0f;
   for (const auto& a : hItems) {
     if (a.section == sectionIndex && !a.isDecoration && !a.isSupplementary) {
-      float bottomEdge = a.frame.y + a.frame.height;
+      if (a.sizingState == SizingState::Measured && static_cast<float>(a.frame.height) > maxMeasuredH)
+        maxMeasuredH = static_cast<float>(a.frame.height);
+    }
+  }
+
+  // Pass 2: accumulate maxCrossExtent and apply V-shift.
+  for (const auto& a : hItems) {
+    if (a.section == sectionIndex && !a.isDecoration && !a.isSupplementary) {
+      float effectiveH = (a.sizingState == SizingState::Measured || maxMeasuredH == 0.0f)
+          ? static_cast<float>(a.frame.height)
+          : std::min(static_cast<float>(a.frame.height), maxMeasuredH);
+      float bottomEdge = a.frame.y + effectiveH;
       if (bottomEdge > maxCrossExtent) maxCrossExtent = bottomEdge;
       if (contentCursorY > 0.0) {
         auto updated = a;
@@ -215,6 +249,8 @@ float CompositionalLayout::finalizeHSection(
   wrapper.section       = sectionIndex;
   wrapper.isDecoration  = true;
   wrapper.decorationKind = "h-section-wrapper";
+  RNCV_COMP_LOG("finalizeHSection sIdx=%d contentCursorY=%.1f maxCE=%.1f rawH=%.1f sectionH=%.1f",
+               sectionIndex, (float)contentCursorY, maxCrossExtent, rawSectionH, sectionH);
   _cache->setAttributes(wrapper);
 
   // Content-width entry for TS (frame.width = total H content width).
@@ -255,10 +291,27 @@ void CompositionalLayout::refreshHSectionWrapperHeight(
       -1e5, wrapperY, 2e5, 1e5
   });
 
-  float maxCrossExtent = 0.0f;
+  // Pass 1: find the tallest actually-measured cell height for this section.
+  float maxMeasuredH = 0.0f;
   for (const auto& a : hItems) {
     if (a.section != sectionIndex || a.isDecoration || a.isSupplementary) continue;
-    float extent = static_cast<float>((a.frame.y - wrapperY) + a.frame.height);
+    if (a.sizingState == SizingState::Measured && static_cast<float>(a.frame.height) > maxMeasuredH)
+      maxMeasuredH = static_cast<float>(a.frame.height);
+  }
+
+  // Pass 2: accumulate maxCrossExtent, capping Placeholder heights at maxMeasuredH.
+  // Placeholder items' Y positions still contribute so multi-row H layouts
+  // (Grid H) size to the bottom row. Heights are capped so List H Placeholder
+  // items with estimatedCrossAxisHeight > actual height don't inflate the wrapper.
+  float maxCrossExtent = 0.0f;
+  int candidateCount = 0;
+  for (const auto& a : hItems) {
+    if (a.section != sectionIndex || a.isDecoration || a.isSupplementary) continue;
+    ++candidateCount;
+    float effectiveH = (a.sizingState == SizingState::Measured || maxMeasuredH == 0.0f)
+        ? static_cast<float>(a.frame.height)
+        : std::min(static_cast<float>(a.frame.height), maxMeasuredH);
+    float extent = static_cast<float>((a.frame.y - wrapperY) + effectiveH);
     if (extent > maxCrossExtent) maxCrossExtent = extent;
   }
 
@@ -267,13 +320,22 @@ void CompositionalLayout::refreshHSectionWrapperHeight(
       ? std::ceil(maxCrossExtent)
       : wrapper->frame.height;
 
+  RNCV_COMP_LOG("refreshHSectionWrapper sIdx=%d wrapperY=%.1f "
+                "candidates=%d maxCrossExtent=%.1f rawSectionH=%.1f oldH=%.1f",
+                sectionIndex, (float)wrapperY,
+                candidateCount, maxCrossExtent, rawSectionH, wrapper->frame.height);
+
   // Same 2pt hysteresis as finalizeHSection: suppresses gesture-cancelling
   // scroll-view frame changes caused by Yoga sub-pixel measurement drift.
-  if (std::abs(rawSectionH - wrapper->frame.height) < 2.0f) return;
+  if (std::abs(rawSectionH - wrapper->frame.height) < 2.0f) {
+    RNCV_COMP_LOG("  → suppressed by hysteresis (diff=%.2f < 2pt)", std::abs(rawSectionH - wrapper->frame.height));
+    return;
+  }
 
   auto updated = *wrapper;
   updated.frame.height = rawSectionH;
   cache.setAttributes(updated);
+  RNCV_COMP_LOG("  → updated wrapper height %.1f → %.1f", wrapper->frame.height, rawSectionH);
 }
 
 // ── computeOneSection / computeOneSectionFromCache ─────────────────────────────
@@ -479,6 +541,11 @@ bool CompositionalLayout::applyMeasurements(
       firstChangedSection = std::min(firstChangedSection, existing->section);
     }
   }
+
+  RNCV_COMP_LOG("applyMeasurements: deltas=%zu firstChanged=%d sectionInfos=%zu",
+               deltas.size(),
+               firstChangedSection == INT_MAX ? -1 : firstChangedSection,
+               _sectionInfos.size());
 
   if (firstChangedSection == INT_MAX) return true;
 

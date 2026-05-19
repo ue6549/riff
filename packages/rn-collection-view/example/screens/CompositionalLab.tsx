@@ -185,6 +185,9 @@ export function CompositionalLab() {
   const [sectionDatas, setSectionDatas] = useState<LabItem[][]>(
     INITIAL_DATA.map(d => [...d]),
   );
+  const [sectionMetas, setSectionMetas] = useState<SectionMeta[]>([...SECTION_META]);
+  // layoutOrder[physicalIdx] = logical section index → drives which layout config renders at each position.
+  const [layoutOrder, setLayoutOrder] = useState([0, 1, 2, 3, 4, 5, 6]);
   const [targetSection, setTargetSection] = useState(0);
   const [mvcEnabled, setMvcEnabled] = useState(true);
   const [hudEnabled, setHudEnabled] = useState(false);
@@ -249,21 +252,26 @@ export function CompositionalLab() {
   const addSection = useCallback(() => {
     const idx = sectionCount;
     setSectionDatas(prev => [...prev, makeItems(`s${idx}`, 6)]);
+    setLayoutOrder(prev => [...prev, prev.length]); // new physical position → new logical index (defaultExtra)
     setSectionCount(c => c + 1);
   }, [sectionCount]);
 
   const removeSection = useCallback(() => {
     setSectionDatas(prev => prev.length > 2 ? prev.slice(0, -1) : prev);
+    setLayoutOrder(prev => prev.length > 2 ? prev.slice(0, -1) : prev);
     setSectionCount(c => Math.max(2, c - 1));
   }, []);
 
   const swapSections = useCallback(() => {
-    setSectionDatas(prev => {
-      if (prev.length < 2) return prev;
-      const copy = [...prev];
+    const swap2 = <T,>(arr: T[]): T[] => {
+      if (arr.length < 2) return arr;
+      const copy = [...arr];
       [copy[0], copy[1]] = [copy[1]!, copy[0]!];
       return copy;
-    });
+    };
+    setSectionDatas(prev => swap2(prev));
+    setSectionMetas(prev => swap2(prev));
+    setLayoutOrder(prev => swap2(prev));
   }, []);
 
   // ── Layout ─────────────────────────────────────────────────────────────────
@@ -271,68 +279,43 @@ export function CompositionalLab() {
   const flowSizeRef = useRef(sectionDatas[5] ?? []);
   flowSizeRef.current = sectionDatas[5] ?? [];
 
-  const layout = useMemo(() => compositional([
-    // S0: list V — sticky header + footer + section bg
-    { range: 0, layout: list({
-        estimatedItemHeight: 80, headerHeight: HEADER_H, footerHeight: FOOTER_H,
-        itemSpacing: 8, stickyMode: 'push',
-        sectionBackground: sectionBgEnabled, sectionSpacing: 10,
-      }),
-    },
-    // S1: list H — sticky header
-    { range: 1, layout: list({
-        estimatedItemHeight: 140, headerHeight: HEADER_H,
-        itemSpacing: 8, sectionSpacing: 10,
-        estimatedCrossAxisHeight: 120,
-      }), horizontal: true,
-    },
-    // S2: grid V 2-col — sticky header + footer + section bg
-    { range: 2, layout: grid({
-        columns: gridCols, rowHeight: 100, columnSpacing: 8, rowSpacing: 8,
-        headerHeight: HEADER_H, footerHeight: FOOTER_H,
-        stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10,
-      }),
-    },
-    // S3: grid H 2-row — sticky header
-    { range: 3, layout: grid({
-        columns: 2, rowHeight: 80, columnSpacing: 8, rowSpacing: 8,
-        headerHeight: HEADER_H, sectionSpacing: 10,
-        estimatedCrossAxisHeight: 180,
-      }), horizontal: true,
-    },
-    // S4: masonry V 2-col — sticky header + footer + section bg
-    { range: 4, layout: masonry({
-        columns: gridCols, heightForItem: () => 100,
-        columnSpacing: 8, rowSpacing: 8,
-        headerHeight: HEADER_H, footerHeight: FOOTER_H,
-        stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10,
-      }),
-    },
-    // S5: flow V — sticky header + footer
-    { range: 5, layout: flow({
-        sizeForItem: (i: number) => ({
-          width: flowSizeRef.current[i]?.width ?? 100,
-          height: 34,
-        }),
-        itemSpacing: 6, lineSpacing: 6,
-        headerHeight: HEADER_H, footerHeight: FOOTER_H,
-        stickyMode: 'push', sectionSpacing: 10,
-      }),
-    },
-    // S6: list V — no chrome (control group)
-    { range: 6, layout: list({
-        estimatedItemHeight: 80, itemSpacing: 8, sectionSpacing: 10,
-      }),
-    },
-  ]), [gridCols, sectionBgEnabled]);
+  // Logical layout configs indexed 0-6. layoutOrder[physicalIdx] picks which one to use.
+  const layout = useMemo(() => {
+    type LayoutEntry = { layout: any; horizontal?: boolean };
+    const logical: LayoutEntry[] = [
+      // 0: list V — sticky header + footer + section bg
+      { layout: list({ estimatedItemHeight: 80, headerHeight: HEADER_H, footerHeight: FOOTER_H, itemSpacing: 8, stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10 }) },
+      // 1: list H — sticky header
+      { layout: list({ estimatedItemHeight: 140, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 10, estimatedCrossAxisHeight: 120 }), horizontal: true },
+      // 2: grid V 2-col — sticky header + footer + section bg
+      { layout: grid({ columns: gridCols, rowHeight: 100, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10 }) },
+      // 3: grid H 2-row — sticky header
+      { layout: grid({ columns: 2, rowHeight: 80, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, sectionSpacing: 10, estimatedCrossAxisHeight: 180 }), horizontal: true },
+      // 4: masonry V 2-col — sticky header + footer + section bg
+      { layout: masonry({ columns: gridCols, heightForItem: () => 100, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10 }) },
+      // 5: flow V — sticky header + footer
+      { layout: flow({ sizeForItem: (i: number) => ({ width: flowSizeRef.current[i]?.width ?? 100, height: 34 }), itemSpacing: 6, lineSpacing: 6, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionSpacing: 10 }) },
+      // 6: list V — no chrome (control group)
+      { layout: list({ estimatedItemHeight: 80, itemSpacing: 8, sectionSpacing: 10 }) },
+    ];
+    const defaultExtra: LayoutEntry = { layout: list({ estimatedItemHeight: 80, itemSpacing: 8, sectionSpacing: 10 }) };
+    return compositional(
+      layoutOrder.map((logicalIdx, physicalIdx) => {
+        const cfg = logical[logicalIdx] ?? defaultExtra;
+        return cfg.horizontal
+          ? { range: physicalIdx, layout: cfg.layout, horizontal: true as const }
+          : { range: physicalIdx, layout: cfg.layout };
+      })
+    );
+  }, [gridCols, sectionBgEnabled, layoutOrder]);
 
   // ── Sections ───────────────────────────────────────────────────────────────
 
   const sections = useMemo<SectionConfig<LabItem>[]>(() => {
     const result: SectionConfig<LabItem>[] = [];
-    const count = Math.min(sectionDatas.length, SECTION_META.length);
+    const count = Math.min(sectionDatas.length, sectionMetas.length);
     for (let i = 0; i < count; i++) {
-      const meta = SECTION_META[i]!;
+      const meta = sectionMetas[i]!;
       const data = sectionDatas[i]!;
       const sec: SectionConfig<LabItem> = {
         key: meta.key,
@@ -369,7 +352,7 @@ export function CompositionalLab() {
       });
     }
     return result;
-  }, [sectionDatas]);
+  }, [sectionDatas, sectionMetas]);
 
   // ── Callbacks ──────────────────────────────────────────────────────────────
 

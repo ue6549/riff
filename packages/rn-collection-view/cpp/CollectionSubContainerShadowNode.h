@@ -83,6 +83,9 @@ class CollectionSubContainerShadowNode final
   uint64_t lastCacheVersion_{0};
   size_t   lastChildCount_{0};
   size_t   lastChildTagsHash_{0};
+  /// Hash of per-child Yoga heights — catches content changes (Resize,
+  /// expand/collapse) that change Yoga dimensions without touching tags or cache.
+  size_t   lastYogaHeightHash_{0};
 
   /// Scratch storage — final per-child visual state for this section.
   std::vector<ChildVisualState> correctedChildren_;

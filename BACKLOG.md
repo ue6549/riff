@@ -77,6 +77,22 @@ MVC in H sections is only well-defined for H-list (linearly ordered items — al
 
 **Effort:** ~0.5d
 
+### B1.5 Sub-container owns its own LayoutCache slice
+
+Currently the shared main LayoutCache holds both V section items and H section items (H items at section-local X coords). The sub-container ShadowNode reads the main cache filtered by section index.
+
+**Proposed design:** CompositionalLayout writes H items to a per-section sub-cache instead of the main cache. The sub-container's ShadowNode and native view use that sub-cache for all operations.
+
+**What this unlocks:**
+- `snapshotAnchor()`/`computeCorrection()` on the sub-cache work directly — same code path as standalone H. `snapshotHAnchor`/`computeHCorrection` become unnecessary.
+- MVC for H-grid, H-masonry, H-flow (B1.3) falls out naturally — no more per-type guards or duck-typing of `sectionTypes`.
+- Cleaner isolation: stash, clear, and version operations are fully section-scoped.
+- Eliminates the `sectionTypes` duck-type check in JS prepare() MVC logic.
+
+**Cost:** ~1.5–2d refactor. Layout engines currently take a single `LayoutCache*`; they'd need to dispatch writes to the correct cache. Version coordination between main and sub-caches needed.
+
+**Priority:** Do after B1.1 and B1.2. Prerequisite for properly resolving B1.3.
+
 ### B1.4 Decouple measureAhead from isVariableHeight
 
 `isVariableHeight` gates whether `measureAhead` is passed to `processScroll`. A list using `itemHeight` (fixed) with `measureAhead > 0` should still pre-measure. Three locations in CollectionView.tsx need `isVariableHeight && measureAhead > 0` → `measureAhead > 0`.

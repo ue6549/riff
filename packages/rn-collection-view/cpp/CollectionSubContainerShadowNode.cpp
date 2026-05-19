@@ -81,13 +81,49 @@ bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
   if (N != lastChildCount_) return false;
   if (N == 0) return true; // empty → nothing to correct
 
-  // Boost-style hash combine of child Fabric tags.
-  size_t hash = N;
+  // Boost-style hash combine of child Fabric tags AND full Yoga frame.
+  //
+  // The tag hash guards against child identity changes (add/remove cells).
+  // The Yoga frame hash guards against content-only changes (Resize,
+  // expand/collapse) where tags/count/cacheVersion are all unchanged but
+  // actual Yoga-measured dimensions differ. Without this check,
+  // shouldSkipCorrection returns true after Resize and nobody calls
+  // applyMeasurements — the main container skips grandchild cascade for
+  // H-2 sub-containers (ownsGrandchildCascade=true), so stale wrapper
+  // height persists until the next scroll event.
+  //
+  // All four frame fields (origin + size) are hashed so width changes
+  // (future custom cell widths, orientation changes) are also caught.
+  // Comparison uses != not > so the hash is correct even if it wraps.
+  // 2-decimal precision (×100 → round) captures real layout changes while
+  // filtering sub-pixel Yoga jitter (< 0.01pt pass-to-pass).
+  size_t tagHash   = N;
+  size_t yogaHash  = N;
   for (size_t i = 0; i < N; ++i) {
     auto tag = static_cast<size_t>(children[i]->getTag());
-    hash ^= std::hash<size_t>{}(tag) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    tagHash ^= std::hash<size_t>{}(tag) + 0x9e3779b9 + (tagHash << 6) + (tagHash >> 2);
+
+    const auto& f = children[i]->getLayoutMetrics().frame;
+    const size_t vals[4] = {
+      static_cast<size_t>(std::lround(f.origin.x      * 100.0f)),
+      static_cast<size_t>(std::lround(f.origin.y      * 100.0f)),
+      static_cast<size_t>(std::lround(f.size.width    * 100.0f)),
+      static_cast<size_t>(std::lround(f.size.height   * 100.0f)),
+    };
+    for (size_t v : vals) {
+      yogaHash ^= v + 0x9e3779b9 + (yogaHash << 6) + (yogaHash >> 2);
+    }
   }
-  return hash == lastChildTagsHash_;
+  if (tagHash != lastChildTagsHash_) return false;
+
+  // Log only on mismatch — the interesting case where content changed.
+  if (yogaHash != lastYogaHeightHash_) {
+    RNCV_HSUB_LOG("SKIP-CHECK sIdx=%d yogaFrame mismatch: %zu → %zu (running correction)",
+                  props.sectionIndex, lastYogaHeightHash_, yogaHash);
+    return false;
+  }
+
+  return true;
 }
 
 void CollectionSubContainerShadowNode::layout(LayoutContext layoutContext) {
@@ -165,6 +201,13 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
       ySectionShift           = static_cast<Float>(wrapperAttrs->frame.y);
       cacheSectionSize.height = static_cast<Float>(wrapperAttrs->frame.height);
     }
+    RNCV_HSUB_LOG("INIT-CACHE sIdx=%d wrapperFound=%s ySectionShift=%.1f "
+                  "cacheSectionH=%.1f cacheVersion=%llu",
+                  props.sectionIndex,
+                  wrapperAttrs ? "YES" : "NO",
+                  (float)ySectionShift,
+                  (float)cacheSectionSize.height,
+                  (unsigned long long)cache->version());
     auto cwKey = std::string("h-section-cw-") +
                  std::to_string(props.sectionIndex);
     auto cwAttrs = cache->getAttributes(cwKey);
@@ -353,6 +396,9 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   }
 
   // ── Phase 4: Apply cascade and re-read final attributes ──────────────────
+  RNCV_HSUB_LOG("PHASE4 sIdx=%d deltas=%zu engine=%s cache=%s",
+                props.sectionIndex, deltas.size(),
+                engine ? "YES" : "NO", cache ? "YES" : "NO");
   if (!deltas.empty() && engine && cache) {
     cache->snapshotAnchorIfNeeded();
     // Batch mode: coalesce all position writes into a single version bump.
@@ -423,6 +469,10 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     if (const auto ca = cache->getAttributes(cwKey)) {
       cacheSectionSize.width = static_cast<Float>(ca->frame.width);
     }
+    RNCV_HSUB_LOG("PHASE4.5 sIdx=%d cacheSectionH=%.1f cacheSectionW=%.1f",
+                  props.sectionIndex,
+                  (float)cacheSectionSize.height,
+                  (float)cacheSectionSize.width);
   }
 
   // ── Phase 5: Compute content size + bounding rect ────────────────────────
@@ -477,12 +527,25 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   // ── H-4b: Update tracking state for next layout's short-circuit check ────
   lastChildCount_ = N;
   {
-    size_t hash = N;
+    size_t tagHash  = N;
+    size_t yogaHash = N;
     for (size_t i = 0; i < N; ++i) {
       auto tag = static_cast<size_t>(children[i]->getTag());
-      hash ^= std::hash<size_t>{}(tag) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+      tagHash ^= std::hash<size_t>{}(tag) + 0x9e3779b9 + (tagHash << 6) + (tagHash >> 2);
+
+      const auto& f = children[i]->getLayoutMetrics().frame;
+      const size_t vals[4] = {
+        static_cast<size_t>(std::lround(f.origin.x    * 100.0f)),
+        static_cast<size_t>(std::lround(f.origin.y    * 100.0f)),
+        static_cast<size_t>(std::lround(f.size.width  * 100.0f)),
+        static_cast<size_t>(std::lround(f.size.height * 100.0f)),
+      };
+      for (size_t v : vals) {
+        yogaHash ^= v + 0x9e3779b9 + (yogaHash << 6) + (yogaHash >> 2);
+      }
     }
-    lastChildTagsHash_ = hash;
+    lastChildTagsHash_  = tagHash;
+    lastYogaHeightHash_ = yogaHash;
   }
   if (cache) {
     lastCacheVersion_ = cache->version();
