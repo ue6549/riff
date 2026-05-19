@@ -56,7 +56,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 class FlowLayoutEngine implements CollectionViewLayout {
   readonly type = 'flow';
   readonly horizontal: boolean;
-  private readonly delegate: FlowLayoutDelegate;
+  readonly delegate: FlowLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
 
   constructor(delegate: FlowLayoutDelegate) {
@@ -149,14 +149,20 @@ class FlowLayoutEngine implements CollectionViewLayout {
     return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
+  cacheKeyForItem(index: number, section: number): string {
+    return this.lastSectionKeys[section]?.[index] ?? `flow-${section}-${index}`;
+  }
+
+  cacheKeyForSupplementary(kind: string, section: number): string {
+    return `flow-${section}-${kind}`;
+  }
+
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    const sectionKeys = this.lastSectionKeys[section];
-    const key = sectionKeys?.[index] ?? `flow-${section}-${index}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(`flow-${section}-${kind}`);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {

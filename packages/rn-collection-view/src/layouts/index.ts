@@ -16,3 +16,5 @@ export { masonry } from './masonry';
 export { grid } from './grid';
 export { flow } from './flow';
 export { customLayout } from './custom';
+export { compositional } from './compositional';
+export type { CompositionalEntry, SectionRange } from './compositional';

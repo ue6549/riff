@@ -85,6 +85,8 @@ class CollectionViewContainerShadowNode final
   std::vector<int32_t> childTags_;
   Float correctedContentHeight_ = 0;
   Float correctedContentWidth_  = 0;  // populated for horizontal layouts (ContentDimension::Width)
+  // Opt F: bounding rect computed in correctChildPositionsIfNeeded, used by updateStateIfNeeded.
+  Rect correctedBoundingRect_{};
 };
 
 } // namespace facebook::react

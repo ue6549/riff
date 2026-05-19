@@ -3,7 +3,17 @@
  *
  * Each tab demos a specific layout engine with vertical variants,
  * decorations, mutations, and sticky headers where applicable.
- * Custom layout tabs show circular arc and 3D carousel.
+ *
+ * Tabs come in three families:
+ *   - Built-in layouts: list / grid / masonry / flow (vertical + horizontal variants).
+ *   - Legacy custom layouts (pre-H-2): `circular`, `carousel` — built on a plain
+ *     ScrollView with JS-side style updates per scroll tick.
+ *   - H-2 framework demos: `h2-radial`, `h2-carousel3d`, `h2-spiral`, `h2-hex` —
+ *     each uses the generic `CollectionSubContainer` + a layout from
+ *     `src/layouts/`. Frames + opacity + zIndex + CATransform3D are applied
+ *     natively by `CollectionSubContainerShadowNode` → `RNCollectionSubContainerView`,
+ *     with one JSI batch (`setAttributesBatch`) per scroll tick — no per-cell JSI,
+ *     no React re-render of cells, no Yoga reflow.
  *
  * Resize button: animates container to 60% width to show responsive
  * column reflow for grid (3→2→1) and masonry (2→1).
@@ -13,12 +23,26 @@ import { Animated, Pressable, ScrollView, StyleSheet, Text, View } from 'react-n
 import { ListDemo, HorizontalListDemo, GridDemo, HorizontalGridDemo, MasonryDemo, FlowDemo } from './comparison/LayoutsTab';
 import { CircularList } from '../components/CircularList';
 import { Carousel3D } from '../components/Carousel3D';
+import { CompositionalDemo } from './CompositionalDemo';
+import { CompositionalLab } from './CompositionalLab';
+import { CollectionSubContainer } from '../components/CollectionSubContainer';
+import { radial } from '@riff/layouts/radial';
+import { carousel3D as carousel3DLayout } from '@riff/layouts/carousel3D';
+import { spiral } from '@riff/layouts/spiral';
+import { hex } from '@riff/layouts/hex';
 
-type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'flow-v' | 'circular' | 'carousel';
+type DemoTab = 'list-v' | 'list-h' | 'grid-v' | 'grid-h' | 'masonry-v' | 'flow-v' | 'circular' | 'carousel' | 'compose' | 'lab'
+  | 'h2-radial' | 'h2-carousel3d' | 'h2-spiral' | 'h2-hex';
 
 const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d', '#6a4c93', '#1982c4'];
 const CIRCULAR_DATA = Array.from({ length: 12 }, (_, i) => ({ id: i, label: `${i}`, color: COLORS[i % COLORS.length]! }));
 const CAROUSEL_DATA = Array.from({ length: 8 }, (_, i) => ({ id: i, title: `Card ${i}`, color: COLORS[i % COLORS.length]! }));
+
+// H-2 demo data sets — small to keep the showcase punchy.
+const RADIAL_DATA    = Array.from({ length: 16 }, (_, i) => ({ id: i, label: `${i + 1}`, color: COLORS[i % COLORS.length]! }));
+const CAROUSEL3D_DATA = Array.from({ length: 12 }, (_, i) => ({ id: i, title: `Cover ${i + 1}`, color: COLORS[i % COLORS.length]! }));
+const SPIRAL_DATA    = Array.from({ length: 24 }, (_, i) => ({ id: i, label: `${i + 1}`, color: COLORS[i % COLORS.length]! }));
+const HEX_DATA       = Array.from({ length: 28 }, (_, i) => ({ id: i, label: `${i + 1}`, color: COLORS[i % COLORS.length]! }));
 
 const TABS: { key: DemoTab; label: string; detail: string }[] = [
   { key: 'list-v',    label: 'List ↕',    detail: 'Vertical · sections · decorations · mutations · sticky' },
@@ -27,12 +51,19 @@ const TABS: { key: DemoTab; label: string; detail: string }[] = [
   { key: 'grid-h',    label: 'Grid ↔',    detail: 'Horizontal grid · columns=2 · section backgrounds · insert/delete · MVC' },
   { key: 'masonry-v', label: 'Masonry ↕', detail: 'Masonry · responsive columns (2→1) · sticky · section bkg · mutations · MVC' },
   { key: 'flow-v',    label: 'Flow ↕',    detail: 'Flow · product cards + tags · two-pass · sticky · section bkg · mutations · MVC' },
-  { key: 'circular',  label: 'Radial',    detail: 'Radial arc · TS custom layout · arbitrary (x, y) — impossible in FlashList' },
-  { key: 'carousel',  label: '3D Carousel', detail: '3D perspective carousel · TS custom layout · rotateY + scale per item' },
+  { key: 'circular',  label: 'Radial',    detail: 'Radial arc · legacy ScrollView · pre-H-2 implementation' },
+  { key: 'carousel',  label: '3D Carousel', detail: 'Cover-flow · legacy ScrollView · pre-H-2 implementation' },
+  { key: 'compose',   label: 'Compose ↕',  detail: 'Compositional · list + grid + flow + masonry · one scroll · shared recycling pool' },
+  { key: 'lab',       label: 'Lab',         detail: 'Test bench · all 7 layout types · per-section mutations · insert/delete/resize/update' },
+  // H-2 framework demos — generic CollectionSubContainer + native frame/transform application.
+  { key: 'h2-radial',     label: 'Radial (H-2)',     detail: 'H-2 · radial layout · native frame + transform per scroll tick · 1 JSI batch' },
+  { key: 'h2-carousel3d', label: 'Carousel (H-2)',   detail: 'H-2 · cover-flow · perspective rotateY · native CATransform3D' },
+  { key: 'h2-spiral',     label: 'Spiral (H-2)',     detail: 'H-2 · Archimedean spiral · scroll unwinds · scale + opacity per item' },
+  { key: 'h2-hex',        label: 'Hex (H-2)',        detail: 'H-2 · honeycomb tiling · static layout · scrollDirection=none' },
 ];
 
 // Which tabs benefit visually from the resize toggle
-const RESIZE_TABS: DemoTab[] = ['grid-v', 'masonry-v', 'list-v', 'flow-v'];
+const RESIZE_TABS: DemoTab[] = ['grid-v', 'masonry-v', 'list-v', 'flow-v', 'compose', 'lab'];
 
 export default function RiffDemo() {
   const [tab, setTab] = useState<DemoTab>('list-v');
@@ -99,6 +130,8 @@ export default function RiffDemo() {
           {tab === 'grid-h'    && <HorizontalGridDemo />}
           {tab === 'masonry-v' && <MasonryDemo />}
           {tab === 'flow-v'    && <FlowDemo />}
+          {tab === 'compose'  && <CompositionalDemo />}
+          {tab === 'lab'      && <CompositionalLab />}
 
           {tab === 'circular' && (
             <CircularList
@@ -122,6 +155,71 @@ export default function RiffDemo() {
               renderItem={({ item }) => (
                 <View style={[S.carouselCard, { backgroundColor: item.color }]}>
                   <Text style={S.carouselTitle}>{item.title}</Text>
+                </View>
+              )}
+            />
+          )}
+
+          {/* H-2 framework demos. Each uses CollectionSubContainer + a layout
+              from src/layouts/. Frames + transforms are applied natively by
+              CollectionSubContainerShadowNode → RNCollectionSubContainerView. */}
+          {tab === 'h2-radial' && (
+            <CollectionSubContainer
+              layout={radial({ radius: 130, itemSize: 70, scrollPerRevolution: 700 })}
+              data={RADIAL_DATA}
+              keyExtractor={(item) => `radial-${item.id}`}
+              sectionIndex={0}
+              style={S.h2Container}
+              renderItem={({ item }) => (
+                <View style={[S.circularCell, { backgroundColor: item.color }]}>
+                  <Text style={S.circularText}>{item.label}</Text>
+                </View>
+              )}
+            />
+          )}
+
+          {tab === 'h2-carousel3d' && (
+            <CollectionSubContainer
+              layout={carousel3DLayout({ itemSize: 200, gap: 28, perspective: 700, maxRotation: 55 })}
+              data={CAROUSEL3D_DATA}
+              keyExtractor={(item) => `c3d-${item.id}`}
+              sectionIndex={0}
+              crossAxisSize={260}
+              style={S.h2CarouselWrap}
+              renderItem={({ item }) => (
+                <View style={[S.carouselCard, { backgroundColor: item.color }]}>
+                  <Text style={S.carouselTitle}>{item.title}</Text>
+                </View>
+              )}
+            />
+          )}
+
+          {tab === 'h2-spiral' && (
+            <CollectionSubContainer
+              layout={spiral({ a: 10, b: 14, angularStep: 0.55, itemSize: 56, scrollPerRevolution: 800 })}
+              data={SPIRAL_DATA}
+              keyExtractor={(item) => `sp-${item.id}`}
+              sectionIndex={0}
+              style={S.h2Container}
+              renderItem={({ item }) => (
+                <View style={[S.circularCell, { backgroundColor: item.color }]}>
+                  <Text style={S.spiralText}>{item.label}</Text>
+                </View>
+              )}
+            />
+          )}
+
+          {tab === 'h2-hex' && (
+            <CollectionSubContainer
+              layout={hex({ hexSize: 64, paddingX: 12, paddingY: 12, gap: 6 })}
+              data={HEX_DATA}
+              keyExtractor={(item) => `hex-${item.id}`}
+              sectionIndex={0}
+              scrollDirection="none"
+              style={S.h2Container}
+              renderItem={({ item }) => (
+                <View style={[S.hexCell, { backgroundColor: item.color }]}>
+                  <Text style={S.hexText}>{item.label}</Text>
                 </View>
               )}
             />
@@ -161,4 +259,10 @@ const S = StyleSheet.create({
   carouselCard:   { flex: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
                     borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)' },
   carouselTitle:  { fontSize: 20, fontWeight: '700', color: '#fff' },
+
+  h2Container:    { flex: 1, backgroundColor: '#0a0a0a' },
+  h2CarouselWrap: { height: 260, marginTop: 20, backgroundColor: '#0a0a0a' },
+  spiralText:     { fontSize: 14, fontWeight: '700', color: '#fff' },
+  hexCell:        { flex: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  hexText:        { fontSize: 14, fontWeight: '700', color: '#fff' },
 });

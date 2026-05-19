@@ -72,6 +72,7 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   if (children.empty()) {
     correctedContentHeight_ = 0;
     correctedPositions_.clear();
+    correctedBoundingRect_ = Rect{};
     return;
   }
 
@@ -83,12 +84,13 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
 
   // Determine layout type string from the enum prop.
-  // codegen generates: 0=list, 1=grid, 2=masonry, 3=flow
+  // codegen generates: 0=list, 1=grid, 2=masonry, 3=flow, 4=compositional
   std::string layoutType = "list";
   switch (props.layoutType) {
-    case RNCollectionViewContainerLayoutType::Grid:    layoutType = "grid";    break;
-    case RNCollectionViewContainerLayoutType::Masonry: layoutType = "masonry"; break;
-    case RNCollectionViewContainerLayoutType::Flow:    layoutType = "flow";    break;
+    case RNCollectionViewContainerLayoutType::Grid:          layoutType = "grid";          break;
+    case RNCollectionViewContainerLayoutType::Masonry:       layoutType = "masonry";       break;
+    case RNCollectionViewContainerLayoutType::Flow:          layoutType = "flow";          break;
+    case RNCollectionViewContainerLayoutType::Compositional: layoutType = "compositional"; break;
     default: break;
   }
 
@@ -96,10 +98,12 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
       props.layoutCacheId, layoutType);
 
   // Key prefix: must match what the JS layout engine wrote to cache.
+  // For compositional, each child carries its own cacheKey prop (per-section prefix varies),
+  // so the keyPrefix fallback is only used for cells missing a cacheKey.
   std::string keyPrefix = "item-0-";
-  if (layoutType == "grid")    keyPrefix = "grid-";
-  else if (layoutType == "masonry") keyPrefix = "masonry-";
-  else if (layoutType == "flow")    keyPrefix = "flow-";
+  if (layoutType == "grid")          keyPrefix = "grid-";
+  else if (layoutType == "masonry")  keyPrefix = "masonry-";
+  else if (layoutType == "flow")     keyPrefix = "flow-";
 
   RNCV_SN_LOG("correctPositions cacheId=%d cache=%s engine=%s layout=%s renderStart=%d children=%zu containerW=%.1f",
               props.layoutCacheId, cache ? "YES" : "NO", engine ? "YES" : "NO",
@@ -127,112 +131,168 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     }
   };
 
-  // ── Phase 1: Read positions from cache for each mounted child ──────────
-  //
-  // The layout engine has already written complete LayoutAttributes to the cache.
-  // ShadowNode is layout-agnostic — it reads whatever the cache has.
-  // Fallback to estimatedItemHeight only when cache has no entry.
+  // ══════════════════════════════════════════════════════════════════════════
+  // Opt A: Extract ChildInfo once per child — single RTTI pass.
+  // All subsequent phases use infos[i] with zero dynamic_pointer_cast.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  struct ChildInfo {
+    // OrthogonalSection covers BOTH the legacy RNOrthogonalSectionView and the
+    // H-2 RNCollectionSubContainer wrapper. They play the same role from the
+    // main container's perspective: an opaque H-section wrapper whose frame
+    // lives in the cache under "h-section-wrapper-{sIdx}". The sub-container
+    // performs its own internal grandchild measurement cascade — the main
+    // container must NOT iterate grandchildren for this kind, regardless of
+    // which physical component type the wrapper is.
+    enum Kind { MeasuredCell, ScrollCoordinated, OrthogonalSection, Unknown };
+    Kind        kind = Unknown;
+    std::string key;
+    std::string type;
+    std::string propKind;
+    std::string component;
+    std::string propCacheKey;   // original cacheKey from props (logging)
+    std::string fallbackKey;    // computed fallback key (logging)
+    int32_t     dataIndex = -1;
+    int32_t     sectionIndex = -1;
+    // True when the wrapper handles its own grandchild measurement cascade
+    // (H-2 sub-container). Legacy RNOrthogonalSectionView leaves cascade to
+    // the main container's grandchild loop.
+    bool        ownsGrandchildCascade = false;
+  };
+
+  const size_t N = children.size();
+  std::vector<ChildInfo> infos(N);
+  std::vector<std::string> keys(N);
+
+  for (size_t i = 0; i < N; ++i) {
+    auto& ci = infos[i];
+    if (auto p = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
+      ci.kind = ChildInfo::MeasuredCell;
+      ci.component = "RNMeasuredCell";
+      ci.type = p->type;
+      ci.propKind = p->kind;
+      ci.dataIndex = p->index;
+      ci.propCacheKey = p->cacheKey;
+      warnOnMissingSupplementaryKey(p->type, p->kind, p->index, p->cacheKey);
+      warnOnUnexpectedType(p->type, p->kind, p->index, p->cacheKey);
+      if (!p->cacheKey.empty()) {
+        ci.key = p->cacheKey;
+      } else {
+        ci.fallbackKey = keyPrefix + std::to_string(p->index >= 0 ? p->index : (renderRangeStart + static_cast<int32_t>(i)));
+        ci.key = ci.fallbackKey;
+      }
+    } else if (auto p = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
+      ci.kind = ChildInfo::ScrollCoordinated;
+      ci.component = "RNScrollCoordinatedView";
+      ci.type = p->type;
+      ci.propKind = p->kind;
+      ci.dataIndex = p->index;
+      ci.propCacheKey = p->cacheKey;
+      warnOnMissingSupplementaryKey(p->type, p->kind, p->index, p->cacheKey);
+      warnOnUnexpectedType(p->type, p->kind, p->index, p->cacheKey);
+      if (!p->cacheKey.empty()) {
+        ci.key = p->cacheKey;
+      } else {
+        ci.fallbackKey = keyPrefix + std::to_string(p->index >= 0 ? p->index : (renderRangeStart + static_cast<int32_t>(i)));
+        ci.key = ci.fallbackKey;
+      }
+    } else if (auto p = std::dynamic_pointer_cast<const RNOrthogonalSectionViewProps>(children[i]->getProps())) {
+      ci.kind = ChildInfo::OrthogonalSection;
+      ci.component = "RNOrthogonalSectionView";
+      ci.sectionIndex = p->sectionIndex;
+      ci.fallbackKey = "h-section-wrapper-" + std::to_string(p->sectionIndex);
+      ci.key = ci.fallbackKey;
+      ci.ownsGrandchildCascade = false;
+    } else if (auto p = std::dynamic_pointer_cast<const RNCollectionSubContainerProps>(children[i]->getProps())) {
+      // H-2: H section wrapped in the generic sub-container. Same role as
+      // RNOrthogonalSectionView for cache lookup ("h-section-wrapper-{sIdx}"),
+      // but the sub-container does its own grandchild measurement cascade
+      // inside CollectionSubContainerShadowNode, so we skip the main
+      // container's grandchild loop for it.
+      ci.kind = ChildInfo::OrthogonalSection;
+      ci.component = "RNCollectionSubContainer";
+      ci.sectionIndex = p->sectionIndex;
+      ci.fallbackKey = "h-section-wrapper-" + std::to_string(p->sectionIndex);
+      ci.key = ci.fallbackKey;
+      ci.ownsGrandchildCascade = true;
+    } else {
+      ci.kind = ChildInfo::Unknown;
+      ci.component = "unknown";
+      const auto dataIndex = renderRangeStart + static_cast<int32_t>(i);
+      ci.fallbackKey = keyPrefix + std::to_string(dataIndex);
+      ci.key = ci.fallbackKey;
+    }
+    keys[i] = ci.key;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Phase 1: Bulk cache read + build correctedPositions_
+  //   Opt B: Single mutex acquisition for all keys (replaces N getAttributes).
+  //   Opt F: Bounding rect computed at end of this function.
+  // ══════════════════════════════════════════════════════════════════════════
 
   correctedPositions_.clear();
-  correctedPositions_.reserve(children.size() * 4);
+  correctedPositions_.reserve(N * 4);
   childTags_.clear();
-  childTags_.reserve(children.size());
+  childTags_.reserve(N);
 
-  for (size_t i = 0; i < children.size(); ++i) {
-    // Read the cache key from the child's props (same logic as Phase 2).
-    // This is critical for headers/footers whose keys are "item-{section}-header",
-    // not "item-{section}-{dataIndex}".
-    std::string key;
-    std::string propType;
-    std::string propKind;
-    int32_t propIndex = -1;
-    std::string propCacheKey;
-    std::string component = "unknown";
-    std::string fallbackKey;
-    if (auto measuredProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
-      const auto& p = *measuredProps;
-      component = "RNMeasuredCell";
-      propType = p.type;
-      propKind = p.kind;
-      propIndex = p.index;
-      propCacheKey = p.cacheKey;
-      warnOnMissingSupplementaryKey(p.type, p.kind, p.index, p.cacheKey);
-      warnOnUnexpectedType(p.type, p.kind, p.index, p.cacheKey);
-      key = p.cacheKey;
-      if (key.empty()) {
-        fallbackKey = keyPrefix + std::to_string(p.index >= 0 ? p.index : (renderRangeStart + static_cast<int32_t>(i)));
-        key = fallbackKey;
-      }
-    } else if (auto scrollProps = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
-      const auto& p = *scrollProps;
-      component = "RNScrollCoordinatedView";
-      propType = p.type;
-      propKind = p.kind;
-      propIndex = p.index;
-      propCacheKey = p.cacheKey;
-      warnOnMissingSupplementaryKey(p.type, p.kind, p.index, p.cacheKey);
-      warnOnUnexpectedType(p.type, p.kind, p.index, p.cacheKey);
-      key = p.cacheKey;
-      if (key.empty()) {
-        fallbackKey = keyPrefix + std::to_string(p.index >= 0 ? p.index : (renderRangeStart + static_cast<int32_t>(i)));
-        key = fallbackKey;
-      }
-    } else {
-      // Unknown child type — use positional fallback
-      const auto dataIndex = renderRangeStart + static_cast<int32_t>(i);
-      fallbackKey = keyPrefix + std::to_string(dataIndex);
-      key = fallbackKey;
-    }
+  // Bulk read: one lock, zero LayoutAttributes copies.
+  rncv::BulkFrameResult bulkFrames;
+  if (cache) {
+    bulkFrames = cache->getFramesForKeys(keys);
+  }
 
+  for (size_t i = 0; i < N; ++i) {
     Float effectiveX = 0;
     Float effectiveY = 0;
     Float effectiveWidth = containerWidth;
     Float effectiveHeight = estimatedItemHeight;
 
     bool cacheHit = false;
-    if (cache) {
-      auto cached = cache->getAttributes(key);
-      if (cached) {
-        cacheHit = true;
-        effectiveX = static_cast<Float>(cached->frame.x);
-        effectiveY = static_cast<Float>(cached->frame.y);
-        if (cached->frame.width > 0) {
-          effectiveWidth = static_cast<Float>(cached->frame.width);
-        }
-        if (cached->frame.height > 0) {
-          effectiveHeight = static_cast<Float>(cached->frame.height);
-        }
-      }
+    if (cache && i < bulkFrames.found.size() && bulkFrames.found[i]) {
+      cacheHit = true;
+      effectiveX = static_cast<Float>(bulkFrames.frames[i * 4 + 0]);
+      effectiveY = static_cast<Float>(bulkFrames.frames[i * 4 + 1]);
+      if (bulkFrames.frames[i * 4 + 2] > 0)
+        effectiveWidth = static_cast<Float>(bulkFrames.frames[i * 4 + 2]);
+      if (bulkFrames.frames[i * 4 + 3] > 0)
+        effectiveHeight = static_cast<Float>(bulkFrames.frames[i * 4 + 3]);
     }
 
     correctedPositions_.push_back(effectiveX);
     correctedPositions_.push_back(effectiveY);
     correctedPositions_.push_back(effectiveWidth);
     correctedPositions_.push_back(effectiveHeight);
-    // Record Fabric tag so native view can look up the correct subview by identity
-    // rather than by index. Fabric's reconciler "last index" optimization can leave
-    // native subview order inconsistent with ShadowNode child order (confirmed bug
-    // when decorations are inserted before existing non-moved views). Tag identity
-    // is Fabric's core contract — covers ALL child types universally.
     childTags_.push_back(static_cast<int32_t>(children[i]->getTag()));
 
-    // Log first 8 children + ALL decoration children (to diagnose bg origin corruption)
-    if (i < 8 || propKind == "header" || key.find("header") != std::string::npos ||
-        propType == "decoration") {
+    const auto& ci = infos[i];
+
+    // Always log H-section sub-container children (regardless of position in list).
+    if (ci.kind == ChildInfo::OrthogonalSection) {
+      RNCV_SN_LOG("  [PARENT-P1] H-sub sIdx=%d key=%s cacheHit=%s "
+                  "wrapperH=%.1f wrapperY=%.1f cacheVersion=%llu",
+                  ci.sectionIndex, ci.key.c_str(), cacheHit ? "YES" : "NO",
+                  effectiveHeight, effectiveY,
+                  static_cast<unsigned long long>(cache ? cache->version() : 0ULL));
+    }
+
+    // Diagnostic logging (first 8 + decorations + headers)
+    if (i < 8 || ci.propKind == "header" || ci.key.find("header") != std::string::npos ||
+        ci.type == "decoration") {
       const auto& childMetrics = children[i]->getLayoutMetrics();
       RNCV_SN_LOG("  child[%zu] component=%s type=%s kind=%s index=%d propCacheKey=%s fallbackKey=%s finalKey=%s cacheHit=%s cache=(%.1f,%.1f,%.1f,%.1f) yoga=(%.1f,%.1f,%.1f,%.1f)",
-                  i, component.c_str(), propType.c_str(), propKind.c_str(), propIndex,
-                  propCacheKey.c_str(), fallbackKey.c_str(), key.c_str(), cacheHit ? "YES" : "NO",
+                  i, ci.component.c_str(), ci.type.c_str(), ci.propKind.c_str(), ci.dataIndex,
+                  ci.propCacheKey.c_str(), ci.fallbackKey.c_str(), ci.key.c_str(), cacheHit ? "YES" : "NO",
                   effectiveX, effectiveY, effectiveWidth, effectiveHeight,
                   childMetrics.frame.origin.x, childMetrics.frame.origin.y,
                   childMetrics.frame.size.width, childMetrics.frame.size.height);
     }
   }
 
-  // ── Phase 2: Diff Yoga measurements vs cache, build deltas ─────────────
-  //
-  // After Yoga runs, compare Yoga-measured content-determined dimensions
-  // against what the cache had. Collect deltas for the layout engine.
+  // ══════════════════════════════════════════════════════════════════════════
+  // Phase 2: Diff Yoga measurements vs cache, build deltas
+  //   Uses infos[i] for key/type dispatch — zero RTTI.
+  // ══════════════════════════════════════════════════════════════════════════
 
   auto contentDim = engine
       ? engine->contentDeterminedDimension()
@@ -240,38 +300,88 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
 
   std::vector<rncv::MeasurementDelta> deltas;
 
-  for (size_t i = 0; i < children.size(); ++i) {
-    std::string key;
-    std::string type;
-    std::string kind;
-    int32_t dataIndex = -1;
+  for (size_t i = 0; i < N; ++i) {
+    const auto& ci = infos[i];
 
-    if (auto measuredProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
-      const auto& p = *measuredProps;
-      type = p.type;
-      kind = p.kind;
-      dataIndex = p.index;
-      warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
-      warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
-      key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
-    } else if (auto scrollProps = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
-      const auto& p = *scrollProps;
-      type = p.type;
-      kind = p.kind;
-      dataIndex = p.index;
-      warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
-      warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
-      key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
-    } else {
-      RNCV_SN_LOG("child[%zu] is neither RNMeasuredCell nor RNScrollCoordinatedView, skipping", i);
+    if (ci.kind == ChildInfo::OrthogonalSection) {
+      // H-section wrapper: iterate grandchildren (H-cells) to build MVC deltas.
+      // H-cells are children of the wrapper, not direct children of the main
+      // container, so they're invisible to the main Phase 2 loop.
+      //
+      // EXCEPTION: H-2 sub-container does its own grandchild cascade inside
+      // CollectionSubContainerShadowNode::correctChildPositionsIfNeeded. Doing
+      // it again here would race against the sub-container's own state update
+      // and cause double-application of the same Yoga delta.
+      if (ci.ownsGrandchildCascade) {
+        RNCV_SN_LOG("  hSection[%zu] sIdx=%d component=%s — grandchild cascade owned by sub-container, skipping",
+                    i, ci.sectionIndex, ci.component.c_str());
+        continue;
+      }
+      const auto& grandchildren = children[i]->getChildren();
+      RNCV_SN_LOG("  hSection[%zu] sIdx=%d grandchildren=%zu",
+                  i, ci.sectionIndex, grandchildren.size());
+      for (size_t g = 0; g < grandchildren.size(); ++g) {
+        auto gcProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(grandchildren[g]->getProps());
+        if (!gcProps || gcProps->cacheKey.empty()) continue;
+
+        const std::string& gcKey = gcProps->cacheKey;
+        // getChildren() returns ShadowNode::Shared — cast to LayoutableShadowNode
+        // to access Yoga-computed layout metrics.
+        auto* layoutableGC = dynamic_cast<const LayoutableShadowNode*>(grandchildren[g].get());
+        if (!layoutableGC) continue;
+        const auto& gcMetrics = layoutableGC->getLayoutMetrics();
+        const auto gcYogaHeight = gcMetrics.frame.size.height;
+        const auto gcYogaWidth  = gcMetrics.frame.size.width;
+
+        if (!cache) continue;
+        auto cached = cache->getAttributes(gcKey);
+        if (!cached) continue;
+
+        // Height delta (cross-axis for H-sections — determines section V-height).
+        if ((contentDim == rncv::ContentDimension::Height ||
+             contentDim == rncv::ContentDimension::Both) &&
+            gcYogaHeight > 0 &&
+            std::abs(gcYogaHeight - static_cast<Float>(cached->frame.height)) > 0.5f) {
+          deltas.push_back({
+            gcKey,
+            gcProps->index,
+            static_cast<Float>(cached->frame.height),
+            gcYogaHeight,
+            rncv::MeasurementAxis::Height,
+          });
+          RNCV_SN_LOG("    hCell[%zu] key=%s heightDelta old=%.1f new=%.1f",
+                      g, gcKey.c_str(), cached->frame.height, gcYogaHeight);
+        }
+
+        // Width delta (primary-axis for H-sections — item width).
+        if ((contentDim == rncv::ContentDimension::Width ||
+             contentDim == rncv::ContentDimension::Both) &&
+            gcYogaWidth > 0 &&
+            std::abs(gcYogaWidth - static_cast<Float>(cached->frame.width)) > 0.5f) {
+          deltas.push_back({
+            gcKey,
+            gcProps->index,
+            static_cast<Float>(cached->frame.width),
+            gcYogaWidth,
+            rncv::MeasurementAxis::Width,
+          });
+          RNCV_SN_LOG("    hCell[%zu] key=%s widthDelta old=%.1f new=%.1f",
+                      g, gcKey.c_str(), cached->frame.width, gcYogaWidth);
+        }
+      }
       continue;
     }
-    
+
+    if (ci.kind == ChildInfo::Unknown) {
+      RNCV_SN_LOG("child[%zu] unknown type, skipping", i);
+      continue;
+    }
+
+    // MeasuredCell or ScrollCoordinated — check Yoga measurement deltas.
     // No legacy key remap: preserve canonical cache keys end-to-end.
-    const std::string keyBeforeRemap = key;
-    if (i < 8 || kind == "header" || key.find("header") != std::string::npos) {
+    if (i < 8 || ci.propKind == "header" || ci.key.find("header") != std::string::npos) {
       RNCV_SN_LOG("  remap[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",
-                  i, type.c_str(), kind.c_str(), dataIndex, keyBeforeRemap.c_str(), key.c_str());
+                  i, ci.type.c_str(), ci.propKind.c_str(), ci.dataIndex, ci.key.c_str(), ci.key.c_str());
     }
 
     const auto& childMetrics = children[i]->getLayoutMetrics();
@@ -283,8 +393,8 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
       Float cachedHeight = correctedPositions_[i * 4 + 3];
       if (yogaHeight > 0 && std::abs(yogaHeight - cachedHeight) > 0.5f) {
         deltas.push_back({
-            key,
-            dataIndex,
+            ci.key,
+            ci.dataIndex,
             cachedHeight,
             yogaHeight,
             rncv::MeasurementAxis::Height,
@@ -300,8 +410,8 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
       Float cachedWidth = correctedPositions_[i * 4 + 2];
       if (yogaWidth > 0 && std::abs(yogaWidth - cachedWidth) > 0.5f) {
         deltas.push_back({
-            key,
-            dataIndex,
+            ci.key,
+            ci.dataIndex,
             cachedWidth,
             yogaWidth,
             rncv::MeasurementAxis::Width,
@@ -311,10 +421,10 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     }
   }
 
-  // ── Phase 3: Apply deltas via layout engine ────────────────────────────
-  //
-  // If there are deltas, ask the layout engine to cascade position changes.
-  // The engine updates the cache in-place. We re-read affected positions.
+  // ══════════════════════════════════════════════════════════════════════════
+  // Phase 3: Apply deltas via layout engine
+  //   Opt A+B: Re-read uses bulk getFramesForKeys (single mutex, zero RTTI).
+  // ══════════════════════════════════════════════════════════════════════════
 
   if (!deltas.empty() && engine && cache) {
     // Snapshot anchor before cascading positions so MVC correction is available
@@ -326,60 +436,43 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
                 deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
     RNCV_SN_MVC_TRACE("applyMeasurements: %zu deltas first={key=%s old=%.1f new=%.1f}",
                       deltas.size(), deltas[0].key.c_str(), deltas[0].oldValue, deltas[0].newValue);
+    // Batch mode: coalesce all position writes from the cascade into a single
+    // version bump. Without this, one Yoga delta cascading through N items
+    // produces N version bumps — the root cause of 50-60 JS re-renders/sec.
+    cache->beginBatch();
     bool handled = engine->applyMeasurements(deltas, *cache);
+    cache->endBatch();
     RNCV_SN_LOG("applyMeasurements handled=%s cacheVersionBefore=%llu cacheVersionAfter=%llu",
                 handled ? "YES" : "NO",
                 static_cast<unsigned long long>(cacheVersionBeforeApply),
                 static_cast<unsigned long long>(cache->version()));
 
     if (handled) {
-      // Re-read all positions from cache (engine may have cascaded changes).
-      for (size_t i = 0; i < children.size(); ++i) {
-        std::string key;
-        std::string type;
-        std::string kind;
-        int32_t dataIndex = -1;
+      // Opt B: Bulk re-read all positions from cache after engine cascade.
+      auto reread = cache->getFramesForKeys(keys);
+      for (size_t i = 0; i < N; ++i) {
+        if (i >= reread.found.size() || !reread.found[i]) continue;
+        correctedPositions_[i * 4 + 0] = static_cast<Float>(reread.frames[i * 4 + 0]);
+        correctedPositions_[i * 4 + 1] = static_cast<Float>(reread.frames[i * 4 + 1]);
+        correctedPositions_[i * 4 + 2] = static_cast<Float>(reread.frames[i * 4 + 2]);
+        correctedPositions_[i * 4 + 3] = static_cast<Float>(reread.frames[i * 4 + 3]);
 
-        if (auto measuredProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(children[i]->getProps())) {
-          const auto& p = *measuredProps;
-          type = p.type;
-          kind = p.kind;
-          dataIndex = p.index;
-          warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
-          warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
-          key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
-        } else if (auto scrollProps = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(children[i]->getProps())) {
-          const auto& p = *scrollProps;
-          type = p.type;
-          kind = p.kind;
-          dataIndex = p.index;
-          warnOnMissingSupplementaryKey(type, kind, dataIndex, p.cacheKey);
-          warnOnUnexpectedType(type, kind, dataIndex, p.cacheKey);
-          key = p.cacheKey.empty() ? (keyPrefix + std::to_string(dataIndex)) : p.cacheKey;
-        } else {
-          continue;
+        const auto& ci = infos[i];
+
+        // Always log H-section sub-container children after re-read.
+        if (ci.kind == ChildInfo::OrthogonalSection) {
+          RNCV_SN_LOG("  [PARENT-P3-REREAD] H-sub sIdx=%d key=%s wrapperH=%.1f",
+                      ci.sectionIndex, ci.key.c_str(), reread.frames[i * 4 + 3]);
         }
-        
-        // No legacy key remap: preserve canonical cache keys end-to-end.
-        const std::string keyBeforeRemap = key;
-        if (i < 8 || kind == "header" || key.find("header") != std::string::npos ||
-            type == "decoration") {
+
+        if (i < 8 || ci.propKind == "header" || ci.key.find("header") != std::string::npos ||
+            ci.type == "decoration") {
           RNCV_SN_LOG("  reread[%zu] type=%s kind=%s index=%d keyBefore=%s keyAfter=%s",
-                      i, type.c_str(), kind.c_str(), dataIndex, keyBeforeRemap.c_str(), key.c_str());
-        }
-
-        auto cached = cache->getAttributes(key);
-        if (cached) {
-          correctedPositions_[i * 4 + 0] = static_cast<Float>(cached->frame.x);
-          correctedPositions_[i * 4 + 1] = static_cast<Float>(cached->frame.y);
-          correctedPositions_[i * 4 + 2] = static_cast<Float>(cached->frame.width);
-          correctedPositions_[i * 4 + 3] = static_cast<Float>(cached->frame.height);
-          if (i < 8 || kind == "header" || key.find("header") != std::string::npos ||
-              type == "decoration") {
-            RNCV_SN_LOG("  rereadHit[%zu] key=%s frame=(%.1f,%.1f,%.1f,%.1f)",
-                        i, key.c_str(), cached->frame.x, cached->frame.y,
-                        cached->frame.width, cached->frame.height);
-          }
+                      i, ci.type.c_str(), ci.propKind.c_str(), ci.dataIndex, ci.key.c_str(), ci.key.c_str());
+          RNCV_SN_LOG("  rereadHit[%zu] key=%s frame=(%.1f,%.1f,%.1f,%.1f)",
+                      i, ci.key.c_str(),
+                      reread.frames[i * 4 + 0], reread.frames[i * 4 + 1],
+                      reread.frames[i * 4 + 2], reread.frames[i * 4 + 3]);
         }
       }
     }
@@ -387,6 +480,7 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     // The JS layout will recompute on the next tick.
   } else if (!deltas.empty() && cache) {
     // No engine available — just write Yoga measurements back to cache directly.
+    cache->beginBatch();
     for (const auto& d : deltas) {
       auto cached = cache->getAttributes(d.key);
       if (cached) {
@@ -396,11 +490,13 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
         cache->setAttributes(updated);
       }
     }
+    cache->endBatch();
   }
 
-  // ── Phase 4: Compute content size from cache ──────────────────────────────
-  // For vertical (Height): contentSize = {containerWidth, correctedContentHeight_}.
-  // For horizontal (Width): contentSize = {correctedContentWidth_, containerHeight}.
+  // ══════════════════════════════════════════════════════════════════════════
+  // Phase 4: Compute content size from cache
+  //   Opt F: Also compute bounding rect here (was in updateStateIfNeeded).
+  // ══════════════════════════════════════════════════════════════════════════
 
   if (cache) {
     auto cs = cache->getTotalContentSize();
@@ -410,7 +506,7 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     // Fallback: compute from positions.
     Float maxRight  = 0;
     Float maxBottom = 0;
-    for (size_t i = 0; i < children.size(); ++i) {
+    for (size_t i = 0; i < N; ++i) {
       Float right  = correctedPositions_[i * 4 + 0] + correctedPositions_[i * 4 + 2];
       Float bottom = correctedPositions_[i * 4 + 1] + correctedPositions_[i * 4 + 3];
       if (right  > maxRight)  maxRight  = right;
@@ -418,6 +514,15 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     }
     correctedContentHeight_ = maxBottom;
     correctedContentWidth_  = maxRight;
+  }
+
+  // Bounding rect from final corrected positions (after all phases).
+  correctedBoundingRect_ = Rect{};
+  for (size_t i = 0; i < N; ++i) {
+    correctedBoundingRect_.unionInPlace(Rect{
+      Point{correctedPositions_[i * 4], correctedPositions_[i * 4 + 1]},
+      Size{correctedPositions_[i * 4 + 2], correctedPositions_[i * 4 + 3]}
+    });
   }
 }
 
@@ -428,7 +533,6 @@ void CollectionViewContainerShadowNode::updateStateIfNeeded() {
   const auto& props =
       *std::static_pointer_cast<const RNCollectionViewContainerProps>(getProps());
   const auto containerWidth  = getLayoutMetrics().frame.size.width;
-  const auto containerHeight = getLayoutMetrics().frame.size.height;
 
   // For horizontal layouts, content scrolls along X: width = computed, height = max item height.
   // For vertical layouts, content scrolls along Y: width = viewport, height = computed.
@@ -438,17 +542,6 @@ void CollectionViewContainerShadowNode::updateStateIfNeeded() {
       ? Size{correctedContentWidth_, correctedContentHeight_}
       : Size{containerWidth, correctedContentHeight_};
 
-  // Compute content bounding rect from corrected positions.
-  auto contentBoundingRect = Rect{};
-  const auto childCount = correctedPositions_.size() / 4;
-  for (size_t i = 0; i < childCount; ++i) {
-    auto x = correctedPositions_[i * 4];
-    auto y = correctedPositions_[i * 4 + 1];
-    auto w = correctedPositions_[i * 4 + 2];
-    auto h = correctedPositions_[i * 4 + 3];
-    contentBoundingRect.unionInPlace(Rect{Point{x, y}, Size{w, h}});
-  }
-
   bool changed = false;
 
   if (state.contentSize != contentSize) {
@@ -456,8 +549,9 @@ void CollectionViewContainerShadowNode::updateStateIfNeeded() {
     changed = true;
   }
 
-  if (state.contentBoundingRect != contentBoundingRect) {
-    state.contentBoundingRect = contentBoundingRect;
+  // Opt F: use pre-computed bounding rect from correctChildPositionsIfNeeded.
+  if (state.contentBoundingRect != correctedBoundingRect_) {
+    state.contentBoundingRect = correctedBoundingRect_;
     changed = true;
   }
 

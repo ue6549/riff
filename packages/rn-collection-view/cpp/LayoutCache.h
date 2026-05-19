@@ -79,6 +79,13 @@ struct LayoutAttributes {
   std::unordered_map<std::string, double> extras;
 };
 
+// ─── BulkFrameResult (Opt B — batch frame reads for ShadowNode) ─────────────
+
+struct BulkFrameResult {
+  std::vector<double> frames;  // flat [x0,y0,w0,h0, x1,y1,w1,h1, ...]
+  std::vector<bool>   found;   // which keys had cache entries
+};
+
 // ─── LayoutCache ─────────────────────────────────────────────────────────────
 
 /**
@@ -99,6 +106,13 @@ public:
   // ── Core CRUD ─────────────────────────────────────────────────────────────
 
   void setAttributes(const LayoutAttributes& attrs);
+  /**
+   * Batch update — applies all attribute updates under a single mutex
+   * acquisition. Used by scroll-driven sub-container layouts (radial,
+   * spiral, carousel3D) to commit N visible items per scroll tick in one
+   * JSI round-trip + one lock acquisition.
+   */
+  void setAttributesBatch(const std::vector<LayoutAttributes>& batch);
   std::optional<LayoutAttributes> getAttributes(const std::string& key) const;
   void removeAttributes(const std::string& key);
   void clear();
@@ -152,6 +166,11 @@ public:
 
   Size getTotalContentSize() const;
 
+  /** O(1) reverse lookup: section + within-section item index → cache key. */
+  std::optional<std::string> getKeyForIndexPath(int section, int item) const;
+  /** O(1) lookup: section index → its header's cache key (if a header exists). */
+  std::optional<std::string> getHeaderKeyForSection(int section) const;
+
   /**
    * Returns frame data (x, y, width, height) for all cache entries whose
    * flatIndex falls in [firstFlat, lastFlat]. Result is a flat vector of
@@ -160,6 +179,14 @@ public:
    * Single mutex acquisition. Use to eliminate per-cell JSI calls in renderCell.
    */
   std::vector<double> getFramesForFlatRange(int firstFlat, int lastFlat) const;
+
+  /**
+   * Opt B: Batch frame read by key names. Returns x,y,w,h for each key in a
+   * single mutex acquisition — eliminates per-key lock + LayoutAttributes copy.
+   * Used by ShadowNode::correctChildPositionsIfNeeded() to replace N individual
+   * getAttributes() calls.
+   */
+  BulkFrameResult getFramesForKeys(const std::vector<std::string>& keys) const;
 
   /**
    * Returns heights for items 0..count-1 in the given section.
@@ -194,6 +221,21 @@ public:
   /// Atomic read of offset + velocity (single mutex acquisition).
   struct ScrollSnapshot { Point offset; double velocity; };
   ScrollSnapshot getScrollOffsetAndVelocity() const;
+
+  /// Opt D: Atomic read of offset + velocity + version (single lock, was 2).
+  struct ScrollSnapshotV { Point offset; double velocity; uint64_t version; };
+  ScrollSnapshotV getScrollSnapshotWithVersion() const;
+
+  /// Opt D: Two binary searches in one lock (sorted path, was 2 locks).
+  struct DualRange { PrimaryRange render; PrimaryRange visible; };
+  DualRange findDualRangeByPrimary(
+      double renderLo, double renderHi,
+      double visibleLo, double visibleHi,
+      bool horizontal) const;
+
+  /// Opt D: Frames + version in one lock (was 2 locks).
+  struct FramesWithVersion { std::vector<double> frames; uint64_t version; };
+  FramesWithVersion getFramesForFlatRangeWithVersion(int firstFlat, int lastFlat) const;
 
   // ── MVC (maintainVisibleContentPosition) correction ───────────────────
   // Three-step API called from the JS prepare() useMemo:
@@ -242,9 +284,34 @@ public:
   /// from cancelling an in-flight animated scrollTo.
   void setProgrammaticScrollActive(bool active);
 
+  // ── H-section MVC (per-section horizontal scroll correction) ─────────────
+  // For H-list sections only (grid/masonry/flow MVC semantics TBD).
+  // Two-step API called from JS prepare() useMemo + consumed by native sub-container updateState:
+  //   1. snapshotHAnchor(sectionIndex, scrollX) — before prepare(), records first visible H item
+  //   2. computeHCorrection(sectionIndex)        — after applyMeasurements, reads new X, returns delta
+
+  /// Snapshot the first visible H item for a section (first item at X >= scrollX).
+  /// Call BEFORE prepare() so pre-insert positions are recorded.
+  void snapshotHAnchor(int sectionIndex, double scrollX);
+
+  /// Compare anchor's new X to snapshotted X. Returns delta; clears snapshot (one-shot).
+  /// Call from native sub-container updateState: after Fabric commit.
+  double computeHCorrection(int sectionIndex);
+
   // ── Versioning ────────────────────────────────────────────────────────────
 
   uint64_t version() const;
+
+  // ── Batch mode ─────────────────────────────────────────────────────────────
+  // Coalesce multiple setAttributes writes into a single version bump.
+  // Without batching, applyMeasurements cascading one Yoga delta through N
+  // items produces N version bumps (one per shifted item). Batch mode defers
+  // the bump until endBatch(), reducing N bumps to 1 per layout pass.
+  //
+  // Nestable: beginBatch/endBatch pairs can nest; version bumps only on the
+  // outermost endBatch if any entry's frame changed during the batch.
+  void beginBatch();
+  void endBatch();
 
   // ── JSI bindings ──────────────────────────────────────────────────────────
 
@@ -281,8 +348,20 @@ private:
   mutable bool                                      _sortedDirty = true;
   mutable bool                                      _sortedHorizontal = false;
   uint64_t                                          _version = 0;
+  int                                               _batchDepth = 0;
+  bool                                              _batchDirty = false;
   mutable std::mutex                                _mutex;
   SpatialIndex                                      _index;   // M1.4
+
+  // Opt C: flatIndex → key lookup for O(range) getFramesForFlatRange.
+  std::vector<std::string>                          _flatIndexToKey;
+
+  // (section, item) → key: O(1) reverse lookup for scrollToIndexPath.
+  // Packed as (uint32_t section << 32 | uint32_t item). Only regular items
+  // (non-supplementary, non-decoration, index >= 0).
+  std::unordered_map<uint64_t, std::string>         _indexPathToKey;
+  // section index → header key: O(1) lookup for scrollToSection.
+  std::unordered_map<int32_t, std::string>          _sectionHeaderKey;
   Point                                             _scrollOffset{0, 0};
 
   // Velocity tracking — updated by setScrollOffset on every native scroll tick.
@@ -312,6 +391,10 @@ private:
   double      _pendingCorrectionY  = 0;   // delta (newAnchorPos - oldAnchorPos)
   double      _pendingScrollTarget = 0;   // absolute: _snapshotScrollPrimary + delta
   bool        _hasPendingCorrection = false;
+
+  // Per-section H anchor snapshots (guarded by _mutex).
+  std::unordered_map<int, std::string> _hAnchorKeys;
+  std::unordered_map<int, double>      _hAnchorXs;
 
   // Internal helpers (call with lock held)
   void _setAttributesLocked(const LayoutAttributes& attrs);

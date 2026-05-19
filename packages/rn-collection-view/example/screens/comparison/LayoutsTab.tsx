@@ -567,9 +567,9 @@ export function ListDemo() {
     <View style={S.flex}>
       {/* Controls bar — horizontal scroll */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
-        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
-        <CtrlBtn label="→ #42" onPress={() => cvRef.current?.scrollToItem('cell-animation:s1-17', { position: 'center' })} />
-        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('insets-spacing:s2-19', { position: 'bottom' })} />
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ #42" onPress={() => cvRef.current?.scrollToIndexPath({ section: 0, item: 17 }, { position: 'center' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+Insert" onPress={handleInsert} />
         <CtrlBtn label="×Delete" onPress={handleDelete} />
@@ -760,9 +760,9 @@ export function GridDemo() {
   return (
     <View style={S.flex}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
-        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('gs1:gs1-0', { position: 'top' })} />
-        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('gs2:gs2-23', { position: 'bottom' })} />
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'top' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert1} />
         <CtrlBtn label="−1" onPress={handleDelete1} />
@@ -887,9 +887,9 @@ export function MasonryDemo() {
   return (
     <View style={S.flex}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
-        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('ms1:ms1-0', { position: 'top' })} />
-        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('ms2:ms2-23', { position: 'bottom' })} />
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'top' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
@@ -1035,9 +1035,9 @@ export function HMasonryDemo() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HMS.ctrlBar} contentContainerStyle={HMS.ctrlBarContent}>
-        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hm-s1:hm-s1-0', { position: 'start' })} />
-        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hm-s1:hm-s1-11', { position: 'end' })} />
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
@@ -1260,9 +1260,9 @@ export function FlowDemo() {
   return (
     <View style={S.flex}>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={S.ctrlBarScroll} contentContainerStyle={S.ctrlBar}>
-        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToOffset({ y: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('fc1:fc1-0', { position: 'top' })} />
-        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToItem('fc1:fc1-14', { position: 'bottom' })} />
+        <CtrlBtn label="→ Top" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'top' })} />
+        <CtrlBtn label="→ Bot" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
@@ -1411,9 +1411,9 @@ export function HFlowDemo() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HFS.ctrlBar} contentContainerStyle={HFS.ctrlBarContent}>
-        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hf-s1:hf-s1-0', { position: 'start' })} />
-        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hf-s1:hf-s1-8', { position: 'end' })} />
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
@@ -1904,10 +1904,10 @@ export function HorizontalListDemo() {
 
       {/* Controls bar */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HS.ctrlBar} contentContainerStyle={HS.ctrlBarContent}>
-        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('cities:city-0', { position: 'start' })} />
-        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToItem('abstract:abs-0', { position: 'start' })} />
-        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('abstract:abs-14', { position: 'end' })} />
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'start' })} />
+        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToSection(2, { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+Insert" onPress={handleInsert} />
         <CtrlBtn label="×Delete" onPress={handleDelete} />
@@ -2172,10 +2172,10 @@ export function HorizontalGridDemo() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={HGS.ctrlBar} contentContainerStyle={HGS.ctrlBarContent}>
-        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('hg-cities:hg-city-0', { position: 'start' })} />
-        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToItem('hg-abstract:hg-abs-0', { position: 'start' })} />
-        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToItem('hg-abstract:hg-abs-11', { position: 'end' })} />
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'start' })} />
+        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToSection(2, { position: 'start' })} />
+        <CtrlBtn label="→ End" onPress={() => cvRef.current?.scrollToEnd()} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert1} />
         <CtrlBtn label="+4" onPress={handleInsert4} />
@@ -2413,9 +2413,9 @@ function AdaptiveHGridDemo() {
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={AHGS.ctrlBar} contentContainerStyle={AHGS.ctrlBarContent}>
-        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToOffset({ x: 0 })} />
-        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToItem('ahg-cities:ahg-city-0', { position: 'start' })} />
-        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToItem('ahg-abstract:ahg-abs-0', { position: 'start' })} />
+        <CtrlBtn label="← Start" onPress={() => cvRef.current?.scrollToTop()} />
+        <CtrlBtn label="→ S1" onPress={() => cvRef.current?.scrollToSection(1, { position: 'start' })} />
+        <CtrlBtn label="→ S2" onPress={() => cvRef.current?.scrollToSection(2, { position: 'start' })} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="×4" onPress={handleDelete} />

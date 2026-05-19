@@ -677,15 +677,25 @@ double ListLayout::computeSection(const ListLayoutParams& p,
     // Uniform item size along primary axis (itemHeight param).
     // For horizontal: height is an estimate; Yoga measures final height.
     // For vertical: width = crossContent (full container minus insets); height = itemHeight estimate.
-    _scratch.sizingState = H ? SizingState::Placeholder : SizingState::Measured;
     for (int i = 0; i < p.itemCount; ++i) {
-      _scratch.key       = itemKey(p, i, prefix);
+      const std::string key = itemKey(p, i, prefix);
+      _scratch.key       = key;
       _scratch.index     = i;
       _scratch.flatIndex = p.flatIndexBase + i;
       if (H) {
-        _scratch.frame = { primary, crossStart, p.itemHeight, hEstH };
+        // Preserve previously measured dimensions from stash (survives clear()).
+        // "w to w, h to h": stashedSize->width → frame.width (primary), ->height → frame.height (cross).
+        auto stashedSize = _cache->getStashedMeasuredSize(key);
+        const double itemW = (stashedSize && stashedSize->width  > 0.0) ? stashedSize->width  : p.itemHeight;
+        const double itemH = (stashedSize && stashedSize->height > 0.0) ? stashedSize->height : hEstH;
+        _scratch.sizingState = (stashedSize && stashedSize->width > 0.0 && stashedSize->height > 0.0)
+            ? SizingState::Measured : SizingState::Placeholder;
+        _scratch.frame = { primary, crossStart, itemW, itemH };
+        primary += itemW + p.itemSpacing;
       } else {
+        _scratch.sizingState = SizingState::Measured;
         _scratch.frame = { crossStart, primary, crossContent, p.itemHeight };
+        primary += p.itemHeight + p.itemSpacing;
       }
       _cache->setAttributes(_scratch);
       if (i < 5 || i == p.itemCount - 1) {
@@ -693,7 +703,6 @@ double ListLayout::computeSection(const ListLayoutParams& p,
                       _scratch.key.c_str(), _scratch.section, _scratch.index,
                       _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
       }
-      primary += p.itemHeight + p.itemSpacing;
       if (p.emitSeparators && i < p.itemCount - 1) {
         sep.key = "separator-" + std::to_string(sectionIndex) + "-" + std::to_string(i);
         if (H) {
@@ -707,17 +716,25 @@ double ListLayout::computeSection(const ListLayoutParams& p,
   } else {
     // Per-item estimated sizes along primary axis (itemHeights[i] = primary estimate).
     // For horizontal: height is also an estimate (hEstH); Yoga measures both.
-    _scratch.sizingState = SizingState::Placeholder;
     int count = std::min(p.itemCount, static_cast<int>(p.itemHeights.size()));
     for (int i = 0; i < count; ++i) {
-      double sz = p.itemHeights[i];
-      _scratch.key       = itemKey(p, i, prefix);
+      const std::string key = itemKey(p, i, prefix);
+      _scratch.key       = key;
       _scratch.index     = i;
       _scratch.flatIndex = p.flatIndexBase + i;
       if (H) {
-        _scratch.frame = { primary, crossStart, sz, hEstH };
+        // Preserve previously measured dimensions from stash (survives clear()).
+        auto stashedSize = _cache->getStashedMeasuredSize(key);
+        const double itemW = (stashedSize && stashedSize->width  > 0.0) ? stashedSize->width  : p.itemHeights[i];
+        const double itemH = (stashedSize && stashedSize->height > 0.0) ? stashedSize->height : hEstH;
+        _scratch.sizingState = (stashedSize && stashedSize->width > 0.0 && stashedSize->height > 0.0)
+            ? SizingState::Measured : SizingState::Placeholder;
+        _scratch.frame = { primary, crossStart, itemW, itemH };
+        primary += itemW + p.itemSpacing;
       } else {
-        _scratch.frame = { crossStart, primary, crossContent, sz };
+        _scratch.sizingState = SizingState::Placeholder;
+        _scratch.frame = { crossStart, primary, crossContent, p.itemHeights[i] };
+        primary += p.itemHeights[i] + p.itemSpacing;
       }
       _cache->setAttributes(_scratch);
       if (i < 5 || i == count - 1) {
@@ -725,7 +742,6 @@ double ListLayout::computeSection(const ListLayoutParams& p,
                       _scratch.key.c_str(), _scratch.section, _scratch.index,
                       _scratch.frame.x, _scratch.frame.y, _scratch.frame.width, _scratch.frame.height);
       }
-      primary += sz + p.itemSpacing;
       if (p.emitSeparators && i < count - 1) {
         sep.key = "separator-" + std::to_string(sectionIndex) + "-" + std::to_string(i);
         if (H) {
@@ -811,6 +827,8 @@ double ListLayout::computeSection(const ListLayoutParams& p,
 void ListLayout::computeSections(const std::vector<ListLayoutParams>& sections) {
   _horizontal = !sections.empty() && sections[0].horizontal;
   _viewportHeight = !sections.empty() ? sections[0].viewportHeight : 0.0;
+  _cache->clear();
+  _maxSectionCrossHeight.clear();
   double primary = 0.0;
   RNCV_LIST_LOG("computeSections begin sections=%zu horizontal=%d", sections.size(), (int)_horizontal);
   RNCV_LIST_TRACE("computeSections begin: %zu sections horizontal=%d", sections.size(), (int)_horizontal);

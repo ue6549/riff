@@ -32,7 +32,7 @@ import {
 } from 'react-native';
 import { usePerformanceMetrics } from '../utils/useMetrics';
 import { useBenchmark } from '../utils/useBenchmark';
-import type { BenchmarkConfig, BenchmarkResult, RunResult } from '../utils/useBenchmark';
+import type { AggregateResult, BenchmarkConfig, BenchmarkResult, RunResult } from '../utils/useBenchmark';
 
 // ── Public props ──────────────────────────────────────────────────────────────
 
@@ -73,14 +73,135 @@ function cpuColor(pct: number)      { return pct < 0 ? '#555' : pct < 50 ? '#4ad
 function memColor(mb: number)       { return mb < 20 ? '#4ade80' : mb < 50 ? '#facc15' : '#f87171'; }
 function blankColor(pct: number)    { return pct <= 2 ? '#4ade80' : pct <= 10 ? '#facc15' : '#f87171'; }
 
+// ── Cross-engine result storage (module-level, survives engine switch) ────────
+
+const storedResults: Record<string, BenchmarkResult> = {};
+
+// ── Comparison scorecard ─────────────────────────────────────────────────────
+
+type ScorecardRow = { label: string; riff: string; flash: string; winner: string };
+
+function buildScorecard(riff: AggregateResult, flash: AggregateResult): ScorecardRow[] {
+  const rows: ScorecardRow[] = [];
+  const add = (label: string, rv: number, fv: number, fmt: (v: number) => string, lower: boolean) => {
+    const diff = Math.abs(rv - fv);
+    const threshold = Math.max(Math.abs(rv), Math.abs(fv)) * 0.05; // 5% tolerance
+    let winner: string;
+    if (diff <= threshold) {
+      winner = 'Tied';
+    } else if (lower ? rv < fv : rv > fv) {
+      const ratio = fv > 0 ? rv / fv : 0;
+      const invRatio = rv > 0 ? fv / rv : 0;
+      const r = lower ? invRatio : ratio;
+      winner = r >= 1.5 ? `Riff ${r.toFixed(1)}x` : 'Riff';
+    } else {
+      const ratio = rv > 0 ? fv / rv : 0;
+      const invRatio = fv > 0 ? rv / fv : 0;
+      const r = lower ? invRatio : ratio;
+      winner = r >= 1.5 ? `Flash ${r.toFixed(1)}x` : 'Flash';
+    }
+    rows.push({ label, riff: fmt(rv), flash: fmt(fv), winner });
+  };
+
+  const pct = (v: number) => `${v}%`;
+  const fps = (v: number) => `${v}`;
+  const mb = (v: number) => `${v.toFixed(1)} MB`;
+  const n = (v: number) => `${v}`;
+
+  add('Avg FPS',      riff.avgFPS,          flash.avgFPS,          fps, false);
+  add('Min FPS',      riff.minFPS,          flash.minFPS,          fps, false);
+  add('p5 FPS',       riff.p5FPS,           flash.p5FPS,           fps, false);
+  add('JS Idle',      riff.avgJSIdle,       flash.avgJSIdle,       pct, false);
+  add('Avg CPU',      riff.avgCPU,          flash.avgCPU,          pct, true);
+  add('p75 CPU',      riff.p75CPU,          flash.p75CPU,          pct, true);
+  add('p90 CPU',      riff.p90CPU,          flash.p90CPU,          pct, true);
+  add('Avg Mem',      riff.avgMemDeltaMB,   flash.avgMemDeltaMB,   mb,  true);
+  add('p75 Mem',      riff.p75MemDeltaMB,   flash.p75MemDeltaMB,   mb,  true);
+  add('p90 Mem',      riff.p90MemDeltaMB,   flash.p90MemDeltaMB,   mb,  true);
+  add('Peak Mem',     riff.peakMemDeltaMB,  flash.peakMemDeltaMB,  mb,  true);
+  add('Active Avg',   riff.activeMountAvg,  flash.activeMountAvg,  n,   true);
+  add('Active p75',   riff.activeMountP75,  flash.activeMountP75,  n,   true);
+  add('Active Peak',  riff.activeMountMax,  flash.activeMountMax,  n,   true);
+  add('Total Mounts', riff.totalMounts,     flash.totalMounts,     n,   true);
+
+  return rows;
+}
+
+function ComparisonScorecard({ riffResult, flashResult }: { riffResult: BenchmarkResult; flashResult: BenchmarkResult }) {
+  const rows = buildScorecard(riffResult.aggregate, flashResult.aggregate);
+  const riffWins = rows.filter(r => r.winner.startsWith('Riff')).length;
+  const flashWins = rows.filter(r => r.winner.startsWith('Flash')).length;
+  const tied = rows.filter(r => r.winner === 'Tied').length;
+
+  const handleCopy = async () => {
+    const comparison = {
+      riff: riffResult,
+      flash: flashResult,
+      scorecard: rows,
+      summary: { riffWins, flashWins, tied },
+    };
+    await Share.share({ message: JSON.stringify(comparison, null, 2) });
+  };
+
+  return (
+    <View style={C.container}>
+      <Text style={C.heading}>COMPARISON SCORECARD</Text>
+      <Text style={C.sub}>Riff {riffWins} · Flash {flashWins} · Tied {tied}</Text>
+
+      {/* Header */}
+      <View style={C.headerRow}>
+        <Text style={[C.th, { width: 80, textAlign: 'left' }]}>Metric</Text>
+        <Text style={[C.th, { width: 62 }]}>Riff</Text>
+        <Text style={[C.th, { width: 62 }]}>Flash</Text>
+        <Text style={[C.th, { width: 76, textAlign: 'left', paddingLeft: 6 }]}>Winner</Text>
+      </View>
+
+      {/* Rows */}
+      <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+        {rows.map((r) => {
+          const winColor = r.winner.startsWith('Riff') ? '#4ade80'
+            : r.winner.startsWith('Flash') ? '#60a5fa'
+            : '#555';
+          return (
+            <View key={r.label} style={C.row}>
+              <Text style={[C.cell, { width: 80, textAlign: 'left', color: '#888' }]}>{r.label}</Text>
+              <Text style={[C.cell, { width: 62, color: r.winner.startsWith('Riff') ? '#4ade80' : '#ccc' }]}>{r.riff}</Text>
+              <Text style={[C.cell, { width: 62, color: r.winner.startsWith('Flash') ? '#60a5fa' : '#ccc' }]}>{r.flash}</Text>
+              <Text style={[C.cell, { width: 76, textAlign: 'left', paddingLeft: 6, color: winColor, fontWeight: '700' }]}>{r.winner}</Text>
+            </View>
+          );
+        })}
+      </ScrollView>
+
+      <Pressable style={C.copyBtn} onPress={handleCopy}>
+        <Text style={C.copyText}>Copy Comparison JSON</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+const C = StyleSheet.create({
+  container: { marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#2a2a2a', paddingTop: 8 },
+  heading:   { fontSize: 12, fontWeight: '700', color: '#facc15', fontFamily: 'Menlo' },
+  sub:       { fontSize: 10, color: '#666', fontFamily: 'Menlo', marginBottom: 4 },
+  headerRow: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#2a2a2a', paddingBottom: 3 },
+  th:        { fontSize: 9, fontWeight: '600', color: '#444', fontFamily: 'Menlo', textAlign: 'right' },
+  row:       { flexDirection: 'row', paddingVertical: 2.5 },
+  cell:      { fontSize: 10, color: '#ccc', fontFamily: 'Menlo', textAlign: 'right' },
+  copyBtn:   { marginTop: 6, paddingVertical: 6, backgroundColor: '#1a1a1a', borderRadius: 5, alignItems: 'center' },
+  copyText:  { fontSize: 10, fontWeight: '600', color: '#facc15', fontFamily: 'Menlo' },
+});
+
 // ── Benchmark summary modal ───────────────────────────────────────────────────
 
 function BenchmarkSummary({
   result,
+  otherResult,
   onClose,
   onRunAgain,
 }: {
   result: BenchmarkResult;
+  otherResult: BenchmarkResult | null;
   onClose: () => void;
   onRunAgain: () => void;
 }) {
@@ -88,13 +209,17 @@ function BenchmarkSummary({
     await Share.share({ message: JSON.stringify(result, null, 2) });
   };
 
+  const riffResult = result.engine === 'riff' ? result : otherResult;
+  const flashResult = result.engine === 'flash' ? result : otherResult;
+
   const agg = result.aggregate;
   const hasBlank = agg.avgBlankPct >= 0;
 
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
       <View style={M.backdrop}>
-        <View style={M.sheet}>
+        <ScrollView bounces={false} showsVerticalScrollIndicator={false} style={{ flexGrow: 0 }}>
+          <View style={M.sheet}>
           <Text style={M.title}>BENCHMARK — {result.engine.toUpperCase()} · {result.tab}</Text>
           <Text style={M.subtitle}>{result.itemCount} items · {result.rounds}×/run · {result.timestamp.slice(11, 19)} UTC</Text>
 
@@ -104,13 +229,21 @@ function BenchmarkSummary({
               {/* Header */}
               <View style={M.tableHeader}>
                 <Text style={[M.th, { width: 68 }]}>Run</Text>
-                <Text style={[M.th, { width: 38 }]}>UIfps</Text>
-                <Text style={[M.th, { width: 34 }]}>Min</Text>
+                <Text style={[M.th, { width: 34 }]}>FPS</Text>
+                <Text style={[M.th, { width: 30 }]}>Min</Text>
                 <Text style={[M.th, { width: 30 }]}>p5</Text>
-                <Text style={[M.th, { width: 38 }]}>JS%</Text>
-                <Text style={[M.th, { width: 38 }]}>CPU</Text>
-                <Text style={[M.th, { width: 44 }]}>Mem</Text>
-                {hasBlank && <Text style={[M.th, { width: 42 }]}>Blank</Text>}
+                <Text style={[M.th, { width: 34 }]}>JS%</Text>
+                <Text style={[M.th, { width: 34 }]}>CPU</Text>
+                <Text style={[M.th, { width: 34 }]}>Cp75</Text>
+                <Text style={[M.th, { width: 34 }]}>Cp90</Text>
+                <Text style={[M.th, { width: 40 }]}>Mem</Text>
+                <Text style={[M.th, { width: 40 }]}>Mp75</Text>
+                <Text style={[M.th, { width: 40 }]}>Mp90</Text>
+                <Text style={[M.th, { width: 40 }]}>MPk</Text>
+                <Text style={[M.th, { width: 32 }]}>Cel</Text>
+                <Text style={[M.th, { width: 32 }]}>C75</Text>
+                <Text style={[M.th, { width: 32 }]}>CPk</Text>
+                {hasBlank && <Text style={[M.th, { width: 38 }]}>Blnk</Text>}
               </View>
 
               {/* Per-run rows */}
@@ -118,18 +251,22 @@ function BenchmarkSummary({
                 {result.runs.map((r: RunResult) => (
                   <View key={r.name} style={M.tableRow}>
                     <Text style={[M.td, { width: 68 }]} numberOfLines={1}>{r.label}</Text>
-                    <Text style={[M.td, { width: 38, color: fpsColor(r.avgFPS) }]}>{r.avgFPS}</Text>
-                    <Text style={[M.td, { width: 34, color: fpsColor(r.minFPS) }]}>{r.minFPS}</Text>
+                    <Text style={[M.td, { width: 34, color: fpsColor(r.avgFPS) }]}>{r.avgFPS}</Text>
+                    <Text style={[M.td, { width: 30, color: fpsColor(r.minFPS) }]}>{r.minFPS}</Text>
                     <Text style={[M.td, { width: 30, color: fpsColor(r.p5FPS) }]}>{r.p5FPS}</Text>
-                    <Text style={[M.td, { width: 38, color: idleColor(r.avgJSIdle) }]}>{r.avgJSIdle}%</Text>
-                    <Text style={[M.td, { width: 38, color: cpuColor(r.avgCPU) }]}>
-                      {r.avgCPU >= 0 ? `${r.avgCPU}%` : '—'}
-                    </Text>
-                    <Text style={[M.td, { width: 44, color: memColor(r.peakMemDeltaMB) }]}>
-                      +{r.peakMemDeltaMB.toFixed(1)}M
-                    </Text>
+                    <Text style={[M.td, { width: 34, color: idleColor(r.avgJSIdle) }]}>{r.avgJSIdle}%</Text>
+                    <Text style={[M.td, { width: 34, color: cpuColor(r.avgCPU) }]}>{r.avgCPU >= 0 ? `${r.avgCPU}%` : '—'}</Text>
+                    <Text style={[M.td, { width: 34, color: cpuColor(r.p75CPU) }]}>{r.p75CPU >= 0 ? `${r.p75CPU}%` : '—'}</Text>
+                    <Text style={[M.td, { width: 34, color: cpuColor(r.p90CPU) }]}>{r.p90CPU >= 0 ? `${r.p90CPU}%` : '—'}</Text>
+                    <Text style={[M.td, { width: 40, color: memColor(r.avgMemDeltaMB) }]}>+{r.avgMemDeltaMB.toFixed(1)}</Text>
+                    <Text style={[M.td, { width: 40, color: memColor(r.p75MemDeltaMB) }]}>+{r.p75MemDeltaMB.toFixed(1)}</Text>
+                    <Text style={[M.td, { width: 40, color: memColor(r.p90MemDeltaMB) }]}>+{r.p90MemDeltaMB.toFixed(1)}</Text>
+                    <Text style={[M.td, { width: 40, color: memColor(r.peakMemDeltaMB) }]}>+{r.peakMemDeltaMB.toFixed(1)}</Text>
+                    <Text style={[M.td, { width: 32 }]}>{r.activeMountAvg}</Text>
+                    <Text style={[M.td, { width: 32 }]}>{r.activeMountP75}</Text>
+                    <Text style={[M.td, { width: 32 }]}>{r.activeMountMax}</Text>
                     {hasBlank && (
-                      <Text style={[M.td, { width: 42, color: r.avgBlankPct >= 0 ? blankColor(r.avgBlankPct) : '#555' }]}>
+                      <Text style={[M.td, { width: 38, color: r.avgBlankPct >= 0 ? blankColor(r.avgBlankPct) : '#555' }]}>
                         {r.avgBlankPct >= 0 ? `${r.avgBlankPct}%` : '—'}
                       </Text>
                     )}
@@ -140,18 +277,22 @@ function BenchmarkSummary({
               {/* Aggregate row */}
               <View style={M.aggRow}>
                 <Text style={[M.aggLabel, { width: 68 }]}>TOTAL</Text>
-                <Text style={[M.aggVal, { width: 38, color: fpsColor(agg.avgFPS) }]}>{agg.avgFPS}</Text>
-                <Text style={[M.aggVal, { width: 34, color: fpsColor(agg.minFPS) }]}>{agg.minFPS}</Text>
+                <Text style={[M.aggVal, { width: 34, color: fpsColor(agg.avgFPS) }]}>{agg.avgFPS}</Text>
+                <Text style={[M.aggVal, { width: 30, color: fpsColor(agg.minFPS) }]}>{agg.minFPS}</Text>
                 <Text style={[M.aggVal, { width: 30, color: fpsColor(agg.p5FPS) }]}>{agg.p5FPS}</Text>
-                <Text style={[M.aggVal, { width: 38, color: idleColor(agg.avgJSIdle) }]}>{agg.avgJSIdle}%</Text>
-                <Text style={[M.aggVal, { width: 38, color: cpuColor(agg.avgCPU) }]}>
-                  {agg.avgCPU >= 0 ? `${agg.avgCPU}%` : '—'}
-                </Text>
-                <Text style={[M.aggVal, { width: 44, color: memColor(agg.peakMemDeltaMB) }]}>
-                  +{agg.peakMemDeltaMB.toFixed(1)}M
-                </Text>
+                <Text style={[M.aggVal, { width: 34, color: idleColor(agg.avgJSIdle) }]}>{agg.avgJSIdle}%</Text>
+                <Text style={[M.aggVal, { width: 34, color: cpuColor(agg.avgCPU) }]}>{agg.avgCPU >= 0 ? `${agg.avgCPU}%` : '—'}</Text>
+                <Text style={[M.aggVal, { width: 34, color: cpuColor(agg.p75CPU) }]}>{agg.p75CPU >= 0 ? `${agg.p75CPU}%` : '—'}</Text>
+                <Text style={[M.aggVal, { width: 34, color: cpuColor(agg.p90CPU) }]}>{agg.p90CPU >= 0 ? `${agg.p90CPU}%` : '—'}</Text>
+                <Text style={[M.aggVal, { width: 40, color: memColor(agg.avgMemDeltaMB) }]}>+{agg.avgMemDeltaMB.toFixed(1)}</Text>
+                <Text style={[M.aggVal, { width: 40, color: memColor(agg.p75MemDeltaMB) }]}>+{agg.p75MemDeltaMB.toFixed(1)}</Text>
+                <Text style={[M.aggVal, { width: 40, color: memColor(agg.p90MemDeltaMB) }]}>+{agg.p90MemDeltaMB.toFixed(1)}</Text>
+                <Text style={[M.aggVal, { width: 40, color: memColor(agg.peakMemDeltaMB) }]}>+{agg.peakMemDeltaMB.toFixed(1)}</Text>
+                <Text style={[M.aggVal, { width: 32 }]}>{agg.activeMountAvg}</Text>
+                <Text style={[M.aggVal, { width: 32 }]}>{agg.activeMountP75}</Text>
+                <Text style={[M.aggVal, { width: 32 }]}>{agg.activeMountMax}</Text>
                 {hasBlank && (
-                  <Text style={[M.aggVal, { width: 42, color: agg.avgBlankPct >= 0 ? blankColor(agg.avgBlankPct) : '#555' }]}>
+                  <Text style={[M.aggVal, { width: 38, color: agg.avgBlankPct >= 0 ? blankColor(agg.avgBlankPct) : '#555' }]}>
                     {agg.avgBlankPct >= 0 ? `${agg.avgBlankPct}%` : '—'}
                   </Text>
                 )}
@@ -161,7 +302,9 @@ function BenchmarkSummary({
 
           {/* Extra stats */}
           <Text style={M.extraStats}>
-            p5 FPS {agg.p5FPS}  ·  mounts {agg.totalMounts}
+            {'CPU avg/p75/p90: '}{agg.avgCPU >= 0 ? `${agg.avgCPU}/${agg.p75CPU}/${agg.p90CPU}%` : '—'}
+            {'  ·  Mem avg/p75/p90/pk: '}{`${agg.avgMemDeltaMB.toFixed(1)}/${agg.p75MemDeltaMB.toFixed(1)}/${agg.p90MemDeltaMB.toFixed(1)}/${agg.peakMemDeltaMB.toFixed(1)}M`}
+            {'\n'}{'Cells avg/p75/pk: '}{`${agg.activeMountAvg}/${agg.activeMountP75}/${agg.activeMountMax}`}{'  ·  total '}{agg.totalMounts}
             {hasBlank && agg.peakBlankPct >= 0 ? `  ·  peak blank ${agg.peakBlankPct}%` : ''}
           </Text>
 
@@ -177,7 +320,13 @@ function BenchmarkSummary({
               <Text style={[M.btnText, { color: '#60a5fa' }]}>Copy JSON</Text>
             </Pressable>
           </View>
-        </View>
+
+          {/* Comparison scorecard — shown when both engines have been benchmarked */}
+          {riffResult && flashResult && (
+            <ComparisonScorecard riffResult={riffResult} flashResult={flashResult} />
+          )}
+          </View>
+        </ScrollView>
       </View>
     </Modal>
   );
@@ -239,11 +388,11 @@ export function PerfHood({
 
   const bench = useBenchmark(benchConfig);
 
-  // Auto-show summary when a new result arrives; hide when result is cleared
-  // (e.g. engine switch resets it to null).
+  // Auto-show summary when a new result arrives; store for cross-engine comparison.
   useEffect(() => {
     if (bench.result && bench.result !== prevResultRef.current) {
       prevResultRef.current = bench.result;
+      storedResults[bench.result.engine] = bench.result;
       setShowResult(true);
     } else if (!bench.result) {
       prevResultRef.current = null;
@@ -277,6 +426,7 @@ export function PerfHood({
       {showResult && bench.result && (
         <BenchmarkSummary
           result={bench.result}
+          otherResult={storedResults[engine === 'riff' ? 'flash' : 'riff'] ?? null}
           onClose={() => setShowResult(false)}
           onRunAgain={handleRunAgain}
         />

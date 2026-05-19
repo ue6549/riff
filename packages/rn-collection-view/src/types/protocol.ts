@@ -45,6 +45,23 @@ export interface CollectionViewLayout {
   prepare(context: LayoutContext): void;
 
   /**
+   * Optional scroll-driven layout hook for sub-container layouts.
+   *
+   * Scroll-driven layouts (radial, spiral, carousel3D, ...) override this to
+   * recompute positions / transforms / opacity per scroll tick. The recommended
+   * implementation is to compute all visible items' new attributes in one go
+   * and commit them through `setAttributesBatch` (one JSI round-trip for N
+   * items), then return — the sub-container's ShadowNode picks the new values
+   * up from the cache during its next layout pass.
+   *
+   * Static layouts (list, grid, masonry, flow) leave this undefined.
+   */
+  processScroll?(
+    offset: Readonly<{ x: number; y: number }>,
+    ctx: LayoutContext,
+  ): void;
+
+  /**
    * Spatial query — return attributes for items intersecting rect.
    * Primary interface for the window controller.
    */
@@ -102,6 +119,42 @@ export interface CollectionViewLayout {
    * Default: false for built-in layouts, true for custom layouts (safe default).
    */
   readonly needsSpatialQuery?: boolean;
+
+  /**
+   * Per-section LayoutCache key prefix.
+   * Compositional layouts use different prefixes per section (e.g. "item" for list
+   * sections, "grid" for grid sections). CollectionView.tsx calls this to derive
+   * cacheKey for headers/footers and fallback item keys.
+   * If absent, falls back to `type === 'list' ? 'item' : type`.
+   */
+  keyPrefixForSection?(section: number): string;
+
+  /**
+   * Maximum column count used across all sections.
+   * Used by processScroll to scale the application budget — returning the max ensures
+   * the render window covers all visible items in the widest section.
+   * If absent, CollectionView reads `delegate.columns` directly (existing behaviour).
+   */
+  budgetColumns?(viewportWidth: number): number;
+
+  /**
+   * Canonical cache key for an item. Single source of truth — C++ writes use
+   * the same format, and all TS readers (computeCacheKey, measuredHeight, sticky)
+   * MUST call this rather than constructing keys manually.
+   *
+   * Returns identity key from keyExtractor when available, otherwise
+   * `{typePrefix}-{section}-{index}`.
+   */
+  cacheKeyForItem?(index: number, section: number): string;
+
+  /**
+   * Canonical cache key for a supplementary (header/footer). Single source of
+   * truth — matches the key C++ writes to LayoutCache.
+   *
+   * Compositional layouts use `comp-{section}-{kind}` (Level 1 owned by the
+   * orchestrator). Standalone layouts use `{typePrefix}-{section}-{kind}`.
+   */
+  cacheKeyForSupplementary?(kind: string, section: number): string;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -567,6 +620,20 @@ export interface SectionConfig<T> {
 
   // ── Decoration ──
   background?: (sectionIndex: number) => React.ReactElement;
+
+  // ── Per-section windowing overrides (F3.8 / H-3.5) ──
+  //
+  // Override the top-level windowing knobs for this section only.
+  // Useful when one section has a very different cost profile from the rest
+  // (e.g. a dense H carousel of tiny chips needs a wider H window than the
+  // surrounding V list, while an off-screen-by-default section needs a tight one).
+  //
+  // Precedence for H sections: section.renderMultiplier ?? hRenderMultiplier ?? renderMultiplier ?? 0.5
+  // Precedence for V sections: section.renderMultiplier ?? renderMultiplier ?? 0.5
+  // (mountedWindowSize and measureAhead have no H-specific top-level variant)
+  renderMultiplier?: number;
+  mountedWindowSize?: number;
+  measureAhead?: number;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -620,6 +687,17 @@ export interface CollectionViewProps<T> {
 
   // ── Memory ──
   mountedWindowSize?: number;
+
+  // ── H-3.5: Decoupled H windowing ──
+  /**
+   * Render multiplier applied specifically to horizontal sections.
+   * Decouples H window size from V window size so a tight V renderMultiplier
+   * doesn't also starve horizontal carousels of their leading-edge buffer.
+   *
+   * Precedence for H sections: section.renderMultiplier ?? hRenderMultiplier ?? renderMultiplier ?? 0.5
+   * Defaults to renderMultiplier (backward-compatible).
+   */
+  hRenderMultiplier?: number;
 
   // ── Events ──
   onScroll?: (event: { contentOffset: { x: number; y: number } }) => void;

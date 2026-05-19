@@ -1,7 +1,32 @@
 #include "CollectionViewModule.h"
 
+#include <chrono>
+#include <cstdio>
 #include <limits>
 #include <unordered_map>
+
+// Targeted H sub-container scroll diagnostics from the C++ TurboModule side.
+// Independent from generic native-log gating. Defaults OFF.
+//
+// Flip to 1 to enable. Sister flags:
+//   - example/components/CollectionView.tsx          → RNCV_HSUB_LOGS
+//   - cpp/CollectionSubContainerShadowNode.cpp       → RNCV_ENABLE_HSUB_LOGS
+//   - ios/RNCollectionSubContainerView.mm            → RNCV_ENABLE_HSUB_LOGS
+//
+// Filterable tags emitted from this file:
+//   RNCV-HSUB-MOD-IN     processHScroll input args (sectionIdx, scrollX, vpW, mult, sectionY/H, flat range)
+//   RNCV-HSUB-MOD-WIN    derived velocity, leadMult/trailMult/leftPad/rightPad,
+//                        queryRect, returned range + frame count
+#ifndef RNCV_ENABLE_HSUB_LOGS
+#define RNCV_ENABLE_HSUB_LOGS 0
+#endif
+
+#if RNCV_ENABLE_HSUB_LOGS
+#define RNCV_HSUB_MOD_LOG(fmt, ...) \
+  do { fprintf(stderr, "[RNCV-HSUB-MOD] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#else
+#define RNCV_HSUB_MOD_LOG(fmt, ...) ((void)0)
+#endif
 
 namespace facebook::react {
 
@@ -80,6 +105,66 @@ std::shared_ptr<rncv::LayoutCache> layoutCacheForId(int32_t cacheId) {
 }
 
 // ── Scroll handler registry ───────────────────────────────────────────────────
+void invokeScrollHandler(int32_t cacheId, double x, double y, bool animated); // forward decl
+
+// ── Scroll helper ────────────────────────────────────────────────────────────
+// Core scroll-to-key logic shared by scrollToKey, scrollToIndexPath, scrollToSection.
+// Looks up attrs by key, computes target primary-axis offset (accounting for sticky
+// supplementary pin sizes derived from the cache), clamps, and invokes the handler.
+static void doScrollToKey(
+    const std::shared_ptr<rncv::LayoutCache>& cache,
+    int32_t cacheId,
+    const std::string& key,
+    bool isHoriz, double vpW, double vpH,
+    bool leadPin, bool trailPin,
+    const std::string& position,
+    double curScroll, bool animated) {
+
+  auto attrsOpt = cache->getAttributes(key);
+  if (!attrsOpt.has_value()) return;
+  const auto& attrs = attrsOpt.value();
+
+  double leadSz = 0.0, trailSz = 0.0;
+  if (leadPin || trailPin) {
+    const auto colon = key.find(':');
+    if (colon != std::string::npos) {
+      const std::string pfx = key.substr(0, colon + 1);
+      if (leadPin) {
+        auto h = cache->getAttributes(pfx + "header");
+        if (h) leadSz = isHoriz ? h->frame.width : h->frame.height;
+      }
+      if (trailPin) {
+        auto f = cache->getAttributes(pfx + "footer");
+        if (f) trailSz = isHoriz ? f->frame.width : f->frame.height;
+      }
+    }
+  }
+
+  const double primary = isHoriz ? attrs.frame.x : attrs.frame.y;
+  const double dim     = isHoriz ? attrs.frame.width : attrs.frame.height;
+  const double vp      = isHoriz ? vpW : vpH;
+
+  double target;
+  if (position == "start" || position == "top") {
+    target = primary - leadSz;
+  } else if (position == "end" || position == "bottom") {
+    target = primary - (vp - trailSz) + dim;
+  } else if (position == "center") {
+    target = primary - leadSz - ((vp - leadSz - trailSz) - dim) / 2.0;
+  } else { // "nearest"
+    const double visLead  = curScroll + leadSz;
+    const double visTrail = curScroll + vp - trailSz;
+    if (primary >= visLead && primary + dim <= visTrail) return; // already visible
+    target = (primary < visLead) ? (primary - leadSz) : (primary - (vp - trailSz) + dim);
+  }
+
+  auto sz = cache->getTotalContentSize();
+  const double maxP = std::max(0.0, (isHoriz ? sz.width : sz.height) - vp);
+  target = std::max(0.0, std::min(target, maxP));
+
+  invokeScrollHandler(cacheId, isHoriz ? target : 0.0, isHoriz ? 0.0 : target, animated);
+}
+
 // Container views register a callback so JS (nativeMod.scrollTo) can trigger
 // programmatic scrolling without direct coupling to the native view class.
 
@@ -125,12 +210,15 @@ CollectionViewModule::CollectionViewModule(
     , _masonryLayout(std::make_shared<rncv::MasonryLayout>(_layoutCache))
     , _gridLayout(std::make_shared<rncv::GridLayout>(_layoutCache))
     , _flowLayout(std::make_shared<rncv::FlowLayout>(_layoutCache))
+    , _compositionalLayout(std::make_shared<rncv::CompositionalLayout>(
+          _layoutCache, _listLayout, _gridLayout, _flowLayout, _masonryLayout))
 {
   _layoutCacheId = registerLayoutCache(_layoutCache);
   registerLayoutEngine(_layoutCacheId, "list", _listLayout);
   registerLayoutEngine(_layoutCacheId, "grid", _gridLayout);
   registerLayoutEngine(_layoutCacheId, "masonry", _masonryLayout);
   registerLayoutEngine(_layoutCacheId, "flow", _flowLayout);
+  registerLayoutEngine(_layoutCacheId, "compositional", _compositionalLayout);
 }
 
 std::string CollectionViewModule::ping() {
@@ -148,6 +236,7 @@ void CollectionViewModule::invalidate() {
   _masonryLayoutJSI.reset();
   _gridLayoutJSI.reset();
   _flowLayoutJSI.reset();
+  _compositionalLayoutJSI.reset();
 
   _memoryPressureJsFn.reset();
   _memoryPressureRt = nullptr;
@@ -468,10 +557,12 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           }
           bool sectioned = !sections.empty();
 
-          // Read scroll offset + velocity from LayoutCache (set by native scrollViewDidScroll:)
-          auto snapshot = _layoutCache->getScrollOffsetAndVelocity();
+          // Opt D: Read scroll offset + velocity + version in a single lock
+          // (was 2 locks: getScrollOffsetAndVelocity + version).
+          auto snapshot = _layoutCache->getScrollSnapshotWithVersion();
           double scrollPrimary = isHoriz ? snapshot.offset.x : snapshot.offset.y;
           double velocity = snapshot.velocity;
+          int32_t curVersion = static_cast<int32_t>(snapshot.version);
 
           // Flat-index computation — mirrors JS attrToFlatIndex()
           auto toFlatIdx = [&](const rncv::LayoutAttributes& a) -> int {
@@ -494,7 +585,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
 
           // Helper: return an empty result with just the current cache version
           auto makeEmpty = [&]() -> Value {
-            double ver = static_cast<double>(_layoutCache->version());
+            double ver = static_cast<double>(curVersion);
             Object r(rt);
             r.setProperty(rt, "renderFirst",  Value(0));
             r.setProperty(rt, "renderLast",   Value(-1));
@@ -509,11 +600,6 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           };
 
           if (vpPrimary <= 0.0 || itemCount == 0) return makeEmpty();
-
-          // ── Opt 6: Stable-band early return ────────────────────────────
-          // If cacheVersion is unchanged and scroll offset is within the band
-          // where the integer ranges wouldn't change, return cached result.
-          int32_t curVersion = static_cast<int32_t>(_layoutCache->version());
           if (curVersion == _lastScrollResult.cacheVersion &&
               scrollPrimary >= _lastScrollResult.bandLow &&
               scrollPrimary <= _lastScrollResult.bandHigh) {
@@ -556,9 +642,14 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
 
           if (sorted) {
             // ── Sorted-layout path: O(log n) binary search, zero struct copies ──
+            // Opt D: both render + visible searches in a single lock (was 2 locks).
             double renderLo = scrollPrimary - abovePad;
             double renderHi = scrollPrimary + vpPrimary + belowPad;
-            auto rRange = _layoutCache->findRangeByPrimary(renderLo, renderHi, isHoriz);
+            auto dualRange = _layoutCache->findDualRangeByPrimary(
+                renderLo, renderHi,
+                scrollPrimary, scrollPrimary + vpPrimary,
+                isHoriz);
+            auto& rRange = dualRange.render;
             if (rRange.firstIdx < 0) return makeEmpty();
             rFirst = rRange.firstIdx;
             rLast  = rRange.lastIdx;
@@ -567,7 +658,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             blankLastPos   = rRange.lastPos;
             blankLastSize  = rRange.lastSize;
 
-            auto vRange = _layoutCache->findRangeByPrimary(scrollPrimary, scrollPrimary + vpPrimary, isHoriz);
+            auto& vRange = dualRange.visible;
             vFirst = vRange.firstIdx >= 0 ? vRange.firstIdx : rFirst;
             vLast  = vRange.lastIdx  >= 0 ? vRange.lastIdx  : rLast;
           } else {
@@ -596,11 +687,19 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             if (vFirst == std::numeric_limits<int>::max()) { vFirst = rFirst; vLast = rLast; }
           }
 
-          // Apply budget
+          // Apply budget.
+          // Derive effective cols from actual layout data: how many items the
+          // binary search / spatial query returned vs how many a single-column
+          // layout would have in the same pixel window. This is exact for all
+          // layout types (list=1, grid=N, flow=variable) without any estimation.
           rncv::Range render  = { rFirst, rLast };
           rncv::Range visible = { vFirst, vLast };
+          double renderRectSize = vpPrimary + abovePad + belowPad;
+          double effectiveCols = (stride > 0.0 && renderRectSize > 0.0)
+            ? std::max(1.0, static_cast<double>(rLast - rFirst + 1) * stride / renderRectSize)
+            : static_cast<double>(budgetCols);
           auto budgeted = rncv::WindowController::applyBudget(
-            render, visible, mountedWindowSz, vpPrimary, stride, budgetCols);
+            render, visible, mountedWindowSz, vpPrimary, stride, effectiveCols);
 
           // Measure range (optional — only when measureAheadMult > 0 and stride known)
           int mFirst = budgeted.first, mLast = budgeted.last;
@@ -611,7 +710,8 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             mLast  = mr.last;
           }
 
-          double ver = static_cast<double>(_layoutCache->version());
+          // Opt D: reuse version from initial snapshot (same JS thread, no interleaving).
+          double ver = static_cast<double>(curVersion);
 
           // ── Blank area ────────────────────────────────────────────────────
           double blankBefore = 0.0, blankAfter = 0.0;
@@ -676,6 +776,200 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           return Value(rt, result);
         }));
 
+    // processHScroll(sectionIndex, scrollX, vpWidth, renderMult,
+    //                sectionY, sectionHeight, flatBase, itemCount)
+    //   → { renderFirst, renderLast, frames?, framesFirst?, cacheVersion? }
+    //
+    // Computes the H-axis render range for a single orthogonal section.
+    // Called from JS on every onHScroll event from RNOrthogonalSectionView.
+    //
+    // Uses a spatial rect query over the section's V band (sectionY..sectionY+sectionHeight)
+    // × H render window (scrollX ± renderMult*vpWidth), then clamps to the section's
+    // flat index range [flatBase, flatBase+itemCount). This correctly excludes items
+    // from adjacent V-sections that share the same X coordinates.
+    //
+    // H-1: After the range is determined, this function bulk-reads frames for
+    // [renderFirst, renderLast] under a single mutex acquisition and returns
+    // them as a packed flat [x, y_section_local, w, h, ...] array. Y values are
+    // section-local (frame.y - sectionY) so they remain valid even if MVC
+    // corrections shift section.y above this section. JS uses this to bypass
+    // per-cell attributesForItem JSI calls — same Change C win that V cells get
+    // from processScroll's frames return.
+    obj.setProperty(rt, "processHScroll",
+      Function::createFromHostFunction(rt,
+        PropNameID::forAscii(rt, "processHScroll"), 8,
+        [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+          auto makeEmpty = [&](int base) -> Value {
+            Object r(rt);
+            r.setProperty(rt, "renderFirst", Value(base));
+            r.setProperty(rt, "renderLast",  Value(base - 1));
+            return Value(rt, r);
+          };
+
+          if (count < 8) return makeEmpty(0);
+
+          double scrollX       = args[1].isNumber() ? args[1].getNumber() : 0.0;
+          double vpWidth       = args[2].isNumber() ? args[2].getNumber() : 0.0;
+          double renderMult    = args[3].isNumber() ? args[3].getNumber() : 0.5;
+          double sectionY      = args[4].isNumber() ? args[4].getNumber() : 0.0;
+          double sectionHeight = args[5].isNumber() ? args[5].getNumber() : 0.0;
+          int    flatBase      = args[6].isNumber() ? static_cast<int>(args[6].getNumber()) : 0;
+          int    itemCount     = args[7].isNumber() ? static_cast<int>(args[7].getNumber()) : 0;
+          int    sectionIdx    = args[0].isNumber() ? static_cast<int>(args[0].getNumber()) : 0;
+
+          RNCV_HSUB_MOD_LOG(
+            "IN s=%d scrollX=%.1f vpW=%.1f mult=%.2f "
+            "sectionY=%.1f sectionH=%.1f flatBase=%d itemCount=%d",
+            sectionIdx, scrollX, vpWidth, renderMult,
+            sectionY, sectionHeight, flatBase, itemCount);
+
+          if (vpWidth <= 0.0 || itemCount == 0) return makeEmpty(flatBase);
+
+          // H-3: Velocity-adaptive padding along the H axis.
+          // Track per-section (scrollX, wallClockMs) to derive px/ms velocity.
+          // Apply the same asymmetric lead/trail formula as V processScroll:
+          //   speed     = |velocity| in px/ms
+          //   leadBoost = min(1.5, speed) * renderMult
+          //   leadMult  = renderMult + leadBoost   (grow toward direction of travel)
+          //   trailMult = max(0.75, renderMult - leadBoost * 0.5)  (shrink behind)
+          // This guarantees the window is at least renderMult wide on the trailing
+          // side, while expanding up to 2.5× renderMult on the leading side at
+          // maximum velocity.
+          // (sectionIdx already extracted above for logging.)
+
+          auto nowMs = static_cast<double>(
+              std::chrono::duration_cast<std::chrono::microseconds>(
+                  std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.0;
+
+          auto& hState = _hScrollStates[sectionIdx];
+          if (hState.lastTimestampMs >= 0.0) {
+            double dt = nowMs - hState.lastTimestampMs;
+            if (dt > 0.5) {  // skip if < 0.5 ms apart (duplicate event noise)
+              hState.velocity = (scrollX - hState.lastScrollX) / dt;
+            }
+          }
+          hState.lastScrollX     = scrollX;
+          hState.lastTimestampMs = nowMs;
+
+          double speed = std::abs(hState.velocity);
+
+          // Asymmetric lead/trail formula (mirrors V processScroll):
+          //   leadBoost = min(1.5, speed) * renderMult
+          //   leadMult  = renderMult + leadBoost   (grow toward direction of travel)
+          //   trailMult = max(0.75, renderMult - leadBoost * 0.5)  (shrink behind)
+          //
+          // An earlier iteration applied a low-velocity dead-zone here to
+          // stop boundary-cell flicker during bounce decay (range flipping
+          // 5..8 ↔ 4..8 as |vel| oscillated 0.05 ↔ 0.16 px/ms). That
+          // flicker was the surface symptom of a deeper feedback loop:
+          // round-tripping section size through JS as a Fabric prop
+          // re-rendered cells on every commit, which thrashed the bounce
+          // animation. H-2.1 cuts the round-trip at its source — section
+          // size now flows cache → C++ ShadowNode → state without React
+          // in the loop, so even when the H window range changes 1 cell
+          // per tick during decay, the cells just toggle visibility
+          // natively and UIKit's bounce timer is undisturbed.
+          double leadBoost = std::min(1.5, speed) * renderMult;
+          double leadMult  = renderMult + leadBoost;
+          double trailMult = std::max(0.75, renderMult - leadBoost * 0.5);
+          bool   goingRight = hState.velocity >= 0.0;
+
+          double leftPad  = (goingRight ? trailMult : leadMult) * vpWidth;
+          double rightPad = (goingRight ? leadMult  : trailMult) * vpWidth;
+
+          // Spatial rect: H render window × section V band.
+          rncv::Rect queryRect = {
+            scrollX - leftPad,                // x (may be negative — clamped inside getAttributesInRect)
+            sectionY,                         // y
+            vpWidth + leftPad + rightPad,     // width
+            sectionHeight                     // height
+          };
+
+          auto attrs = _layoutCache->getAttributesInRect(queryRect);
+
+          int rFirst = std::numeric_limits<int>::max();
+          int rLast  = std::numeric_limits<int>::min();
+          int matchedItems = 0;
+
+          for (const auto& a : attrs) {
+            if (a.isDecoration || a.isSupplementary) continue;
+            // flatIndex is pre-computed for compositional layouts; fall back to
+            // section-relative index + flatBase for standalone H layouts.
+            int fi = (a.flatIndex >= 0) ? a.flatIndex : (flatBase + a.index);
+            // Clamp to this section's flat range.
+            if (fi < flatBase || fi >= flatBase + itemCount) continue;
+            if (fi < rFirst) rFirst = fi;
+            if (fi > rLast)  rLast  = fi;
+            matchedItems++;
+          }
+
+          RNCV_HSUB_MOD_LOG(
+            "WIN s=%d vel=%.4f speed=%.4f goingRight=%d "
+            "leadMult=%.2f trailMult=%.2f leftPad=%.1f rightPad=%.1f "
+            "queryRect=(x=%.1f y=%.1f w=%.1f h=%.1f) "
+            "rawAttrs=%zu matched=%d range=%d..%d",
+            sectionIdx, hState.velocity, speed, goingRight ? 1 : 0,
+            leadMult, trailMult, leftPad, rightPad,
+            queryRect.x, queryRect.y, queryRect.width, queryRect.height,
+            attrs.size(), matchedItems, rFirst, rLast);
+
+          if (rFirst == std::numeric_limits<int>::max()) {
+            // No items in range — also update stable-band state so next call
+            // with the same empty result skips the spatial query.
+            hState.prevRenderFirst  = flatBase;
+            hState.prevRenderLast   = flatBase - 1;
+            hState.prevCacheVersion = _layoutCache->version();
+            return makeEmpty(flatBase);
+          }
+
+          // H-4: Stable-band skip — if range and cacheVersion are unchanged,
+          // return a lightweight sentinel so JS skips the frame-data overwrite
+          // and React re-render. Saves the spatial query on ~80% of scroll ticks
+          // during steady H scrolling.
+          {
+            uint64_t curVersion = _layoutCache->version();
+            if (rFirst == hState.prevRenderFirst &&
+                rLast  == hState.prevRenderLast  &&
+                curVersion == hState.prevCacheVersion) {
+              Object r(rt);
+              r.setProperty(rt, "unchanged", Value(true));
+              // Include range values so callers that don't check `unchanged`
+              // (e.g. the render-body initial-compute path) still get valid data.
+              r.setProperty(rt, "renderFirst", Value(rFirst));
+              r.setProperty(rt, "renderLast",  Value(rLast));
+              return Value(rt, r);
+            }
+            hState.prevRenderFirst  = rFirst;
+            hState.prevRenderLast   = rLast;
+            hState.prevCacheVersion = curVersion;
+          }
+
+          // H-1: Bulk-read frames for [rFirst, rLast] under a single mutex acquisition.
+          // getFramesForFlatRangeWithVersion returns y in V-absolute coords (as stored
+          // in LayoutCache after CompositionalLayout::finalizeHSection shifts H-section
+          // item Y to V-absolute for processScroll spatial queries). We subtract
+          // sectionY here to convert to section-local for the renderCell consumer —
+          // section-local y is invariant under V-section reflows that change section.y.
+          auto fwv = _layoutCache->getFramesForFlatRangeWithVersion(rFirst, rLast);
+          // Convert y to section-local in place. Layout: [x, y, w, h, x, y, w, h, ...]
+          for (size_t i = 1; i < fwv.frames.size(); i += 4) {
+            fwv.frames[i] -= sectionY;
+          }
+
+          // Pack frames into a JSI Array (matches processScroll's pattern).
+          auto frameArr = Array(rt, fwv.frames.size());
+          for (size_t i = 0; i < fwv.frames.size(); ++i)
+            frameArr.setValueAtIndex(rt, i, Value(fwv.frames[i]));
+
+          Object r(rt);
+          r.setProperty(rt, "renderFirst",  Value(rFirst));
+          r.setProperty(rt, "renderLast",   Value(rLast));
+          r.setProperty(rt, "frames",       Value(rt, std::move(frameArr)));
+          r.setProperty(rt, "framesFirst",  Value(rFirst));
+          r.setProperty(rt, "cacheVersion", Value(static_cast<double>(fwv.version)));
+          return Value(rt, r);
+        }));
+
     _windowControllerJSI = std::move(obj);
   }
   return Value(rt, *_windowControllerJSI);
@@ -701,9 +995,10 @@ Value CollectionViewModule::get(Runtime& rt, const PropNameID& name) {
   if (prop == "signpost")         return getSignpostObject(rt);
   if (prop == "diffEngine")       return getDiffEngineObject(rt);
   if (prop == "memory")           return getMemoryObject(rt);
-  if (prop == "masonryLayout")    return getMasonryLayoutObject(rt);
-  if (prop == "gridLayout")       return getGridLayoutObject(rt);
-  if (prop == "flowLayout")       return getFlowLayoutObject(rt);
+  if (prop == "masonryLayout")         return getMasonryLayoutObject(rt);
+  if (prop == "gridLayout")            return getGridLayoutObject(rt);
+  if (prop == "flowLayout")            return getFlowLayoutObject(rt);
+  if (prop == "compositionalLayout")   return getCompositionalLayoutObject(rt);
 
   // scrollTo(cacheId, x, y, animated) — triggers programmatic scroll on the
   // native container view via the scroll handler registry.
@@ -716,6 +1011,109 @@ Value CollectionViewModule::get(Runtime& rt, const PropNameID& name) {
         const double  x       = args[1].asNumber();
         const double  y       = args[2].asNumber();
         const bool    animated = count > 3 ? args[3].getBool() : true;
+        invokeScrollHandler(cacheId, x, y, animated);
+        return Value::undefined();
+      });
+  }
+
+  // scrollToKey(cacheId, key, isHoriz, vpW, vpH, hasLeadPin, hasTrailPin, position, curScroll, animated)
+  if (prop == "scrollToKey") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "scrollToKey"), 10,
+      [](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 9) return Value::undefined();
+        const int32_t     cacheId   = static_cast<int32_t>(args[0].asNumber());
+        const std::string key       = args[1].getString(rt).utf8(rt);
+        const bool        isHoriz   = args[2].getBool();
+        const double      vpW       = args[3].asNumber();
+        const double      vpH       = args[4].asNumber();
+        const bool        leadPin   = args[5].getBool();
+        const bool        trailPin  = args[6].getBool();
+        const std::string position  = args[7].getString(rt).utf8(rt);
+        const double      curScroll = args[8].asNumber();
+        const bool        animated  = count > 9 ? args[9].getBool() : true;
+        auto cache = CollectionViewModule::getLayoutCacheForId(cacheId);
+        if (!cache) return Value::undefined();
+        doScrollToKey(cache, cacheId, key, isHoriz, vpW, vpH, leadPin, trailPin, position, curScroll, animated);
+        return Value::undefined();
+      });
+  }
+
+  // scrollToIndexPath(cacheId, section, item, isHoriz, vpW, vpH, hasLeadPin, hasTrailPin, position, curScroll, animated)
+  // Resolves (section, item) → key via O(1) reverse index, then scrolls.
+  if (prop == "scrollToIndexPath") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "scrollToIndexPath"), 11,
+      [](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 10) return Value::undefined();
+        const int32_t     cacheId   = static_cast<int32_t>(args[0].asNumber());
+        const int32_t     section   = static_cast<int32_t>(args[1].asNumber());
+        const int32_t     item      = static_cast<int32_t>(args[2].asNumber());
+        const bool        isHoriz   = args[3].getBool();
+        const double      vpW       = args[4].asNumber();
+        const double      vpH       = args[5].asNumber();
+        const bool        leadPin   = args[6].getBool();
+        const bool        trailPin  = args[7].getBool();
+        const std::string position  = args[8].getString(rt).utf8(rt);
+        const double      curScroll = args[9].asNumber();
+        const bool        animated  = count > 10 ? args[10].getBool() : true;
+        auto cache = CollectionViewModule::getLayoutCacheForId(cacheId);
+        if (!cache) return Value::undefined();
+        auto keyOpt = cache->getKeyForIndexPath(section, item);
+        if (!keyOpt) return Value::undefined();
+        doScrollToKey(cache, cacheId, *keyOpt, isHoriz, vpW, vpH, leadPin, trailPin, position, curScroll, animated);
+        return Value::undefined();
+      });
+  }
+
+  // scrollToSection(cacheId, sectionIndex, isHoriz, vpW, vpH, position, curScroll, animated)
+  // Scrolls to section header if present; falls back to first item of section.
+  if (prop == "scrollToSection") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "scrollToSection"), 8,
+      [](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 7) return Value::undefined();
+        const int32_t     cacheId   = static_cast<int32_t>(args[0].asNumber());
+        const int32_t     section   = static_cast<int32_t>(args[1].asNumber());
+        const bool        isHoriz   = args[2].getBool();
+        const double      vpW       = args[3].asNumber();
+        const double      vpH       = args[4].asNumber();
+        const std::string position  = args[5].getString(rt).utf8(rt);
+        const double      curScroll = args[6].asNumber();
+        const bool        animated  = count > 7 ? args[7].getBool() : true;
+        auto cache = CollectionViewModule::getLayoutCacheForId(cacheId);
+        if (!cache) return Value::undefined();
+        // Header first (scroll to section header, no pin offset — we're showing the header itself)
+        auto hdrOpt = cache->getHeaderKeyForSection(section);
+        if (hdrOpt) {
+          doScrollToKey(cache, cacheId, *hdrOpt, isHoriz, vpW, vpH, false, false, position, curScroll, animated);
+          return Value::undefined();
+        }
+        // Fallback: first item of section
+        auto itemOpt = cache->getKeyForIndexPath(section, 0);
+        if (!itemOpt) return Value::undefined();
+        doScrollToKey(cache, cacheId, *itemOpt, isHoriz, vpW, vpH, false, false, position, curScroll, animated);
+        return Value::undefined();
+      });
+  }
+
+  // scrollToEnd(cacheId, isHoriz, vpW, vpH, animated)
+  // Scrolls to the trailing edge of content — contentSize - viewport on primary axis.
+  if (prop == "scrollToEnd") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "scrollToEnd"), 5,
+      [](Runtime&, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 4) return Value::undefined();
+        const int32_t cacheId  = static_cast<int32_t>(args[0].asNumber());
+        const bool    isHoriz  = args[1].getBool();
+        const double  vpW      = args[2].asNumber();
+        const double  vpH      = args[3].asNumber();
+        const bool    animated = count > 4 ? args[4].getBool() : true;
+        auto cache = CollectionViewModule::getLayoutCacheForId(cacheId);
+        if (!cache) return Value::undefined();
+        auto sz = cache->getTotalContentSize();
+        const double x = isHoriz ? std::max(0.0, sz.width  - vpW) : 0.0;
+        const double y = isHoriz ? 0.0 : std::max(0.0, sz.height - vpH);
         invokeScrollHandler(cacheId, x, y, animated);
         return Value::undefined();
       });
@@ -945,6 +1343,17 @@ Value CollectionViewModule::getFlowLayoutObject(Runtime& rt) {
     _flowLayoutJSI = std::move(obj);
   }
   return Value(rt, *_flowLayoutJSI);
+}
+
+// ── Compositional layout JSI object ──────────────────────────────────────────
+
+Value CollectionViewModule::getCompositionalLayoutObject(Runtime& rt) {
+  if (!_compositionalLayoutJSI.has_value()) {
+    Object obj(rt);
+    _compositionalLayout->installJSIBindings(rt, obj);
+    _compositionalLayoutJSI = std::move(obj);
+  }
+  return Value(rt, *_compositionalLayoutJSI);
 }
 
 // ── P4.1: memory JSI object ───────────────────────────────────────────────────

@@ -57,7 +57,9 @@
       "componentProvider": {
         "RNMeasuredCell": "RNMeasuredCellView",
         "RNScrollCoordinatedView": "RNScrollCoordinatedViewView",
-        "RNCollectionViewContainer": "RNCollectionViewContainerView"
+        "RNCollectionViewContainer": "RNCollectionViewContainerView",
+        "RNOrthogonalSectionView": "RNOrthogonalSectionView",
+        "RNCollectionSubContainer": "RNCollectionSubContainerView"
       }
     },
     "android": {

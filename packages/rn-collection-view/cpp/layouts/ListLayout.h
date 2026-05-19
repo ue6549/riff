@@ -160,6 +160,18 @@ public:
       facebook::jsi::Runtime& rt,
       facebook::jsi::Object& target);
 
+  // ── Compositional access (used by CompositionalLayout) ─────────────────
+  // Lays out one section starting at startY. Returns Y where next section starts.
+  double computeSection(const ListLayoutParams& p, int sectionIndex, double startY);
+
+  // Like computeSection but reads each item's height from the cache instead of
+  // params. Used by invalidateSectionsFrom / compositional reflow.
+  double computeSectionFromCache(const ListLayoutParams& p, int sectionIndex, double startY);
+
+  static ListLayoutParams paramsFromJSI(
+      facebook::jsi::Runtime& rt,
+      const facebook::jsi::Object& obj);
+
 private:
   std::shared_ptr<LayoutCache> _cache;
   bool _horizontal = false;      // set by computeSections(); drives contentDeterminedDimension() and applyMeasurements()
@@ -175,18 +187,6 @@ private:
 
   void computeFixed(const ListLayoutParams& p);
   void computeEstimated(const ListLayoutParams& p);
-
-  // Lays out one section starting at startY. Returns Y where next section starts.
-  double computeSection(const ListLayoutParams& p, int sectionIndex, double startY);
-
-  // Like computeSection but reads each item's height from the cache instead of
-  // params. Used by invalidateSectionsFrom so that measured heights that were
-  // written into the cache before calling invalidate are preserved.
-  double computeSectionFromCache(const ListLayoutParams& p, int sectionIndex, double startY);
-
-  static ListLayoutParams paramsFromJSI(
-      facebook::jsi::Runtime& rt,
-      const facebook::jsi::Object& obj);
 
   static std::vector<ListLayoutParams> sectionsFromJSI(
       facebook::jsi::Runtime& rt,

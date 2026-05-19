@@ -420,6 +420,9 @@ double GridLayout::computeSectionFromCache(const GridLayoutParams& p,
   std::vector<double> primarySizes(p.itemCount);
   std::vector<double> crossSizes(p.itemCount); // H only: Yoga-measured natural heights
   std::vector<bool> usedStashedMeasuredSize(p.itemCount, false);
+  // H only: true when crossSizes[i] came from an actual measurement (Measured or
+  // stash), false when it fell back to the itemCrossSize estimate.
+  std::vector<bool> hasMeasuredCross(p.itemCount, false);
   for (int i = 0; i < p.itemCount; ++i) {
     const std::string key = (i < static_cast<int>(p.keys.size()))
         ? p.keys[i]
@@ -432,17 +435,45 @@ double GridLayout::computeSectionFromCache(const GridLayoutParams& p,
           : (stashed && stashed->width > 0)
               ? stashed->width
           : (estimatedPrimary > 0 ? estimatedPrimary : 200.0);
-      crossSizes[i] = (existing && existing->frame.height > 0 && existing->sizingState == SizingState::Measured)
-          ? existing->frame.height
-          : (stashed && stashed->height > 0)
-              ? stashed->height
-          : itemCrossSize;
+      if (existing && existing->frame.height > 0 && existing->sizingState == SizingState::Measured) {
+        crossSizes[i] = existing->frame.height;
+        hasMeasuredCross[i] = true;
+      } else if (stashed && stashed->height > 0) {
+        crossSizes[i] = stashed->height;
+        hasMeasuredCross[i] = true;
+      } else {
+        crossSizes[i] = itemCrossSize; // temporary; overwritten below if measured data found
+      }
       usedStashedMeasuredSize[i] = !existing && stashed.has_value();
     } else {
       primarySizes[i] = (existing && existing->frame.height > 0)
           ? existing->frame.height
           : (fixedPrimary ? p.rowHeight : 44.0);
     }
+  }
+
+  // For H-grid: derive row spacing from the max of ACTUALLY-MEASURED cross heights
+  // only.  Placeholder items default to itemCrossSize (the estimate), so including
+  // them in the max would keep row spacing at the estimate even after Yoga measures
+  // real heights — causing inflated row Y positions and a wrapper height that never
+  // converges (the same B0.1 inflation seen in List H).
+  if (H && p.itemCount > 0) {
+    double measuredMaxCross = 0;
+    for (int i = 0; i < p.itemCount; ++i) {
+      if (hasMeasuredCross[i] && crossSizes[i] > measuredMaxCross)
+        measuredMaxCross = crossSizes[i];
+    }
+    if (measuredMaxCross > 0) {
+      // Use measured height for row spacing, even if it's smaller than the estimate.
+      itemCrossSize = measuredMaxCross;
+      crossContent  = itemCrossSize * cols + totalColSpacing;
+      // Propagate to Placeholder items so their frame heights are consistent
+      // with the spacing used for row Y positions.
+      for (int i = 0; i < p.itemCount; ++i) {
+        if (!hasMeasuredCross[i]) crossSizes[i] = itemCrossSize;
+      }
+    }
+    // If no measured data yet, itemCrossSize stays at the estimate (initial layout).
   }
 
   // ── Layout items using cached sizes ──────────────────────────────────────

@@ -87,11 +87,7 @@ public:
 
   void installJSIBindings(facebook::jsi::Runtime& rt, facebook::jsi::Object& target);
 
-private:
-  std::shared_ptr<LayoutCache> _cache;
-  bool _horizontal = false;
-  std::vector<FlowLayoutParams> _sectionParams; // stored for applyMeasurements
-
+  // ── Compositional access (used by CompositionalLayout) ─────────────────
   /** Layout one section from scratch. Returns next section's startPrimary. */
   double computeSection(const FlowLayoutParams& p, int sectionIndex, double startPrimary);
 
@@ -100,6 +96,12 @@ private:
 
   static FlowLayoutParams paramsFromJSI(facebook::jsi::Runtime& rt,
                                         const facebook::jsi::Object& obj);
+
+private:
+  std::shared_ptr<LayoutCache> _cache;
+  bool _horizontal = false;
+  std::vector<FlowLayoutParams> _sectionParams; // stored for applyMeasurements
+
   static std::vector<FlowLayoutParams> sectionsFromJSI(facebook::jsi::Runtime& rt,
                                                         const facebook::jsi::Array& arr);
 };

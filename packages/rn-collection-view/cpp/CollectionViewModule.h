@@ -7,6 +7,7 @@
 #include <optional>
 #include <atomic>
 #include <functional>
+#include <unordered_map>
 
 #include "LayoutCache.h"
 #include "LayoutEngine.h"
@@ -14,6 +15,7 @@
 #include "layouts/MasonryLayout.h"
 #include "layouts/GridLayout.h"
 #include "layouts/FlowLayout.h"
+#include "layouts/CompositionalLayout.h"
 #include "WindowController.h"
 #include "MetricCollector.h"
 #include "DiffEngine.h"
@@ -119,14 +121,30 @@ public:
 private:
   int32_t _layoutCacheId = 0;
   std::shared_ptr<rncv::LayoutCache>   _layoutCache;
-  std::shared_ptr<rncv::ListLayout>    _listLayout;
-  std::shared_ptr<rncv::MasonryLayout> _masonryLayout;
-  std::shared_ptr<rncv::GridLayout>    _gridLayout;
-  std::shared_ptr<rncv::FlowLayout>    _flowLayout;
+  std::shared_ptr<rncv::ListLayout>          _listLayout;
+  std::shared_ptr<rncv::MasonryLayout>       _masonryLayout;
+  std::shared_ptr<rncv::GridLayout>          _gridLayout;
+  std::shared_ptr<rncv::FlowLayout>          _flowLayout;
+  std::shared_ptr<rncv::CompositionalLayout> _compositionalLayout;
 
   // Scroll position — written from UI thread (M2.2b) or JS thread (M2.2).
   std::atomic<double> _scrollY{0.0};
   std::atomic<double> _scrollX{0.0};
+
+  // H-3: Per-section H velocity tracking for velocity-adaptive windowing.
+  // Each processHScroll call updates this state using std::chrono wall-clock
+  // timestamps, computing px/ms velocity from consecutive (scrollX, time) pairs.
+  // Mirrors the per-module velocity tracking that LayoutCache does for V scroll.
+  struct HScrollState {
+    double lastScrollX     = 0.0;
+    double lastTimestampMs = -1.0;  // -1 = uninitialized (first call)
+    double velocity        = 0.0;   // px/ms, signed (+ve = scrolling right)
+    // H-4: Stable-band skip — cache last result to avoid redundant spatial queries.
+    int    prevRenderFirst = 0;
+    int    prevRenderLast  = -1;    // first > last = no previous result
+    uint64_t prevCacheVersion = 0;
+  };
+  std::unordered_map<int, HScrollState> _hScrollStates;
 
   // processScroll early-return state (Opt 6 — stable-band skip).
   // When cacheVersion hasn't changed and scroll offset is within the band,
@@ -177,6 +195,7 @@ private:
   std::optional<jsi::Object> _masonryLayoutJSI;
   std::optional<jsi::Object> _gridLayoutJSI;
   std::optional<jsi::Object> _flowLayoutJSI;
+  std::optional<jsi::Object> _compositionalLayoutJSI;
 
   jsi::Value getLayoutCacheObject(jsi::Runtime& rt);
   jsi::Value getListLayoutObject(jsi::Runtime& rt);
@@ -188,6 +207,7 @@ private:
   jsi::Value getMasonryLayoutObject(jsi::Runtime& rt);
   jsi::Value getGridLayoutObject(jsi::Runtime& rt);
   jsi::Value getFlowLayoutObject(jsi::Runtime& rt);
+  jsi::Value getCompositionalLayoutObject(jsi::Runtime& rt);
 };
 
 } // namespace facebook::react

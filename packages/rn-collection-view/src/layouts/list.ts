@@ -201,13 +201,13 @@ class ListLayout implements CollectionViewLayout {
     const fingerprintChanged = fp !== this._lastFingerprint;
     listMvcTrace(`prepare: fingerprintChanged=${fingerprintChanged} sections=${sectionParams.length} totalItems=${sectionParams.reduce((n, s) => n + (s.itemCount as number), 0)}`);
     if (fingerprintChanged) {
-      // Stash measured sizes before clearing so they survive orphan cleanup.
+      // Stash measured sizes before computeSections so they survive the atomic
+      // clear inside C++ ListLayout::computeSections (same pattern as Grid/Masonry/Flow).
       // Horizontal lists need both width (primary) and height (cross axis).
       // Vertical lists only need primary-axis height.
-      listMvcTrace(`prepare: ${H ? 'stashMeasuredSizes' : 'stashHeights'} + clear (fingerprint changed)`);
+      listMvcTrace(`prepare: ${H ? 'stashMeasuredSizes' : 'stashHeights'} (fingerprint changed; clear happens atomically in C++)`);
       if (H) nativeMod.layoutCache.stashMeasuredSizes();
       else nativeMod.layoutCache.stashHeights();
-      nativeMod.layoutCache.clear();
       this._lastFingerprint = fp;
     }
 
@@ -235,15 +235,20 @@ class ListLayout implements CollectionViewLayout {
     return nativeMod.layoutCache.getAttributesInRect(inRect);
   }
 
+  cacheKeyForItem(index: number, section: number): string {
+    return this.lastSectionKeys[section]?.[index] ?? `item-${section}-${index}`;
+  }
+
+  cacheKeyForSupplementary(kind: string, section: number): string {
+    return `item-${section}-${kind}`;
+  }
+
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    const sectionKeys = this.lastSectionKeys[section];
-    const key = sectionKeys?.[index] ?? `item-${section}-${index}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    const key = `item-${section}-${kind}`;
-    return nativeMod.layoutCache.getAttributes(key);
+    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {

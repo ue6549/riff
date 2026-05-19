@@ -55,14 +55,47 @@ void LayoutCache::setAttributes(const LayoutAttributes& attrs) {
   _setAttributesLocked(attrs);
 }
 
+void LayoutCache::setAttributesBatch(
+    const std::vector<LayoutAttributes>& batch) {
+  if (batch.empty()) return;
+  std::lock_guard<std::mutex> lock(_mutex);
+  // Batch mode: coalesce all writes into a single version bump.
+  _batchDepth++;
+  for (const auto& attrs : batch) {
+    _setAttributesLocked(attrs);
+  }
+  _batchDepth--;
+  if (_batchDepth == 0 && _batchDirty) {
+    ++_version;
+    _batchDirty = false;
+  }
+}
+
+void LayoutCache::beginBatch() {
+  // Caller must hold _mutex (or call from a path that already holds it).
+  // Public callers go through the ShadowNode which holds its own lock;
+  // the mutex is acquired here for safety.
+  std::lock_guard<std::mutex> lock(_mutex);
+  _batchDepth++;
+}
+
+void LayoutCache::endBatch() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (_batchDepth > 0) _batchDepth--;
+  if (_batchDepth == 0 && _batchDirty) {
+    ++_version;
+    _batchDirty = false;
+  }
+}
+
 void LayoutCache::_setAttributesLocked(const LayoutAttributes& attrs) {
   auto it = _map.find(attrs.key);
   if (it == _map.end()) {
-    // New entry — always bump version.
+    // New entry — always bump version (or mark dirty in batch mode).
     _insertionOrder.push_back(attrs.key);
     _index.insert(attrs.key, attrs.frame);
     _map[attrs.key] = attrs;
-    ++_version;
+    if (_batchDepth > 0) _batchDirty = true; else ++_version;
     _sortedDirty = true;
   } else {
     // Existing entry — only bump version if frame changed.
@@ -75,10 +108,29 @@ void LayoutCache::_setAttributesLocked(const LayoutAttributes& attrs) {
                         oldFrame.height != attrs.frame.height;
     if (frameChanged) {
       _index.update(attrs.key, it->second.frame, attrs.frame);
-      ++_version;
+      if (_batchDepth > 0) _batchDirty = true; else ++_version;
       _sortedDirty = true;
     }
     it->second = attrs;
+  }
+
+  // Opt C: maintain flatIndex → key secondary index.
+  if (attrs.flatIndex >= 0) {
+    const auto fi = static_cast<size_t>(attrs.flatIndex);
+    if (fi >= _flatIndexToKey.size()) {
+      _flatIndexToKey.resize(fi + 1);
+    }
+    _flatIndexToKey[fi] = attrs.key;
+  }
+
+  // (section, item) → key reverse index for O(1) scrollToIndexPath.
+  if (!attrs.isSupplementary && !attrs.isDecoration && attrs.index >= 0) {
+    const uint64_t ip = (uint64_t(uint32_t(attrs.section)) << 32) | uint32_t(attrs.index);
+    _indexPathToKey[ip] = attrs.key;
+  }
+  // section → header key for O(1) scrollToSection.
+  if (attrs.isSupplementary && attrs.supplementaryKind == "header") {
+    _sectionHeaderKey[attrs.section] = attrs.key;
   }
 }
 
@@ -94,7 +146,16 @@ void LayoutCache::removeAttributes(const std::string& key) {
   std::lock_guard<std::mutex> lock(_mutex);
   auto it = _map.find(key);
   if (it != _map.end()) {
-    _index.remove(key, it->second.frame);
+    const auto& attrs = it->second;
+    // Clean up reverse index maps.
+    if (!attrs.isSupplementary && !attrs.isDecoration && attrs.index >= 0) {
+      const uint64_t ip = (uint64_t(uint32_t(attrs.section)) << 32) | uint32_t(attrs.index);
+      _indexPathToKey.erase(ip);
+    }
+    if (attrs.isSupplementary && attrs.supplementaryKind == "header") {
+      _sectionHeaderKey.erase(attrs.section);
+    }
+    _index.remove(key, attrs.frame);
     _map.erase(it);
     _insertionOrder.erase(
         std::remove(_insertionOrder.begin(), _insertionOrder.end(), key),
@@ -112,6 +173,9 @@ void LayoutCache::clear() {
   _index.clear();
   _sorted.clear();
   _sortedDirty = true;
+  _flatIndexToKey.clear();
+  _indexPathToKey.clear();
+  _sectionHeaderKey.clear();
   ++_version;
 }
 
@@ -293,14 +357,52 @@ std::vector<double> LayoutCache::getFramesForFlatRange(int firstFlat, int lastFl
   const int count = lastFlat - firstFlat + 1;
   std::vector<double> result(static_cast<size_t>(count) * 4, 0.0);
   std::lock_guard<std::mutex> lock(_mutex);
-  for (const auto& [key, attrs] : _map) {
-    int fi = attrs.flatIndex;
-    if (fi < firstFlat || fi > lastFlat) continue;
-    size_t off = static_cast<size_t>(fi - firstFlat) * 4;
-    result[off + 0] = attrs.frame.x;
-    result[off + 1] = attrs.frame.y;
-    result[off + 2] = attrs.frame.width;
-    result[off + 3] = attrs.frame.height;
+
+  // Opt C: use flatIndex secondary index for O(range) instead of O(cache_size).
+  if (!_flatIndexToKey.empty()) {
+    for (int fi = firstFlat; fi <= lastFlat; ++fi) {
+      if (fi < 0 || fi >= static_cast<int>(_flatIndexToKey.size())) continue;
+      const auto& key = _flatIndexToKey[static_cast<size_t>(fi)];
+      if (key.empty()) continue;
+      auto it = _map.find(key);
+      if (it == _map.end()) continue;
+      size_t off = static_cast<size_t>(fi - firstFlat) * 4;
+      result[off + 0] = it->second.frame.x;
+      result[off + 1] = it->second.frame.y;
+      result[off + 2] = it->second.frame.width;
+      result[off + 3] = it->second.frame.height;
+    }
+  } else {
+    // Fallback: scan all entries (before any layout engine has set flatIndex).
+    for (const auto& [key, attrs] : _map) {
+      int fi = attrs.flatIndex;
+      if (fi < firstFlat || fi > lastFlat) continue;
+      size_t off = static_cast<size_t>(fi - firstFlat) * 4;
+      result[off + 0] = attrs.frame.x;
+      result[off + 1] = attrs.frame.y;
+      result[off + 2] = attrs.frame.width;
+      result[off + 3] = attrs.frame.height;
+    }
+  }
+  return result;
+}
+
+// ─── Opt B: Bulk frame read by key (ShadowNode hot path) ────────────────────
+
+BulkFrameResult LayoutCache::getFramesForKeys(const std::vector<std::string>& keys) const {
+  BulkFrameResult result;
+  result.frames.resize(keys.size() * 4, 0.0);
+  result.found.resize(keys.size(), false);
+  std::lock_guard<std::mutex> lock(_mutex);
+  for (size_t i = 0; i < keys.size(); ++i) {
+    auto it = _map.find(keys[i]);
+    if (it != _map.end()) {
+      result.found[i] = true;
+      result.frames[i * 4 + 0] = it->second.frame.x;
+      result.frames[i * 4 + 1] = it->second.frame.y;
+      result.frames[i * 4 + 2] = it->second.frame.width;
+      result.frames[i * 4 + 3] = it->second.frame.height;
+    }
   }
   return result;
 }
@@ -344,6 +446,21 @@ Size LayoutCache::getTotalContentSize() const {
     maxY = std::max(maxY, attrs.frame.y + attrs.frame.height);
   }
   return { maxX, maxY };
+}
+
+std::optional<std::string> LayoutCache::getKeyForIndexPath(int section, int item) const {
+  std::lock_guard<std::mutex> lock(_mutex);
+  const uint64_t ip = (uint64_t(uint32_t(section)) << 32) | uint32_t(item);
+  auto it = _indexPathToKey.find(ip);
+  if (it == _indexPathToKey.end()) return std::nullopt;
+  return it->second;
+}
+
+std::optional<std::string> LayoutCache::getHeaderKeyForSection(int section) const {
+  std::lock_guard<std::mutex> lock(_mutex);
+  auto it = _sectionHeaderKey.find(section);
+  if (it == _sectionHeaderKey.end()) return std::nullopt;
+  return it->second;
 }
 
 std::vector<double> LayoutCache::getSectionOffsets() const {
@@ -407,6 +524,147 @@ double LayoutCache::getVelocity() const {
 LayoutCache::ScrollSnapshot LayoutCache::getScrollOffsetAndVelocity() const {
   std::lock_guard<std::mutex> lock(_mutex);
   return {_scrollOffset, _currentVelocity};
+}
+
+// ─── Opt D: Combined queries (reduce mutex acquisitions in processScroll) ────
+
+LayoutCache::ScrollSnapshotV LayoutCache::getScrollSnapshotWithVersion() const {
+  std::lock_guard<std::mutex> lock(_mutex);
+  return {_scrollOffset, _currentVelocity, _version};
+}
+
+LayoutCache::DualRange LayoutCache::findDualRangeByPrimary(
+    double renderLo, double renderHi,
+    double visibleLo, double visibleHi,
+    bool horizontal) const {
+  std::lock_guard<std::mutex> lock(_mutex);
+
+  // Lazy-rebuild sorted index if dirty or axis changed (same as findRangeByPrimary).
+  if (_sortedDirty || _sortedHorizontal != horizontal) {
+    _sorted.clear();
+    _sorted.reserve(_insertionOrder.size());
+    for (const auto& key : _insertionOrder) {
+      auto it = _map.find(key);
+      if (it == _map.end()) continue;
+      const auto& a = it->second;
+      if (a.isDecoration) continue;
+      double pos  = horizontal ? a.frame.x : a.frame.y;
+      double size = horizontal ? a.frame.width : a.frame.height;
+      SortedEntry entry;
+      entry.pos = pos;
+      entry.size = size;
+      entry.key = key;
+      _sorted.push_back(entry);
+    }
+    std::sort(_sorted.begin(), _sorted.end(),
+              [](const SortedEntry& a, const SortedEntry& b) { return a.pos < b.pos; });
+    _sortedDirty = false;
+    _sortedHorizontal = horizontal;
+  }
+
+  DualRange result;
+  if (_sorted.empty()) return result;
+
+  // Helper lambda: binary-search for a PrimaryRange within [lo, hi].
+  auto searchRange = [&](double lo, double hi) -> PrimaryRange {
+    PrimaryRange pr;
+
+    // First entry whose (pos + size) > lo
+    int firstMatch = -1;
+    {
+      int left = 0, right = static_cast<int>(_sorted.size()) - 1;
+      while (left <= right) {
+        int mid = left + (right - left) / 2;
+        if (_sorted[mid].pos + _sorted[mid].size > lo) {
+          firstMatch = mid;
+          right = mid - 1;
+        } else {
+          left = mid + 1;
+        }
+      }
+    }
+    if (firstMatch < 0) return pr;
+
+    // Last entry whose pos < hi
+    int lastMatch = -1;
+    {
+      int left = 0, right = static_cast<int>(_sorted.size()) - 1;
+      while (left <= right) {
+        int mid = left + (right - left) / 2;
+        if (_sorted[mid].pos < hi) {
+          lastMatch = mid;
+          left = mid + 1;
+        } else {
+          right = mid - 1;
+        }
+      }
+    }
+    if (lastMatch < 0 || lastMatch < firstMatch) return pr;
+
+    // Scan for min/max flat indices in range.
+    int minFI = std::numeric_limits<int>::max();
+    int maxFI = std::numeric_limits<int>::min();
+    for (int i = firstMatch; i <= lastMatch; ++i) {
+      auto it = _map.find(_sorted[i].key);
+      if (it == _map.end()) continue;
+      int fi = it->second.flatIndex;
+      if (fi < 0) continue;
+      if (fi < minFI) minFI = fi;
+      if (fi > maxFI) maxFI = fi;
+    }
+    if (minFI > maxFI) return pr;
+
+    pr.firstIdx  = minFI;
+    pr.lastIdx   = maxFI;
+    pr.firstPos  = _sorted[firstMatch].pos;
+    pr.firstSize = _sorted[firstMatch].size;
+    pr.lastPos   = _sorted[lastMatch].pos;
+    pr.lastSize  = _sorted[lastMatch].size;
+    return pr;
+  };
+
+  result.render  = searchRange(renderLo, renderHi);
+  result.visible = searchRange(visibleLo, visibleHi);
+  return result;
+}
+
+LayoutCache::FramesWithVersion LayoutCache::getFramesForFlatRangeWithVersion(
+    int firstFlat, int lastFlat) const {
+  FramesWithVersion result;
+  if (firstFlat > lastFlat) {
+    result.version = 0;
+    return result;
+  }
+  const int count = lastFlat - firstFlat + 1;
+  result.frames.resize(static_cast<size_t>(count) * 4, 0.0);
+  std::lock_guard<std::mutex> lock(_mutex);
+  result.version = _version;
+
+  if (!_flatIndexToKey.empty()) {
+    for (int fi = firstFlat; fi <= lastFlat; ++fi) {
+      if (fi < 0 || fi >= static_cast<int>(_flatIndexToKey.size())) continue;
+      const auto& key = _flatIndexToKey[static_cast<size_t>(fi)];
+      if (key.empty()) continue;
+      auto it = _map.find(key);
+      if (it == _map.end()) continue;
+      size_t off = static_cast<size_t>(fi - firstFlat) * 4;
+      result.frames[off + 0] = it->second.frame.x;
+      result.frames[off + 1] = it->second.frame.y;
+      result.frames[off + 2] = it->second.frame.width;
+      result.frames[off + 3] = it->second.frame.height;
+    }
+  } else {
+    for (const auto& [key, attrs] : _map) {
+      int fi = attrs.flatIndex;
+      if (fi < firstFlat || fi > lastFlat) continue;
+      size_t off = static_cast<size_t>(fi - firstFlat) * 4;
+      result.frames[off + 0] = attrs.frame.x;
+      result.frames[off + 1] = attrs.frame.y;
+      result.frames[off + 2] = attrs.frame.width;
+      result.frames[off + 3] = attrs.frame.height;
+    }
+  }
+  return result;
 }
 
 // ─── MVC correction ──────────────────────────────────────────────────────────
@@ -541,6 +799,55 @@ double LayoutCache::consumePendingScrollTarget() {
   _pendingScrollTarget  = 0;
   _hasPendingCorrection = false;
   return target;
+}
+
+// ─── H-section MVC ───────────────────────────────────────────────────────────
+
+void LayoutCache::snapshotHAnchor(int sectionIndex, double scrollX) {
+  std::lock_guard<std::mutex> lock(_mutex);
+  std::string bestKey;
+  double bestX = std::numeric_limits<double>::max();
+  bool found = false;
+  for (const auto& [key, attrs] : _map) {
+    if (attrs.section != sectionIndex) continue;
+    if (attrs.isSupplementary || attrs.isDecoration) continue;
+    if (attrs.frame.x >= scrollX && attrs.frame.x < bestX) {
+      bestKey = key; bestX = attrs.frame.x; found = true;
+    }
+  }
+  if (found) {
+    _hAnchorKeys[sectionIndex] = bestKey;
+    _hAnchorXs[sectionIndex]   = bestX;
+    RNCV_MVC_TRACE("snapshotHAnchor: s=%d key=%s x=%.1f scrollX=%.1f",
+                   sectionIndex, bestKey.c_str(), bestX, scrollX);
+  } else {
+    _hAnchorKeys.erase(sectionIndex);
+    _hAnchorXs.erase(sectionIndex);
+    RNCV_MVC_TRACE("snapshotHAnchor: s=%d NOT FOUND scrollX=%.1f", sectionIndex, scrollX);
+  }
+}
+
+double LayoutCache::computeHCorrection(int sectionIndex) {
+  std::lock_guard<std::mutex> lock(_mutex);
+  auto kit = _hAnchorKeys.find(sectionIndex);
+  if (kit == _hAnchorKeys.end()) return 0.0;
+
+  const std::string anchorKey = kit->second;
+  double oldX = 0.0;
+  auto xit = _hAnchorXs.find(sectionIndex);
+  if (xit != _hAnchorXs.end()) oldX = xit->second;
+
+  _hAnchorKeys.erase(sectionIndex);
+  _hAnchorXs.erase(sectionIndex);
+
+  auto it = _map.find(anchorKey);
+  if (it == _map.end()) return 0.0;
+
+  const double newX = it->second.frame.x;
+  const double correction = newX - oldX;
+  RNCV_MVC_TRACE("computeHCorrection: s=%d key=%s oldX=%.1f newX=%.1f correction=%.1f",
+                  sectionIndex, anchorKey.c_str(), oldX, newX, correction);
+  return correction;
 }
 
 // ─── JSI conversion helpers ───────────────────────────────────────────────────
@@ -724,6 +1031,28 @@ void LayoutCache::installJSIBindings(Runtime& rt, Object& target) {
       [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
         if (count < 1 || !args[0].isObject()) return Value::undefined();
         setAttributes(attrsFromJSI(rt, args[0].getObject(rt)));
+        return Value::undefined();
+      }));
+
+  // setAttributesBatch(attrsObject[]) → undefined
+  // Applies all updates under a single mutex acquisition; saves N-1 JSI
+  // round-trips for scroll-driven layouts that update many items per tick.
+  target.setProperty(rt, "setAttributesBatch",
+    Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "setAttributesBatch"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 1 || !args[0].isObject()) return Value::undefined();
+        auto arr = args[0].getObject(rt).asArray(rt);
+        const size_t n = arr.size(rt);
+        std::vector<LayoutAttributes> batch;
+        batch.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+          auto v = arr.getValueAtIndex(rt, i);
+          if (v.isObject()) {
+            batch.push_back(attrsFromJSI(rt, v.getObject(rt)));
+          }
+        }
+        setAttributesBatch(batch);
         return Value::undefined();
       }));
 
@@ -930,6 +1259,18 @@ void LayoutCache::installJSIBindings(Runtime& rt, Object& target) {
       PropNameID::forAscii(rt, "consumePendingCorrection"), 0,
       [this](Runtime& rt, const Value&, const Value*, size_t) -> Value {
         return Value(consumePendingCorrection());
+      }));
+
+  // snapshotHAnchor(sectionIndex, scrollX) → undefined
+  target.setProperty(rt, "snapshotHAnchor",
+    Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "snapshotHAnchor"), 2,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        if (count >= 2) {
+          snapshotHAnchor(static_cast<int>(args[0].getNumber()),
+                          args[1].getNumber());
+        }
+        return Value::undefined();
       }));
 }
 
