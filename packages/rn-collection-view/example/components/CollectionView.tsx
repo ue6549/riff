@@ -2201,6 +2201,9 @@ export function Riff<T = unknown>({
     ((s: number) => boolean) | undefined)?.bind(effectiveLayout);
   const hSectionInfoFn = ((effectiveLayout as any).hSectionInfo as
     ((s: number) => HSectionMeta | null) | undefined)?.bind(effectiveLayout);
+  // L-1: per-section layout type. H-list cells must not have width locked so
+  // Yoga can measure intrinsic width freely. Only available on CompositionalLayout.
+  const hSectionTypes = (effectiveLayout as any).sectionTypes as string[] | undefined;
   const handleHScroll = useCallback((event: any) => {
     // onHScroll fires from RNCollectionSubContainer (H-2) — adapted via
     // handleHSubScroll defined after this callback. Previously fired from
@@ -2570,18 +2573,26 @@ export function Riff<T = unknown>({
     const cellSectionIndex = fiDesc?.sectionIndex ?? 0;
     const isHSectionCell = !measureOnly && !!isHSectionFn?.(cellSectionIndex);
 
-    // Cells in horizontal layouts are always Yoga-measured (no height constraint).
-    // Only supplementaries get their cross-axis height locked (engine computes full cross extent).
-    // Position (left, top) is set natively by ShadowNode applyPositionsFromState — not needed in JS.
+    // L-1: H-list cells (compositional or standalone) must NOT have width locked.
+    // Yoga measures intrinsic content width freely; ListLayout::applyMeasurements
+    // reads it back as a Width delta and cascades X positions via aggregateShift.
+    // H-grid/masonry/flow keep the width hint for now (L-2/L-3 will drop it).
+    // V cells (list/grid/masonry V) keep width = container/column width — fixed, not free.
+    const isHListCell =
+      (isHorizLayout && !isHSectionCell)                             // standalone H-list
+      || (isHSectionCell && hSectionTypes?.[cellSectionIndex] === 'list'); // compositional H-list
+
     const containerStyle: StyleProp<ViewStyle> = isHSectionCell ? [
       {
-        // H-2: no position:absolute. Frame applied natively by the
-        // CollectionSubContainerShadowNode.
-        ...(viewportWidth > 0 && cellWidth > 0 ? { width: cellWidth } : {}),
+        // H-2: no position:absolute. Frame applied natively by ShadowNode.
+        // H-list (L-1): omit width — Yoga measures intrinsic width.
+        // H-grid/masonry: keep width hint from cache until L-2/L-3.
+        ...(!isHListCell && viewportWidth > 0 && cellWidth > 0 ? { width: cellWidth } : {}),
       },
     ] : [
       {
-        ...(viewportWidth > 0 ? { width: cellWidth } : {}),
+        // V layouts: keep width = container width. Standalone H-list (L-1): omit width.
+        ...(viewportWidth > 0 && !isHListCell ? { width: cellWidth } : {}),
         ...(isHorizSupplementary && attrHeight > 0 ? { height: attrHeight } : {}),
       },
     ];
