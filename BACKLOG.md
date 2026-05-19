@@ -10,15 +10,23 @@
 
 Fix before building new features. Some may be subsumed by B1 items — tag during triage.
 
-### B0.1 S1 List H — section height much larger than max item height
+### B0.1 S1 List H — section height much larger than max item height ✅ FIXED
 
-Section renders taller than its tallest item. Scrolling 2+ viewports causes it to resize to the correct height. Likely the known H-list cross-axis height bounce (layout starts from `estimatedCrossAxisHeight`, grows as items measure, then settles). May be subsumed by **L-1** (drop locked style.width for H list cells).
+**Fixed:** `finalizeHSection` + `refreshHSectionWrapperHeight` now cap Placeholder item heights
+at `maxMeasuredH` (tallest Measured cell in section). Placeholder items at `estimatedCrossAxisHeight`
+no longer inflate the wrapper past actual content height. Committed in `2729016`.
+Also subsumed by **L-1** (B1.2a): without a locked style.width, H-list cells measure
+their natural height, so Placeholders converge to actual height sooner.
 
-### B0.2 Resize and Update mutation buttons not working
+### B0.2 Resize and Update mutation buttons not working ✅ FIXED
 
-Pressing "Resize" or "Update" in the toolbar has no visible effect. `resizeFirst` toggles `item.expanded` (which adds an expanded content block to the cell). `updateFirst` appends ` *` to the label and rotates the color. The state mutation fires (`setSectionDatas`), but the rendered cells may not re-render due to memo/slot caching or `extraData` reference not propagating correctly to cell re-render.
-
-**Investigation:** Check whether `extraData` change triggers `renderGen` bump. Check if `React.memo` on cell content blocks the re-render when item reference changes within the same slot.
+**Fixed:** Two-part fix in `2729016`:
+1. `SlotManager.sync()` now accepts `renderGen` and includes it in the short-circuit check.
+   In-place mutations (Resize, Update) bump `renderGen` via `extraData` change, forcing a
+   Phase 3 run that refreshes `slot.item` references so Yoga re-measures new content.
+2. `CollectionSubContainerShadowNode::shouldSkipCorrection` now hashes per-child Yoga frame
+   (all 4 fields, 2-decimal precision) in addition to child tags. Resize changes Yoga
+   dimensions without changing tags/count/cacheVersion — old hash skipped correction.
 
 ### B0.3 S4 Masonry V — all items same height (looks like a grid)
 
@@ -26,9 +34,15 @@ Root cause is in CompositionalLab.tsx line 305: `heightForItem: () => 100` — h
 
 ### B0.4 S3 Grid H — multiple issues
 
-1. **Item heights much smaller than row heights.** Grid H has `rowHeight: 80` but items render smaller. Cells may not be filling the row height.
-2. **Vertical scroll indicator / vertical scrolling.** After insert/delete mutations, the section's sub-container shows a vertical scroll indicator and allows vertical scrolling — should be horizontal only. Likely the content size exceeds the container cross-axis height after mutations.
-3. **Delayed resize.** Pressing resize doesn't take effect until the list is scrolled slightly. Suggests the mutation fires but the Fabric commit / layout invalidation is deferred until the next scroll event triggers a re-layout.
+1. **Item heights much smaller than row heights.** ✅ FIXED — `GridLayout::computeSectionFromCache`
+   H-path now tracks `hasMeasuredCross[]` and only uses actually-measured cross heights to derive
+   `itemCrossSize`. Placeholder items no longer keep the estimate when measured data is available.
+   Committed in `2729016`.
+2. **Vertical scroll indicator / vertical scrolling.** After insert/delete mutations, the section's
+   sub-container shows a vertical scroll indicator and allows vertical scrolling. Likely the content
+   size exceeds the container cross-axis height after mutations. **Still open.**
+3. **Delayed resize.** Fixed by B0.2 Yoga-hash fix — shouldSkipCorrection no longer skips on
+   content-only changes. ✅ FIXED.
 
 ### B0.5 S6 "Control" section — clarify purpose
 
@@ -50,7 +64,7 @@ After Yoga first measures a cell intrinsically, the layout engine writes the mea
 
 | Layout | Problem | Fix |
 |---|---|---|
-| H list (L-1) | `style.width` locked from `estimatedItemHeight` | Drop the style. Engine reads Yoga's intrinsic width, cascades cumulative X positions. |
+| H list (L-1) | `style.width` locked from `estimatedItemHeight` | ✅ DONE (`d9164eb`) — `isHListCell` guard removes width for standalone + compositional H-list. |
 | H grid (L-2) | `style.width` locked from `rowHeight` | Engine derives column width from `max(measured width)` per column. |
 | V flow (L-3) | `style.width` locked from `sizeForItem.width` | Cells render naked. Engine packs into rows from measured widths. |
 
