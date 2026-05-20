@@ -86,6 +86,10 @@ using namespace facebook::react;
   // Scroll axis — when YES, UIScrollView scrolls horizontally.
   BOOL _horizontal;
 
+  // Last seen layoutRevision — used to fire onScroll when positions change
+  // even if content size is unchanged (e.g. flow reflow after width measurement).
+  int32_t _lastLayoutRevision;
+
 }
 
 // ── Fabric registration ─────────────────────────────────────────────────────
@@ -111,6 +115,7 @@ using namespace facebook::react;
     _applyingCorrection = NO;
     _pendingMVCCorrection = 0;
     _pendingMVCScrollTarget = 0;
+    _lastLayoutRevision = -1;
 
     // Create internal UIScrollView.
     _scrollView = [[UIScrollView alloc] initWithFrame:self.bounds];
@@ -288,10 +293,15 @@ using namespace facebook::react;
   // Resize content view to match.
   _contentView.frame = CGRectMake(0, 0, contentSize.width, contentSize.height);
 
-  // Fire onScroll when content size changes so JS can synthesize onContentSizeChange.
+  // Track revision to detect position-only changes (e.g. flow reflow after
+  // width measurement where total height happens to stay the same).
+  BOOL revisionChanged = (data.layoutRevision != _lastLayoutRevision);
+  _lastLayoutRevision = data.layoutRevision;
+
+  // Fire onScroll when content size changes (JS synthesizes onContentSizeChange)
+  // OR when layout revision changes (positions shifted → render range must refresh).
   // topContentSizeChange is not a registered Fabric event, so we piggyback on onScroll.
-  // CollectionView.tsx detects the size change and calls scrollViewProps.onContentSizeChange.
-  if (contentSizeChanged && _eventEmitter) {
+  if ((contentSizeChanged || revisionChanged) && _eventEmitter) {
     auto emitter = std::static_pointer_cast<
         const RNCollectionViewContainerEventEmitter>(_eventEmitter);
     RNCollectionViewContainerEventEmitter::OnScroll event;

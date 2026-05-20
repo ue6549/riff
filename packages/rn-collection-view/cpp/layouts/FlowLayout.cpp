@@ -82,7 +82,7 @@ double FlowLayout::computeSection(const FlowLayoutParams& p, int sectionIndex, d
   double primaryCursor = itemsStart;
 
   // Store frames before writing to cache (need to finalize row/col height/width).
-  struct ItemFrame { double primary, cross, primarySize, crossSize; };
+  struct ItemFrame { double primary, cross, primarySize, crossSize, rowExtent = 0; };
   std::vector<ItemFrame> frames(p.itemCount);
 
   // Track max PRIMARY-axis size per line (height for V, width for H) — used to advance.
@@ -92,8 +92,8 @@ double FlowLayout::computeSection(const FlowLayoutParams& p, int sectionIndex, d
   int lineCount = 0;
 
   auto finalizeLineAndAdvance = [&](int from, int to) {
-    // Items keep their natural crossSize — do NOT normalize to any max.
-    (void)from; (void)to; // no-op for normalization
+    // Back-fill rowExtent so findRangeByPrimary treats the whole row uniformly.
+    for (int k = from; k < to; ++k) frames[k].rowExtent = lineMaxPrimary;
     primaryCursor += lineMaxPrimary + lineGap;
     lineMaxPrimary = 0.0;
     lineStart = to;
@@ -155,8 +155,9 @@ double FlowLayout::computeSection(const FlowLayoutParams& p, int sectionIndex, d
     crossCursor += clampedCross;
   }
 
-  // Finalize last row/column.
+  // Finalize last row/column — back-fill rowExtent for remaining items.
   if (p.itemCount > 0) {
+    for (int k = lineStart; k < p.itemCount; ++k) frames[k].rowExtent = lineMaxPrimary;
     primaryCursor += lineMaxPrimary;
   }
 
@@ -174,8 +175,9 @@ double FlowLayout::computeSection(const FlowLayoutParams& p, int sectionIndex, d
     } else {
       attrs.frame = { frames[i].cross, frames[i].primary, frames[i].crossSize, frames[i].primarySize };
     }
-    attrs.zIndex      = 0;
-    attrs.sizingState = SizingState::Measured;
+    attrs.zIndex         = 0;
+    attrs.sizingState    = SizingState::Measured;
+    attrs.rowExtentHeight = H ? 0.0 : frames[i].rowExtent;
     _cache->setAttributes(attrs);
   }
 
@@ -274,7 +276,7 @@ double FlowLayout::computeSectionFromCache(const FlowLayoutParams& p, int sectio
   double crossCursor   = crossStart;
   double primaryCursor = itemsStart;
 
-  struct ItemFrame { double primary, cross, primarySize, crossSize; };
+  struct ItemFrame { double primary, cross, primarySize, crossSize, rowExtent = 0; };
   std::vector<ItemFrame> frames(p.itemCount);
 
   // Track max PRIMARY-axis size per line (height for V, width for H) — used to advance.
@@ -284,7 +286,7 @@ double FlowLayout::computeSectionFromCache(const FlowLayoutParams& p, int sectio
   int lineCount  = 0;
 
   auto finalizeAndAdvance = [&](int from, int to) {
-    (void)from; (void)to; // items keep natural crossSize — no normalization
+    for (int k = from; k < to; ++k) frames[k].rowExtent = lineMaxPrimary;
     primaryCursor += lineMaxPrimary + lineGap;
     lineMaxPrimary = 0.0;
     lineStart = to;
@@ -333,6 +335,7 @@ double FlowLayout::computeSectionFromCache(const FlowLayoutParams& p, int sectio
   }
 
   if (p.itemCount > 0) {
+    for (int k = lineStart; k < p.itemCount; ++k) frames[k].rowExtent = lineMaxPrimary;
     primaryCursor += lineMaxPrimary;
   }
 
@@ -358,6 +361,7 @@ double FlowLayout::computeSectionFromCache(const FlowLayoutParams& p, int sectio
     } else {
       updated.frame = { frames[i].cross, frames[i].primary, frames[i].crossSize, frames[i].primarySize };
     }
+    updated.rowExtentHeight = H ? 0.0 : frames[i].rowExtent;
     _cache->setAttributes(updated);
   }
 
