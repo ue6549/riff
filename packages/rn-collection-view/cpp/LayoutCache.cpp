@@ -737,10 +737,9 @@ void LayoutCache::snapshotAnchorIfNeeded() {
     RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP hasAnchor=YES");
     return;   // JS already snapshotted before prepare()
   }
-  if (!_mvcEnabled) {
-    RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP mvcEnabled=NO");
-    return;   // MVC disabled — don't auto-snapshot
-  }
+  // Size-change MVC is always active — Yoga measurement settling should never
+  // cause visible scroll jumps regardless of maintainVisibleContentPosition.
+  // _mvcEnabled only gates the JS-initiated mutation-MVC path (snapshotAnchor()).
   if (_programmaticScrollActive) {
     RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP programmaticScrollActive=YES (prevents re-arm during animated scrollTo)");
     return;   // animated scrollTo in flight — re-arming would cancel the animation

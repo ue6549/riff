@@ -2603,37 +2603,43 @@ export function Riff<T = unknown>({
     const cellSectionIndex = fiDesc?.sectionIndex ?? 0;
     const isHSectionCell = !measureOnly && !!isHSectionFn?.(cellSectionIndex);
 
-    // L-1/L-2: H-list and H-grid scroll items must NOT have width locked.
-    // Yoga measures intrinsic content width freely; applyMeasurements reads it
-    // back as a Width delta and cascades X positions (H-list: aggregateShift,
-    // H-grid: computeSectionFromCache with per-column max-width).
-    // Supplementaries (header/footer) are excluded — they span the full visible
-    // section width and keep their explicit cellWidth.
-    // H-masonry/flow keep the width hint for now (L-3 will drop it).
-    // V cells (list/grid/masonry/flow V) keep width = container/column width.
+    // L-1/L-2/L-3: cells that should NOT have width locked so Yoga measures
+    // intrinsic content width freely. applyMeasurements reads it back as a
+    // Width delta and reflows positions.
+    //   L-1: standalone H-list + compositional H-list scroll items
+    //   L-2: standalone H-grid + compositional H-grid scroll items
+    //   L-3: standalone V-flow scroll items — widths drive bin-packing row
+    //        assignment; FlowLayout::applyMeasurements does a full reflow.
+    // Supplementaries (header/footer) are excluded in all cases.
+    // H-masonry/flow and V-list/grid/masonry keep width = container/column width.
     const isScrollItem = fiDesc?._kind !== 'header' && fiDesc?._kind !== 'footer';
+    // L-3: standalone V-flow cell (not in an H-section sub-container).
+    const isVFlowCell = !isHorizLayout && effectiveLayout.type === 'flow' && !isHSectionCell && isScrollItem;
     const isHFreeWidthCell =
-      (isHorizLayout && !isHSectionCell && isScrollItem)                            // standalone H-list/grid items
+      (isHorizLayout && !isHSectionCell && isScrollItem)                            // standalone H-list/grid items (L-1/L-2)
       || (isHSectionCell && isScrollItem && (
            hSectionTypes?.[cellSectionIndex] === 'list' ||
            hSectionTypes?.[cellSectionIndex] === 'grid'
-         )); // compositional H-list and H-grid items
+         ))                                                                          // compositional H-list and H-grid items (L-1/L-2)
+      || isVFlowCell;                                                               // standalone V-flow items (L-3)
 
     const containerStyle: StyleProp<ViewStyle> = isHSectionCell ? [
       {
         // H-2: no position:absolute. Frame applied natively by ShadowNode.
         // L-1/L-2: omit width + alignSelf:flex-start so Yoga measures intrinsic
         // content width (not stretched to container/viewport width).
-        // H-masonry/flow: keep width hint from cache until L-3.
+        // H-masonry/flow: keep width hint from cache.
         ...(!isHFreeWidthCell && viewportWidth > 0 && cellWidth > 0 ? { width: cellWidth } : {}),
         ...(isHFreeWidthCell ? { alignSelf: 'flex-start' as const } : {}),
       },
     ] : [
       {
         // V layouts: keep width = container width. Standalone H-list/grid (L-1/L-2): omit width.
+        // L-3 V-flow: omit width, cap at viewport so content can't overflow.
         ...(viewportWidth > 0 && !isHFreeWidthCell ? { width: cellWidth } : {}),
         ...(isHorizSupplementary && attrHeight > 0 ? { height: attrHeight } : {}),
         ...(isHFreeWidthCell ? { alignSelf: 'flex-start' as const } : {}),
+        ...(isVFlowCell && viewportWidth > 0 ? { maxWidth: viewportWidth } : {}),
       },
     ];
 

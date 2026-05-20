@@ -79,13 +79,13 @@ After Yoga first measures a cell intrinsically, the layout engine writes the mea
 
 **Effort:** ~2d
 
-### B1.2 L-1/L-2/L-3: Layout intent violations — let Yoga measure what it should
+### B1.2 L-1/L-2/L-3: Layout intent violations — let Yoga measure what it should ✅ FIXED
 
 | Layout | Problem | Fix |
 |---|---|---|
 | H list (L-1) | `style.width` locked from `estimatedItemHeight` | ✅ DONE (`d9164eb`) — `isHListCell` guard removes width for standalone + compositional H-list. |
 | H grid (L-2) | `style.width` locked from `rowHeight` | ✅ DONE — `isHFreeWidthCell` extended to cover compositional H-grid cells. GridLayout's `applyMeasurements` already cascades via `computeSectionFromCache` using per-column max measured width. No C++ changes needed. |
-| V flow (L-3) | `style.width` locked from `sizeForItem.width` | Cells render naked. Engine packs into rows from measured widths. |
+| V flow (L-3) | `style.width` locked from `sizeForItem.width` | ✅ DONE — `isVFlowCell` added to `isHFreeWidthCell` condition. Standalone V-flow cells get `alignSelf:flex-start` + `maxWidth:viewportWidth`. `FlowLayout::applyMeasurements` already handles `ContentDimension::Both` (Width + Height deltas) and does a full `computeSectionFromCache` reflow. |
 
 **Subsumes:** ethereal #3 (H-list cross-axis height bounce), ethereal #4 (H-list S[0] header half height). May also fix B0.1.
 
@@ -142,24 +142,21 @@ for compositional H sections this is in `CollectionSubContainerShadowNode`.
 
 **Effort:** ~0.5d
 
-### B1.7 First-pass scroll correctness — primary-axis MVC on Width delta cascade
+### B1.7 First-pass scroll correctness — primary-axis MVC on Width delta cascade ✅ FIXED
 
-When a cell enters the viewport for the first time and its Width delta fires, the cascade shifts
-all subsequent items' X positions. If the user is already scrolled partway through the list, this
-cascade shifts the content under them, causing a visible jump — analogous to the V-scroll MVC
-problem on insert.
+**Fixed:** Removed `!_mvcEnabled` guard from `LayoutCache::snapshotAnchorIfNeeded()`. The
+infrastructure (`snapshotAnchorIfNeeded` called before every `applyMeasurements` in ShadowNode
+Phase 3) was already in place. The guard prevented size-change MVC from firing unless the
+consumer explicitly set `maintainVisibleContentPosition={true}`. Size-change MVC is now always
+active — Yoga measurement settling should never cause visible scroll jumps. Mutation MVC
+(`snapshotAnchor()` from JS `prepare()`) remains gated on `maintainVisibleContentPosition`.
 
-This is the primary-axis equivalent of V-MVC: after a Width delta cascade, the scroll offset
-needs to be corrected by the sum of width changes for all items before the current viewport
-leading edge. "Correct scroll even on first time when cells get measured."
-
-**Relationship to B1.6:** B1.6 fixes the content size (you can reach the end). B1.7 fixes the
-viewport position (no jump during first-pass measurement). Both are needed for a stable first-
-scroll experience. B1.1 reduces severity — once measured sizes are frozen as explicit Yoga
-dimensions, deltas only fire once and the cascade is a one-time event rather than recurring.
-
-**Effort:** ~1d (needs primary-axis anchor snapshot + correction, similar to H-MVC but for the
-main scroll axis on Width delta, not insert.)
+**How it works:** Before `applyMeasurements` cascades X/Y positions (H-list: linear shift,
+V-flow: full reflow via `computeSectionFromCache`), `snapshotAnchorIfNeeded` takes a snapshot
+of the item at or just below `scrollOffset`. After the cascade, `computeCorrection` reads the
+item's new position and applies `newPos - oldPos` to the scroll offset. Works for both H-list
+(primary=X, Width deltas shift X) and V-flow (primary=Y, Width deltas cause row reassignment
+→ Y shifts). `_horizontal` flag already routes the anchor/correction to the right axis.
 
 ### B1.5 Sub-container owns its own LayoutCache slice
 
