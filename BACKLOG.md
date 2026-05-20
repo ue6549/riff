@@ -84,7 +84,7 @@ After Yoga first measures a cell intrinsically, the layout engine writes the mea
 | Layout | Problem | Fix |
 |---|---|---|
 | H list (L-1) | `style.width` locked from `estimatedItemHeight` | ✅ DONE (`d9164eb`) — `isHListCell` guard removes width for standalone + compositional H-list. |
-| H grid (L-2) | `style.width` locked from `rowHeight` | Engine derives column width from `max(measured width)` per column. |
+| H grid (L-2) | `style.width` locked from `rowHeight` | ✅ DONE — `isHFreeWidthCell` extended to cover compositional H-grid cells. GridLayout's `applyMeasurements` already cascades via `computeSectionFromCache` using per-column max measured width. No C++ changes needed. |
 | V flow (L-3) | `style.width` locked from `sizeForItem.width` | Cells render naked. Engine packs into rows from measured widths. |
 
 **Subsumes:** ethereal #3 (H-list cross-axis height bounce), ethereal #4 (H-list S[0] header half height). May also fix B0.1.
@@ -110,7 +110,12 @@ MVC in H sections is only well-defined for H-list (linearly ordered items — al
 
 **Effort:** ~0.5d
 
-### B1.6 H-list content size not updated after Width delta cascade
+### B1.6 H-list content size not updated after Width delta cascade ✅ FIXED
+
+**Already resolved.** `LayoutCache::getTotalContentSize()` iterates all entries in `_map`
+(not just mounted children), so after `applyMeasurements` cascades X positions for all H-list
+items the max extent is always correct. `correctChildPositionsIfNeeded` reads this into
+`correctedContentWidth_` → `updateStateIfNeeded` → `contentSize.width`.
 
 After B1.2a (free-width measurement), `applyMeasurements` correctly cascades all item X positions
 in the cache (including unmounted items outside the render window) when a Width delta fires.
@@ -172,13 +177,11 @@ Currently the shared main LayoutCache holds both V section items and H section i
 
 **Priority:** Do after B1.1 and B1.2. Prerequisite for properly resolving B1.3.
 
-### B1.4 Decouple measureAhead from isVariableHeight
+### B1.4 Decouple measureAhead from isVariableHeight ✅ FIXED
 
-`isVariableHeight` gates whether `measureAhead` is passed to `processScroll`. A list using `itemHeight` (fixed) with `measureAhead > 0` should still pre-measure. Three locations in CollectionView.tsx need `isVariableHeight && measureAhead > 0` → `measureAhead > 0`.
-
-**Source:** PERF-PLAN.md "Correctness Fixes > Fix 1"
-
-**Effort:** trivial
+**Already resolved.** `measureAhead` is passed directly to `processScroll` without any
+`isVariableHeight` gate — the coupling described in PERF-PLAN.md was removed during earlier
+refactoring. No remaining instances of `isVariableHeight && measureAhead` in CollectionView.tsx.
 
 ---
 

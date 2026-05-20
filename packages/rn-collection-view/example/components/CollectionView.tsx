@@ -2603,33 +2603,37 @@ export function Riff<T = unknown>({
     const cellSectionIndex = fiDesc?.sectionIndex ?? 0;
     const isHSectionCell = !measureOnly && !!isHSectionFn?.(cellSectionIndex);
 
-    // L-1: H-list scroll items (compositional or standalone) must NOT have width locked.
-    // Yoga measures intrinsic content width freely; ListLayout::applyMeasurements
-    // reads it back as a Width delta and cascades X positions via aggregateShift.
-    // Supplementaries (header/footer) are excluded — they span the full visible section
-    // width and keep their explicit cellWidth.
-    // H-grid/masonry/flow keep the width hint for now (L-2/L-3 will drop it).
-    // V cells (list/grid/masonry V) keep width = container/column width — fixed, not free.
+    // L-1/L-2: H-list and H-grid scroll items must NOT have width locked.
+    // Yoga measures intrinsic content width freely; applyMeasurements reads it
+    // back as a Width delta and cascades X positions (H-list: aggregateShift,
+    // H-grid: computeSectionFromCache with per-column max-width).
+    // Supplementaries (header/footer) are excluded — they span the full visible
+    // section width and keep their explicit cellWidth.
+    // H-masonry/flow keep the width hint for now (L-3 will drop it).
+    // V cells (list/grid/masonry/flow V) keep width = container/column width.
     const isScrollItem = fiDesc?._kind !== 'header' && fiDesc?._kind !== 'footer';
-    const isHListCell =
-      (isHorizLayout && !isHSectionCell && isScrollItem)                             // standalone H-list items
-      || (isHSectionCell && isScrollItem && hSectionTypes?.[cellSectionIndex] === 'list'); // compositional H-list items
+    const isHFreeWidthCell =
+      (isHorizLayout && !isHSectionCell && isScrollItem)                            // standalone H-list/grid items
+      || (isHSectionCell && isScrollItem && (
+           hSectionTypes?.[cellSectionIndex] === 'list' ||
+           hSectionTypes?.[cellSectionIndex] === 'grid'
+         )); // compositional H-list and H-grid items
 
     const containerStyle: StyleProp<ViewStyle> = isHSectionCell ? [
       {
         // H-2: no position:absolute. Frame applied natively by ShadowNode.
-        // H-list (L-1): omit width + alignSelf:flex-start so Yoga measures intrinsic
+        // L-1/L-2: omit width + alignSelf:flex-start so Yoga measures intrinsic
         // content width (not stretched to container/viewport width).
-        // H-grid/masonry: keep width hint from cache until L-2/L-3.
-        ...(!isHListCell && viewportWidth > 0 && cellWidth > 0 ? { width: cellWidth } : {}),
-        ...(isHListCell ? { alignSelf: 'flex-start' as const } : {}),
+        // H-masonry/flow: keep width hint from cache until L-3.
+        ...(!isHFreeWidthCell && viewportWidth > 0 && cellWidth > 0 ? { width: cellWidth } : {}),
+        ...(isHFreeWidthCell ? { alignSelf: 'flex-start' as const } : {}),
       },
     ] : [
       {
-        // V layouts: keep width = container width. Standalone H-list (L-1): omit width.
-        ...(viewportWidth > 0 && !isHListCell ? { width: cellWidth } : {}),
+        // V layouts: keep width = container width. Standalone H-list/grid (L-1/L-2): omit width.
+        ...(viewportWidth > 0 && !isHFreeWidthCell ? { width: cellWidth } : {}),
         ...(isHorizSupplementary && attrHeight > 0 ? { height: attrHeight } : {}),
-        ...(isHListCell ? { alignSelf: 'flex-start' as const } : {}),
+        ...(isHFreeWidthCell ? { alignSelf: 'flex-start' as const } : {}),
       },
     ];
 

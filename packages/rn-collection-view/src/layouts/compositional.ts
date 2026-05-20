@@ -387,7 +387,7 @@ function buildMasonrySectionParams(
   const itemHeights: number[] = new Array(sec.itemCount);
   for (let i = 0; i < sec.itemCount; i++) {
     const measured = measuredHeightForItem?.(i, sectionIndex);
-    itemHeights[i] = measured ?? d.heightForItem(i, sectionIndex, w);
+    itemHeights[i] = measured ?? (d.heightForItem ? d.heightForItem(i, sectionIndex, w) : (d.estimatedItemHeight ?? 44));
   }
 
   const keyPrefix = `masonry-${sectionIndex}-`;

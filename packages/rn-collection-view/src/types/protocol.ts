@@ -313,15 +313,19 @@ export interface ListLayoutDelegate {
 /**
  * Masonry layout — fixed columns, variable-height items, shortest-column placement.
  *
- * `columns` and `heightForItem` are MANDATORY — masonry can't work without them.
+ * `columns` is mandatory. Provide EITHER `heightForItem` (variable per-item heights)
+ * OR `estimatedItemHeight` (uniform estimate, Yoga measures actual heights).
  * Width is derived from container width and column count.
  */
 export interface MasonryLayoutDelegate {
   /** Number of columns, or a function of container width for responsive layouts. Mandatory. */
   columns: number | ((containerWidth: number) => number);
-  /** Per-item height callback. Mandatory. Called only for items in the windowed range.
-   *  `containerWidth` lets the consumer compute aspect-ratio heights. */
-  heightForItem: (index: number, section: number, containerWidth: number) => number;
+  /** Per-item height callback. Optional — provide for known heights or aspect-ratio content.
+   *  When omitted, `estimatedItemHeight` is used for initial lane assignment and Yoga
+   *  measures actual heights via applyMeasurements. */
+  heightForItem?: (index: number, section: number, containerWidth: number) => number;
+  /** Fallback height estimate used when `heightForItem` is not provided. Default: 44. */
+  estimatedItemHeight?: number;
 
   // ── Header/footer sizing ──
   headerHeight?: number;

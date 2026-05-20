@@ -2,7 +2,8 @@
  * Masonry Layout — fixed-column, variable-height, shortest-column placement.
  *
  * Backed by the C++ MasonryLayout engine via JSI.
- * `columns` and `heightForItem` are mandatory.
+ * `columns` is mandatory. Provide `heightForItem` for known heights, or `estimatedItemHeight`
+ * to let Yoga measure actual heights (default: 44).
  *
  * Multi-section support: each section gets its own header/footer/background/separators.
  * The C++ engine writes all LayoutAttributes to the shared LayoutCache.
@@ -86,7 +87,7 @@ class MasonryLayoutEngine implements CollectionViewLayout {
         itemHeights = new Array(sec.itemCount);
         for (let i = 0; i < sec.itemCount; i++) {
           const measured = context.measuredHeightForItem?.(i, sectionIndex);
-          itemHeights[i] = measured ?? d.heightForItem(i, sectionIndex, w);
+          itemHeights[i] = measured ?? (d.heightForItem ? d.heightForItem(i, sectionIndex, w) : (d.estimatedItemHeight ?? 44));
         }
       }
 
