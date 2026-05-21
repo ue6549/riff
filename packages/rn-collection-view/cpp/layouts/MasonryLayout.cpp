@@ -126,6 +126,18 @@ double MasonryLayout::computeSection(const MasonryLayoutParams& p,
   const double laneStart = primary;
   std::vector<double> lanePrimary(cols, laneStart);
 
+  // Row-group tracking for V-masonry render-range accuracy.
+  // Records which rank (generation) each item occupies in its lane so that
+  // items in the same visual rank can share rowGroupPos/rowExtentHeight.
+  const bool needsRowGroup = !H && cols > 1;
+  std::vector<LayoutAttributes> itemAttrs;
+  std::vector<int> itemRankInLane;
+  std::vector<int> laneRank(cols, 0);
+  if (needsRowGroup) {
+    itemAttrs.reserve(p.itemCount);
+    itemRankInLane.resize(p.itemCount, 0);
+  }
+
   for (int i = 0; i < p.itemCount; ++i) {
     // Find the lane with the minimum accumulated primary (shortest lane).
     int shortestLane = 0;
@@ -167,7 +179,37 @@ double MasonryLayout::computeSection(const MasonryLayoutParams& p,
     }
     _cache->setAttributes(attrs);
 
+    if (needsRowGroup) {
+      itemRankInLane[i] = laneRank[shortestLane]++;
+      itemAttrs.push_back(attrs);
+    }
+
     lanePrimary[shortestLane] += itemPrimary + p.rowSpacing;
+  }
+
+  // ── V-masonry row-group back-fill ─────────────────────────────────────────
+  // Compute per-rank bounds (min Y, max Y+H) and stamp each item with
+  // rowGroupPos + rowExtentHeight so the binary search in LayoutCache treats
+  // the whole rank as one unit — all items enter/exit the render range together.
+  if (needsRowGroup && !itemAttrs.empty()) {
+    int maxRank = 0;
+    for (int c = 0; c < cols; ++c) maxRank = std::max(maxRank, laneRank[c]);
+    std::vector<double> rankMinY(maxRank, std::numeric_limits<double>::max());
+    std::vector<double> rankMaxEnd(maxRank, 0.0);
+    for (int i = 0; i < p.itemCount; ++i) {
+      const int    rank = itemRankInLane[i];
+      const double y    = itemAttrs[i].frame.y;
+      const double h    = itemAttrs[i].frame.height;
+      if (y < rankMinY[rank])       rankMinY[rank]   = y;
+      if (y + h > rankMaxEnd[rank]) rankMaxEnd[rank] = y + h;
+    }
+    for (int i = 0; i < p.itemCount; ++i) {
+      const int rank = itemRankInLane[i];
+      if (rankMinY[rank] == std::numeric_limits<double>::max()) continue;
+      itemAttrs[i].rowGroupPos     = rankMinY[rank];
+      itemAttrs[i].rowExtentHeight = rankMaxEnd[rank] - rankMinY[rank];
+    }
+    _cache->setAttributesBatch(itemAttrs);
   }
 
   // Section content end: max over lanes, removing trailing rowSpacing.
@@ -347,6 +389,15 @@ double MasonryLayout::computeSectionFromCache(const MasonryLayoutParams& p,
   const double laneStart = primary;
   std::vector<double> lanePrimary(cols, laneStart);
 
+  const bool needsRowGroup = !H && cols > 1;
+  std::vector<LayoutAttributes> itemAttrs;
+  std::vector<int> itemRankInLane;
+  std::vector<int> laneRank(cols, 0);
+  if (needsRowGroup) {
+    itemAttrs.reserve(p.itemCount);
+    itemRankInLane.resize(p.itemCount, 0);
+  }
+
   for (int i = 0; i < p.itemCount; ++i) {
     const std::string key = (i < static_cast<int>(p.keys.size()))
         ? p.keys[i]
@@ -389,7 +440,34 @@ double MasonryLayout::computeSectionFromCache(const MasonryLayoutParams& p,
     }
     _cache->setAttributes(attrs);
 
+    if (needsRowGroup) {
+      itemRankInLane[i] = laneRank[shortestLane]++;
+      itemAttrs.push_back(attrs);
+    }
+
     lanePrimary[shortestLane] += itemPrimary + p.rowSpacing;
+  }
+
+  // ── V-masonry row-group back-fill ─────────────────────────────────────────
+  if (needsRowGroup && !itemAttrs.empty()) {
+    int maxRank = 0;
+    for (int c = 0; c < cols; ++c) maxRank = std::max(maxRank, laneRank[c]);
+    std::vector<double> rankMinY(maxRank, std::numeric_limits<double>::max());
+    std::vector<double> rankMaxEnd(maxRank, 0.0);
+    for (int i = 0; i < p.itemCount; ++i) {
+      const int    rank = itemRankInLane[i];
+      const double y    = itemAttrs[i].frame.y;
+      const double h    = itemAttrs[i].frame.height;
+      if (y < rankMinY[rank])       rankMinY[rank]   = y;
+      if (y + h > rankMaxEnd[rank]) rankMaxEnd[rank] = y + h;
+    }
+    for (int i = 0; i < p.itemCount; ++i) {
+      const int rank = itemRankInLane[i];
+      if (rankMinY[rank] == std::numeric_limits<double>::max()) continue;
+      itemAttrs[i].rowGroupPos     = rankMinY[rank];
+      itemAttrs[i].rowExtentHeight = rankMaxEnd[rank] - rankMinY[rank];
+    }
+    _cache->setAttributesBatch(itemAttrs);
   }
 
   // Section content end

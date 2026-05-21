@@ -73,6 +73,21 @@ struct LayoutAttributes {
   bool        isDecoration   = false;
   std::string decorationKind;           // "sectionBackground", "separator"
 
+  // ── Flow row extent (render-range accuracy) ──────────────────────────
+  // V-flow only: max primary-axis size of the row this item belongs to.
+  // findRangeByPrimary uses max(frame.height, rowExtentHeight) so shorter
+  // items in a multi-height row enter/exit the range with the tallest peer.
+  // 0 for all other layouts (safe: max(h, 0) == h).
+  double      rowExtentHeight = 0;
+
+  // ── Row group position (masonry render-range accuracy) ───────────────
+  // V-masonry: min primary-axis pos of the rank group this item belongs to.
+  // When >= 0, findRangeByPrimary uses rowGroupPos as pos and rowExtentHeight
+  // as size so all items in the same rank enter/exit the render range together,
+  // preventing partial-row pop-in when a new row scrolls into view.
+  // -1 (default) = use frame.y/x directly (all non-masonry layouts).
+  double      rowGroupPos = -1;
+
   // ── Escape hatch for layout-specific data ────────────────────────────
   // Arbitrary key-value pairs. No native release needed to add new data.
   // Use for layout-specific properties (parallax factor, snap alignment, etc.)

@@ -274,6 +274,17 @@ LayoutCache::PrimaryRange LayoutCache::findRangeByPrimary(
       if (a.isDecoration) continue;
       double pos  = horizontal ? a.frame.x : a.frame.y;
       double size = horizontal ? a.frame.width : a.frame.height;
+      if (!horizontal) {
+        if (a.rowGroupPos >= 0) {
+          // Masonry rank group: all items in the group share pos+size so they
+          // enter and exit the render range together — prevents partial-row pop-in.
+          pos  = a.rowGroupPos;
+          size = a.rowExtentHeight;
+        } else {
+          // V-flow: keep shorter row peers in range until tallest exits.
+          size = std::max(size, a.rowExtentHeight);
+        }
+      }
       SortedEntry entry;
       entry.pos = pos;
       entry.size = size;
@@ -550,6 +561,14 @@ LayoutCache::DualRange LayoutCache::findDualRangeByPrimary(
       if (a.isDecoration) continue;
       double pos  = horizontal ? a.frame.x : a.frame.y;
       double size = horizontal ? a.frame.width : a.frame.height;
+      if (!horizontal) {
+        if (a.rowGroupPos >= 0) {
+          pos  = a.rowGroupPos;
+          size = a.rowExtentHeight;
+        } else {
+          size = std::max(size, a.rowExtentHeight);
+        }
+      }
       SortedEntry entry;
       entry.pos = pos;
       entry.size = size;
@@ -737,10 +756,9 @@ void LayoutCache::snapshotAnchorIfNeeded() {
     RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP hasAnchor=YES");
     return;   // JS already snapshotted before prepare()
   }
-  if (!_mvcEnabled) {
-    RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP mvcEnabled=NO");
-    return;   // MVC disabled — don't auto-snapshot
-  }
+  // Size-change MVC is always active — Yoga measurement settling should never
+  // cause visible scroll jumps regardless of maintainVisibleContentPosition.
+  // _mvcEnabled only gates the JS-initiated mutation-MVC path (snapshotAnchor()).
   if (_programmaticScrollActive) {
     RNCV_MVC_TRACE("snapshotAnchorIfNeeded: SKIP programmaticScrollActive=YES (prevents re-arm during animated scrollTo)");
     return;   // animated scrollTo in flight — re-arming would cancel the animation

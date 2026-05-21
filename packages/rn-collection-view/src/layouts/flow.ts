@@ -58,6 +58,10 @@ class FlowLayoutEngine implements CollectionViewLayout {
   readonly horizontal: boolean;
   readonly delegate: FlowLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
+  // Cached from the last prepare() — max items packed into any single row (V) or
+  // column (H). Used by budgetColumns() so applyBudget allocates enough slots to
+  // never split a row at a budget boundary, preventing partial-row pop-in.
+  private _maxItemsPerRow = 1;
 
   constructor(delegate: FlowLayoutDelegate) {
     this.delegate = delegate;
@@ -75,6 +79,8 @@ class FlowLayoutEngine implements CollectionViewLayout {
     nativeMod.layoutCache.setHorizontal(H);
 
     let runningFlatBase = 0;
+    let globalMaxPerRow = 1;
+
     const sections = context.sections.map((sec, sectionIndex) => {
       const hasHeader = sec.supplementaryItems.some(s => s.kind === 'header');
       const hasFooter = sec.supplementaryItems.some(s => s.kind === 'footer');
@@ -90,6 +96,34 @@ class FlowLayoutEngine implements CollectionViewLayout {
         const measuredH = context.measuredHeightForItem?.(i, sectionIndex);
         itemWidths[i]  = size.width;
         itemHeights[i] = measuredH ?? size.height;
+      }
+
+      // Greedy row simulation — same packing logic as C++ computeSection.
+      // Runs in O(itemCount) using already-computed itemWidths; zero extra
+      // sizeForItem calls. Result: max items per row across this section.
+      if (!H) {
+        const crossInsetL = sec.insets?.left  ?? 0;
+        const crossInsetR = sec.insets?.right ?? 0;
+        const availCross  = w - crossInsetL - crossInsetR;
+        const itemGap     = d.itemSpacing ?? 0;
+        let crossCursor = crossInsetL;
+        let rowItems    = 0;
+        let secMax      = 1;
+        for (let i = 0; i < sec.itemCount; i++) {
+          const cw = Math.min(itemWidths[i]!, availCross);
+          const notFirst = crossCursor > crossInsetL + 0.01;
+          const needed = notFirst ? (crossCursor - crossInsetL) + itemGap + cw : cw;
+          if (needed > availCross + 0.01 && notFirst) {
+            if (rowItems > secMax) secMax = rowItems;
+            rowItems = 1;
+            crossCursor = crossInsetL + cw;
+          } else {
+            rowItems++;
+            crossCursor = notFirst ? crossCursor + itemGap + cw : crossInsetL + cw;
+          }
+        }
+        if (rowItems > secMax) secMax = rowItems;
+        if (secMax > globalMaxPerRow) globalMaxPerRow = secMax;
       }
 
       // Keys: prefer section.itemKeys for stable identity, else fallback prefix.
@@ -141,8 +175,15 @@ class FlowLayoutEngine implements CollectionViewLayout {
       };
     });
 
+    this._maxItemsPerRow = globalMaxPerRow;
     this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
     nativeMod.flowLayout.computeSections(sections);
+  }
+
+  budgetColumns(_viewportWidth: number): number {
+    // Return max items per row so applyBudget allocates enough slots to never
+    // split a row. For H-flow, items per column determines budget scaling.
+    return this._maxItemsPerRow;
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {

@@ -690,13 +690,17 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           // Apply budget.
           // Derive effective cols from actual layout data: how many items the
           // binary search / spatial query returned vs how many a single-column
-          // layout would have in the same pixel window. This is exact for all
-          // layout types (list=1, grid=N, flow=variable) without any estimation.
+          // layout would have in the same pixel window, then take the max with
+          // budgetCols so that flow/masonry layouts never trim below a full row.
+          // For flow: budgetCols = maxItemsPerRow (from budgetColumns()), ensuring
+          // budget covers the whole layout when totalItems < budget.
+          // For list (budgetCols=1): max(1, ...) — same as before.
           rncv::Range render  = { rFirst, rLast };
           rncv::Range visible = { vFirst, vLast };
           double renderRectSize = vpPrimary + abovePad + belowPad;
           double effectiveCols = (stride > 0.0 && renderRectSize > 0.0)
-            ? std::max(1.0, static_cast<double>(rLast - rFirst + 1) * stride / renderRectSize)
+            ? std::max(static_cast<double>(budgetCols),
+                       static_cast<double>(rLast - rFirst + 1) * stride / renderRectSize)
             : static_cast<double>(budgetCols);
           auto budgeted = rncv::WindowController::applyBudget(
             render, visible, mountedWindowSz, vpPrimary, stride, effectiveCols);
