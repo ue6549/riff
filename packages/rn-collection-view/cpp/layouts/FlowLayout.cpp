@@ -101,10 +101,21 @@ double FlowLayout::computeSection(const FlowLayoutParams& p, int sectionIndex, d
   };
 
   for (int i = 0; i < p.itemCount; ++i) {
+    // Compute key here (same formula as write loop below) to enable cache lookup.
+    const std::string key = (i < (int)p.keys.size()) ? p.keys[i]
+                          : (p.keyPrefix.empty() ? sPrefix + std::to_string(i) : p.keyPrefix + std::to_string(i));
+    const auto cached      = _cache->getAttributes(key);
+    const bool wasMeasured = cached && cached->sizingState == SizingState::Measured;
+
     const double itemCrossSize   = H ? (i < (int)p.itemHeights.size() ? p.itemHeights[i] : 44.0)
                                      : (i < (int)p.itemWidths.size()  ? p.itemWidths[i]  : 80.0);
     double itemPrimarySize = H ? (i < (int)p.itemWidths.size()  ? p.itemWidths[i]  : 80.0)
                                : (i < (int)p.itemHeights.size() ? p.itemHeights[i] : 44.0);
+    // Preserve Yoga-measured size to avoid feedback oscillation (same as Masonry fix).
+    if (wasMeasured) {
+      itemPrimarySize = H ? (cached->frame.width  > 0 ? cached->frame.width  : itemPrimarySize)
+                          : (cached->frame.height > 0 ? cached->frame.height : itemPrimarySize);
+    }
 
     // Clamp cross size to available cross extent.
     const double clampedCross = std::min(itemCrossSize, availCross);

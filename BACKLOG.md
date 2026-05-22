@@ -160,6 +160,33 @@ item's new position and applies `newPos - oldPos` to the scroll offset. Works fo
 (primary=X, Width deltas shift X) and V-flow (primary=Y, Width deltas cause row reassignment
 → Y shifts). `_horizontal` flag already routes the anchor/correction to the right axis.
 
+### B1.8 computeSection preserves Measured heights — break vLCV feedback loop ✅ FIXED
+
+**Fixed in `fix/compute-section-preserve-measured`:**
+
+`MasonryLayout::computeSection` and `FlowLayout::computeSection` previously unconditionally
+overwrote all item frames with JS-provided estimates (`p.itemHeights[i]`, `estimatedPrimary`)
+and set `sizingState = Placeholder` (Masonry) / `Measured` with wrong heights (Flow).
+
+This caused a feedback loop:
+1. `computeSection` writes estimate → `applyMeasurements` fires with Yoga's real size → frame
+   changed → LCV bump → JS `useLayoutEffect` → `computeSection` writes estimate again → repeat.
+2. HEALTH logs showed `leRun:vLCV` near 1:1 — every layout effect produced a version bump.
+3. User-visible: light scroll stutter on masonry/flow sections in CompositionalLab.
+
+**Fix:** Before writing an item, both layouts now look up the cache for an existing `Measured`
+entry. If found, the Yoga-measured size is reused as `itemPrimary` (primary-axis size). Because
+`LayoutCache::setAttributes` only bumps `_version` when the **frame changes** (x/y/w/h), writing
+back the same frame is a no-op for the version → no LCV notification → loop broken.
+
+For Masonry: `sizingState` is now `Measured` (not `Placeholder`) for warm items, so
+`applyMeasurements` skips them on the next Fabric cycle.
+For Flow: preserving the primary size in the first pass also stabilizes `lineMaxPrimary` and
+row positions for subsequent items.
+
+**Expected result:** `vLCV` drops from ~70 per scroll to ~initial measurement count (~cold mounts
+only). Stutter in masonry/flow sections eliminated.
+
 ### B1.5 Sub-container owns its own LayoutCache slice
 
 Currently the shared main LayoutCache holds both V section items and H section items (H items at section-local X coords). The sub-container ShadowNode reads the main cache filtered by section index.
