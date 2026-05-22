@@ -58,23 +58,11 @@ class LayoutEngine {
 public:
   virtual ~LayoutEngine() = default;
 
-  // ── computeSections contract (enforced by convention, not virtual signature) ──
+  // ── computeSections contract ──────────────────────────────────────────────
   //
-  // Each concrete engine exposes a type-specific computeSections(params) method
-  // that is called exclusively from its JSI binding lambda. The method MUST call
-  // _cache->clear() as its FIRST operation so the ShadowNode never sees a
-  // partially-written cache. Current implementations:
-  //
-  //   ListLayout::computeSections       — _cache->clear() at top ✓
-  //   GridLayout::computeSections       — _cache->clear() at top ✓
-  //   MasonryLayout::computeSections    — _cache->clear() at top ✓
-  //   FlowLayout::computeSections       — _cache->clear() at top ✓
-  //   CompositionalLayout::computeSections — _cache->clear() at top ✓
-  //
-  // This cannot be a pure virtual method because each engine has a different
-  // params type. The architectural fix (B4.8 in BACKLOG.md) is to move the
-  // clear into the JSI binding layer so computeSections() becomes a pure layout
-  // function and the invariant is structurally enforced.
+  // Each concrete engine exposes a type-specific computeSections(params) method.
+  // _cache->clear() is called by the JSI binding lambda BEFORE invoking
+  // computeSections(), so the method itself is a pure layout function.
   //
   // Internal per-section helpers (e.g. ListLayout::computeSectionFromCache,
   // called by CompositionalLayout) must NOT call _cache->clear() — they operate

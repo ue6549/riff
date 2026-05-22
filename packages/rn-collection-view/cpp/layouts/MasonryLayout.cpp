@@ -588,7 +588,6 @@ double MasonryLayout::computeSectionFromCache(const MasonryLayoutParams& p,
 // ─── computeSections ──────────────────────────────────────────────────────────
 
 void MasonryLayout::computeSections(const std::vector<MasonryLayoutParams>& sections) {
-  _cache->clear();
   if (sections.empty()) return;
 
   _horizontal     = sections[0].horizontal;
@@ -872,6 +871,7 @@ void MasonryLayout::installJSIBindings(Runtime& rt, Object& target) {
       [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
         if (count < 1 || !args[0].isObject()) return Value::undefined();
         auto arr = args[0].getObject(rt).asArray(rt);
+        _cache->clear();
         computeSections(sectionsFromJSI(rt, arr));
         return Value::undefined();
       }));

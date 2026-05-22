@@ -408,7 +408,6 @@ double CompositionalLayout::computeOneSectionFromCache(
 
 void CompositionalLayout::computeSections(
     const std::vector<CompositionalSectionInfo>& sections) {
-  _cache->clear();
   _sectionInfos = sections;
   _sectionStartPrimaries.resize(sections.size(), 0.0);
 
@@ -580,6 +579,7 @@ void CompositionalLayout::installJSIBindings(Runtime& rt, Object& target) {
       [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
         if (count < 1 || !args[0].isObject()) return Value::undefined();
         auto arr = args[0].getObject(rt).asArray(rt);
+        _cache->clear();
         computeSections(sectionsFromJSI(rt, arr));
         return Value::undefined();
       }));

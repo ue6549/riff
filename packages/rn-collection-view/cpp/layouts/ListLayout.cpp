@@ -827,7 +827,6 @@ double ListLayout::computeSection(const ListLayoutParams& p,
 void ListLayout::computeSections(const std::vector<ListLayoutParams>& sections) {
   _horizontal = !sections.empty() && sections[0].horizontal;
   _viewportHeight = !sections.empty() ? sections[0].viewportHeight : 0.0;
-  _cache->clear();
   _maxSectionCrossHeight.clear();
   double primary = 0.0;
   RNCV_LIST_LOG("computeSections begin sections=%zu horizontal=%d", sections.size(), (int)_horizontal);
@@ -1139,6 +1138,7 @@ void ListLayout::installJSIBindings(Runtime& rt, Object& target) {
       [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
         if (count < 1 || !args[0].isObject()) return Value::undefined();
         auto arr = args[0].getObject(rt).asArray(rt);
+        _cache->clear();
         computeSections(sectionsFromJSI(rt, arr));
         return Value::undefined();
       }));

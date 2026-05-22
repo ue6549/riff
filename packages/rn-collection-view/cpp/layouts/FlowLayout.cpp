@@ -466,7 +466,6 @@ double FlowLayout::computeSectionFromCache(const FlowLayoutParams& p, int sectio
 // ─── computeSections ─────────────────────────────────────────────────────────
 
 void FlowLayout::computeSections(const std::vector<FlowLayoutParams>& sections) {
-  _cache->clear();
   _horizontal = sections.empty() ? false : sections[0].horizontal;
   _sectionParams = sections;
 
@@ -684,6 +683,7 @@ void FlowLayout::installJSIBindings(Runtime& rt, Object& target) {
       [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
         if (count < 1 || !args[0].isObject()) return Value::undefined();
         auto secs = sectionsFromJSI(rt, args[0].asObject(rt).asArray(rt));
+        _cache->clear();
         computeSections(secs);
         return Value::undefined();
       }));

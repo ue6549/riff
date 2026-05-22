@@ -691,7 +691,6 @@ double GridLayout::computeSectionFromCache(const GridLayoutParams& p,
 // ─── computeSections ──────────────────────────────────────────────────────────
 
 void GridLayout::computeSections(const std::vector<GridLayoutParams>& sections) {
-  _cache->clear();
   if (sections.empty()) return;
 
   _horizontal     = sections[0].horizontal;
@@ -1067,6 +1066,7 @@ void GridLayout::installJSIBindings(Runtime& rt, Object& target) {
       [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
         if (count < 1 || !args[0].isObject()) return Value::undefined();
         auto arr = args[0].getObject(rt).asArray(rt);
+        _cache->clear();
         computeSections(sectionsFromJSI(rt, arr));
         return Value::undefined();
       }));

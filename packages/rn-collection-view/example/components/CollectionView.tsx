@@ -3096,10 +3096,6 @@ export function Riff<T = unknown>({
       // item reference check mirrors React.memo semantics — if the consumer
       // produces a new object for a changed item, this misses and the cell
       // re-renders. See COLLECTIONVIEW_INTERNALS.md § "Consumer mutation contract".
-      //
-      // H-section cells: also check layoutCacheVersion. Their positions are set
-      // via CSS style (not ShadowNode), so they must re-render when the layout
-      // cache changes (e.g. after ShadowNode MVC reflows H-section heights).
       const prev = elementCacheRef.current.get(slotKey);
       let el: React.ReactElement;
       if (
@@ -3108,8 +3104,7 @@ export function Riff<T = unknown>({
         prev.dataKey     === slot.dataKey &&
         prev.cacheKey    === slot.cacheKey &&
         prev.measureOnly === slot.measureOnly &&
-        prev.item        === slot.item &&
-        (!slotIsHCell || prev.lcv === layoutCacheVersion)
+        prev.item        === slot.item
       ) {
         el = prev.element;
         _cacheHits++;
@@ -3119,7 +3114,7 @@ export function Riff<T = unknown>({
         elementCacheRef.current.set(slotKey, {
           gen: renderGen, dataKey: slot.dataKey, cacheKey: slot.cacheKey,
           measureOnly: slot.measureOnly,
-          item: slot.item, element: el, lcv: layoutCacheVersion,
+          item: slot.item, element: el,
         });
         _cacheMisses++;
       }
