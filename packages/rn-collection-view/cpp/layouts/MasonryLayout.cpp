@@ -148,19 +148,28 @@ double MasonryLayout::computeSection(const MasonryLayoutParams& p,
 
     const double crossPos = crossStart + shortestLane * (laneSize + p.columnSpacing);
 
-    double itemPrimary;
-    double itemCross;
-    if (H) {
-      itemPrimary = estimatedPrimary; // Yoga measures actual width
-      itemCross   = laneSize;         // uniform row height
-    } else {
-      itemPrimary = (i < static_cast<int>(p.itemHeights.size())) ? p.itemHeights[i] : 100.0;
-      itemCross   = laneSize;
-    }
-
     const std::string key = (i < static_cast<int>(p.keys.size()))
         ? p.keys[i]
         : prefix + std::to_string(i);
+
+    // Preserve Yoga-measured size from cache to avoid oscillation.
+    // If the cell was already measured (Yoga gave us the real size), reuse it so
+    // setAttributes writes an identical frame → no version bump → feedback loop broken.
+    const auto cached      = _cache->getAttributes(key);
+    const bool wasMeasured = cached && cached->sizingState == SizingState::Measured;
+
+    double itemPrimary;
+    double itemCross;
+    if (H) {
+      itemPrimary = (wasMeasured && cached->frame.width > 0)
+          ? cached->frame.width : estimatedPrimary;
+      itemCross   = laneSize;
+    } else {
+      const double est = (i < static_cast<int>(p.itemHeights.size())) ? p.itemHeights[i] : 100.0;
+      itemPrimary = (wasMeasured && cached->frame.height > 0)
+          ? cached->frame.height : est;
+      itemCross   = laneSize;
+    }
 
     LayoutAttributes attrs;
     attrs.key       = key;
@@ -172,10 +181,10 @@ double MasonryLayout::computeSection(const MasonryLayoutParams& p,
     attrs.isDirty   = false;
     if (H) {
       attrs.frame       = { lanePrimary[shortestLane], crossPos, itemPrimary, itemCross };
-      attrs.sizingState = SizingState::Placeholder;
+      attrs.sizingState = wasMeasured ? SizingState::Measured : SizingState::Placeholder;
     } else {
       attrs.frame       = { crossPos, lanePrimary[shortestLane], itemCross, itemPrimary };
-      attrs.sizingState = SizingState::Placeholder;
+      attrs.sizingState = wasMeasured ? SizingState::Measured : SizingState::Placeholder;
     }
     _cache->setAttributes(attrs);
 
