@@ -36,14 +36,27 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getTotalContentSize(): Size;
     clear(): void;
     setHorizontal(horizontal: boolean): void;
-    /** Save primary-axis size for every Measured entry. Call before clear(). */
     stashHeights(): void;
-    /** Save measured width+height for every Measured entry. Call before clear(). */
     stashMeasuredSizes(): void;
-    /** Release stash memory. Call after computeSections(). */
+    clearStash(): void;
+  };
+  layoutCacheById(id: number): {
+    getAttributesInRect(rect: { x: number; y: number; width: number; height: number }): LayoutAttributes[];
+    getAttributes(key: string): LayoutAttributes | null;
+    getTotalContentSize(): Size;
+    clear(): void;
+    setHorizontal(horizontal: boolean): void;
+    stashHeights(): void;
+    stashMeasuredSizes(): void;
     clearStash(): void;
   };
   listLayout: {
+    computeListLayout(params: Record<string, unknown>): void;
+    computeSections(sections: Record<string, unknown>[]): void;
+    invalidateListLayoutFrom(key: string, params: Record<string, unknown>): void;
+    invalidateSectionsFrom(idx: number, sections: Record<string, unknown>[]): void;
+  };
+  getListLayoutById(id: number): {
     computeListLayout(params: Record<string, unknown>): void;
     computeSections(sections: Record<string, unknown>[]): void;
     invalidateListLayoutFrom(key: string, params: Record<string, unknown>): void;
@@ -73,6 +86,9 @@ class ListLayout implements CollectionViewLayout {
   private lastContext: LayoutContext | null = null;
   private _lastFingerprint: string = '';
   private lastSectionKeys: (readonly string[])[] = [];
+  // B4.9: Per-instance cache + engine (set in prepare() via context.cacheId).
+  private _cache = nativeMod.layoutCache;
+  private _listEngine = nativeMod.listLayout;
 
   constructor(delegate: ListLayoutDelegate) {
     this.delegate = delegate;
@@ -81,11 +97,14 @@ class ListLayout implements CollectionViewLayout {
 
   prepare(context: LayoutContext): void {
     this.lastContext = context;
+    // B4.9: Route to the per-instance cache/engine for this CollectionView.
+    this._cache      = nativeMod.layoutCacheById(context.cacheId);
+    this._listEngine = nativeMod.getListLayoutById(context.cacheId);
     const d = this.delegate;
     const H = this.horizontal;
 
     // Inform LayoutCache of scroll axis for MVC anchor computation.
-    nativeMod.layoutCache.setHorizontal(H);
+    this._cache.setHorizontal(H);
 
     // Build section params for C++ layout engine.
     // Compute flat-index base per section so C++ can set flatIndex on each LayoutAttributes.
@@ -186,7 +205,7 @@ class ListLayout implements CollectionViewLayout {
 
     this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
 
-    listDebugLog(`[RNCVX-LIST] Sending to C++ nativeMod.listLayout.computeSections:`, sectionParams.map(s => ({ headerHeight: s.headerHeight, footerHeight: s.footerHeight, itemCount: s.itemCount })));
+    listDebugLog(`[RNCVX-LIST] Sending to C++ this._listEngine.computeSections:`, sectionParams.map(s => ({ headerHeight: s.headerHeight, footerHeight: s.footerHeight, itemCount: s.itemCount })));
 
     // Build a fingerprint of the data shape. Only clear + recompute when it changes.
     // This preserves Yoga-measured heights/widths across measurement-triggered re-renders.
@@ -206,8 +225,8 @@ class ListLayout implements CollectionViewLayout {
       // Horizontal lists need both width (primary) and height (cross axis).
       // Vertical lists only need primary-axis height.
       listMvcTrace(`prepare: ${H ? 'stashMeasuredSizes' : 'stashHeights'} (fingerprint changed; clear happens atomically in C++)`);
-      if (H) nativeMod.layoutCache.stashMeasuredSizes();
-      else nativeMod.layoutCache.stashHeights();
+      if (H) this._cache.stashMeasuredSizes();
+      else this._cache.stashHeights();
       this._lastFingerprint = fp;
     }
 
@@ -220,19 +239,19 @@ class ListLayout implements CollectionViewLayout {
       });
     }
 
-    nativeMod.listLayout.computeSections(sectionParams);
+    this._listEngine.computeSections(sectionParams);
     // Release stash memory now that computeSections has consumed what it needs.
-    nativeMod.layoutCache.clearStash();
+    this._cache.clearStash();
     listMvcTrace(`prepare: computeSections done, stash cleared`);
 
     // Verification: immediately check if header was stored
-    const headerCheck = nativeMod.layoutCache.getAttributes('item-0-header');
-    const totalSize = nativeMod.layoutCache.getTotalContentSize();
+    const headerCheck = this._cache.getAttributes('item-0-header');
+    const totalSize = this._cache.getTotalContentSize();
     listDebugLog(`[RNCVX-LIST-VERIFY] After computeSections: item-0-header=${!!headerCheck} y=${headerCheck?.frame?.y} h=${headerCheck?.frame?.height} totalContentH=${totalSize?.height}`);
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    return nativeMod.layoutCache.getAttributesInRect(inRect);
+    return this._cache.getAttributesInRect(inRect);
   }
 
   cacheKeyForItem(index: number, section: number): string {
@@ -244,15 +263,15 @@ class ListLayout implements CollectionViewLayout {
   }
 
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
+    return this._cache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
+    return this._cache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {
-    return nativeMod.layoutCache.getTotalContentSize();
+    return this._cache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {
@@ -285,11 +304,11 @@ class ListLayout implements CollectionViewLayout {
     });
 
     if (sectionParams.length === 1) {
-      nativeMod.listLayout.invalidateListLayoutFrom(key, sectionParams[0]!);
+      this._listEngine.invalidateListLayoutFrom(key, sectionParams[0]!);
     } else {
       // Find which section this key belongs to, invalidate from there
       const sectionIdx = parseInt(key.split('-')[1] ?? '0', 10);
-      nativeMod.listLayout.invalidateSectionsFrom(sectionIdx, sectionParams);
+      this._listEngine.invalidateSectionsFrom(sectionIdx, sectionParams);
     }
   }
 }

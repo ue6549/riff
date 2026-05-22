@@ -28,6 +28,11 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     setAttributesBatch(batch: object[]): void;
     getAttributes(key: string): LayoutAttributes | null;
   };
+  layoutCacheById(id: number): {
+    setAttributes(attrs: object): void;
+    setAttributesBatch(batch: object[]): void;
+    getAttributes(key: string): LayoutAttributes | null;
+  };
 };
 
 export interface Carousel3DOptions {
@@ -71,6 +76,7 @@ function buildRotationMatrix(angleRad: number, perspective: number): readonly nu
 }
 
 class Carousel3DLayout implements CollectionViewLayout {
+  private _cache = nativeMod.layoutCache;
   readonly type = 'carousel3D';
   readonly horizontal = true;
   readonly needsSpatialQuery = false;
@@ -92,6 +98,7 @@ class Carousel3DLayout implements CollectionViewLayout {
   }
 
   prepare(context: LayoutContext): void {
+    this._cache = nativeMod.layoutCacheById(context.cacheId);
     this.ctx = context;
     const sec = context.sections[0];
     if (!sec) {
@@ -146,13 +153,13 @@ class Carousel3DLayout implements CollectionViewLayout {
         transform3D: buildRotationMatrix(angleRad, this.opts.perspective),
       };
     }
-    nativeMod.layoutCache.setAttributesBatch(batch);
+    this._cache.setAttributesBatch(batch);
   }
 
   attributesForElements(_inRect: Rect): LayoutAttributes[] {
     const result: LayoutAttributes[] = [];
     for (let i = 0; i < this.itemKeys.length; i++) {
-      const a = nativeMod.layoutCache.getAttributes(this.itemKeys[i]);
+      const a = this._cache.getAttributes(this.itemKeys[i]);
       if (a) result.push(a);
     }
     return result;
@@ -160,7 +167,7 @@ class Carousel3DLayout implements CollectionViewLayout {
 
   attributesForItem(index: number, _section: number): LayoutAttributes | null {
     const k = this.itemKeys[index];
-    return k ? nativeMod.layoutCache.getAttributes(k) : null;
+    return k ? this._cache.getAttributes(k) : null;
   }
 
   attributesForSupplementary(_kind: string, _section: number): LayoutAttributes | null {

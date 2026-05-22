@@ -81,6 +81,12 @@ type NativeWindowState = { render: NativeRange; visible: NativeRange };
 
 const nativeMod = NativeCollectionViewModule as unknown as {
   layoutCacheId: number;
+  /** B4.9: Create a fresh isolated LayoutCache + engines for one CollectionView instance. */
+  createLayoutCache(): number;
+  /** B4.9: Release per-instance cache on unmount. */
+  destroyLayoutCache(id: number): void;
+  /** B4.9: Returns per-instance cache JSI object (same API as layoutCache). */
+  layoutCacheById(id: number): any;
   /** Programmatic scroll. Invokes the scroll handler registered by the container view. */
   scrollTo(cacheId: number, x: number, y: number, animated: boolean): void;
   /** Single-call scroll-to-item by cache key. C++ looks up attrs, computes offset, invokes handler. */
@@ -167,9 +173,10 @@ const nativeMod = NativeCollectionViewModule as unknown as {
       ahead: number, itemCount: number,
     ): NativeRange;
     // Batched scroll computation — replaces 4-6 individual JSI calls.
-    // Spatial queries run entirely in C++; returns 7 integers (no LayoutAttributes marshalled).
+    // B4.9: cacheId is the first argument (routes to per-instance cache).
     // Scroll offset + velocity are read from LayoutCache (set by native scrollViewDidScroll:).
     processScroll(
+      cacheId: number,
       vpPrimary: number, vpCross: number,
       isHorizontal: boolean,
       renderMult: number,
@@ -184,19 +191,12 @@ const nativeMod = NativeCollectionViewModule as unknown as {
       measureFirst: number; measureLast: number;
       cacheVersion: number;
       blankBefore: number; blankAfter: number;
-      // Change C: flat [x,y,w,h] per flat-index entry in [framesFirst, framesFirst+N-1].
-      // Absent on Opt-6 band-skip early returns (frameDataRef stays valid in that case).
       frames?: number[]; framesFirst?: number;
     };
-    // Phase 2: H-section render range computation from scroll offset.
-    // H-1: Returns the same range as before, plus a packed frame array
-    // (flat [x, y_section_local, w, h] per flat index in [framesFirst, framesFirst+N-1])
-    // and the cache version at sample time. JS uses these to skip per-cell
-    // attributesForItem JSI calls in renderCell for H cells. Frame Y is
-    // section-local (relative to section.y) so it's invariant under V-section
-    // reflows from MVC corrections above this section.
-    // frames/framesFirst are absent when no items intersect (renderLast < renderFirst).
+    // H-section render range computation from scroll offset.
+    // B4.9: cacheId is the first argument.
     processHScroll(
+      cacheId: number,
       sectionIndex: number, scrollX: number,
       vpWidth: number, renderMult: number,
       sectionY: number, sectionHeight: number,
@@ -205,6 +205,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
       renderFirst: number; renderLast: number;
       frames?: number[]; framesFirst?: number;
       cacheVersion?: number;
+      unchanged?: boolean;
     };
   };
 };
@@ -1345,12 +1346,16 @@ export function Riff<T = unknown>({
   }, [propSections, propData]);
 
   // ── Phase 5: ShadowNode ↔ LayoutCache bridge ──────────────────────────────
-  // layoutCacheId: opaque ID registered in CollectionViewModule's static registry.
-  // ShadowNode looks up the shared LayoutCache during layout() via this ID.
-  // layoutCacheVersion: bumped to trigger Fabric re-commit when cache content
-  // changes (e.g. after heightForItem seeding or batch measurement updates).
-  const layoutCacheId = nativeMod.layoutCacheId;
+  // B4.9: Each CollectionView instance creates its own isolated LayoutCache on
+  // mount. The ID is stable for the lifetime of the component (useState init).
+  // ShadowNode looks up the cache during layout() via this ID.
+  const [layoutCacheId] = useState(() => nativeMod.createLayoutCache());
   const [layoutCacheVersion, setLayoutCacheVersion] = useState(0);
+
+  // B4.9: Release per-instance cache when this CollectionView unmounts.
+  useEffect(() => {
+    return () => { nativeMod.destroyLayoutCache(layoutCacheId); };
+  }, [layoutCacheId]);
 
   // H-section windowing: per-section horizontal render ranges.
   // Updated by handleHScroll when processHScroll returns a changed range.
@@ -1451,7 +1456,13 @@ export function Riff<T = unknown>({
 
   // Track C++ LayoutCache version to detect when ShadowNode writes heights.
   const lastCacheVersionRef = useRef(0);
-  const nativeLayoutCache = nativeMod.layoutCache;
+  // B4.9: per-instance cache object for this CollectionView.
+  // useMemo so the JSI object is fetched once (re-fetched only if cacheId changes,
+  // which only happens if the component remounts with a new ID — never in practice).
+  const nativeLayoutCache = useMemo(
+    () => nativeMod.layoutCacheById(layoutCacheId),
+    [layoutCacheId],
+  );
 
   // Scroll diagnostic counters — only allocated when RNCV_DEBUG_LOGS is true.
   // Accumulates per-second stats: total onScroll calls, band-skips, lcv re-renders, rr re-renders.
@@ -1490,7 +1501,7 @@ export function Riff<T = unknown>({
     const key = effectiveLayout.cacheKeyForItem?.(index, section)
       ?? (layoutContext?.sections[section]?.itemKeys?.[index]
         ?? `${effectiveLayout.keyPrefixForSection?.(section) ?? (effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type)}-${section}-${index}`);
-    const attr = nativeMod.layoutCache.getAttributes(key);
+    const attr = nativeLayoutCache.getAttributes(key);
     return attr ? attr.frame.height : undefined;
   };
 
@@ -1500,6 +1511,7 @@ export function Riff<T = unknown>({
       containerWidth: viewportWidth,
       containerHeight: viewportHeight,
       scrollOffset: { x: prevScrollXRef.current, y: prevScrollYRef.current },
+      cacheId: layoutCacheId,
       sections: propSections
         ? propSections.map(s => ({
             itemCount: s.data.length,
@@ -1538,7 +1550,8 @@ export function Riff<T = unknown>({
         measuredHeightForItemRef.current(index, section),
     };
   }, [viewportWidth, viewportHeight, propSections, propKeyExtractor, data.length,
-      sectionInsetTop, sectionInsetBottom, sectionInsetLeft, sectionInsetRight]);
+      sectionInsetTop, sectionInsetBottom, sectionInsetLeft, sectionInsetRight,
+      layoutCacheId]);
 
   // Keep layoutContextRef in sync so sectionedKeyExtractorCb can read itemKeys.
   layoutContextRef.current = layoutContext;
@@ -1740,6 +1753,7 @@ export function Riff<T = unknown>({
     const isHoriz = effectiveLayout.horizontal ?? false;
 
     const layoutResult = nativeWindowController.processScroll(
+      layoutCacheId,                              // B4.9: per-instance cache
       isHoriz ? viewportWidth  : viewportHeight, // vpPrimary
       isHoriz ? viewportHeight : viewportWidth,  // vpCross
       isHoriz,
@@ -2044,6 +2058,7 @@ export function Riff<T = unknown>({
       // Replaces 4-6 individual JSI calls. LayoutAttributes are never marshalled to JS —
       // spatial queries run entirely in C++ and return 7 integers.
       const scrollResult = nativeWindowController.processScroll(
+        layoutCacheId,                           // B4.9: per-instance cache
         isHorizontal ? vpW    : vpH,             // vpPrimary
         isHorizontal ? vpH    : vpW,             // vpCross
         isHorizontal,
@@ -2261,6 +2276,7 @@ export function Riff<T = unknown>({
     const sectionMult = sectionWindowingOverrides.get(sectionIndex)?.renderMultiplier
       ?? hRenderMultiplier;
     const result = nativeWindowController.processHScroll(
+      layoutCacheId,
       sectionIndex, scrollX, viewportWidth, sectionMult,
       meta.sectionY, meta.sectionHeight, meta.flatBase, meta.itemCount,
     );
@@ -2948,6 +2964,7 @@ export function Riff<T = unknown>({
           const initMult = sectionWindowingOverrides.get(sIdx)?.renderMultiplier
             ?? hRenderMultiplier;
           const result = nativeWindowController.processHScroll(
+            layoutCacheId,
             sIdx, savedX, viewportWidth, initMult,
             meta.sectionY, meta.sectionHeight, meta.flatBase, meta.itemCount,
           );
@@ -3231,7 +3248,7 @@ export function Riff<T = unknown>({
         width: vpW,
         height: vpH + margin * 2,
       };
-      const decoAttrs = nativeMod.layoutCache.getAttributesInRect(decoRect)
+      const decoAttrs = nativeLayoutCache.getAttributesInRect(decoRect)
         .filter((a: any) => a.isDecoration);
 
       const sepColor: string = layoutDelegate?.separator?.color ?? '#FFFFFF';

@@ -177,6 +177,12 @@ export interface LayoutContext {
    * Returns undefined for items that haven't been measured yet.
    */
   readonly measuredHeightForItem?: (index: number, section: number) => number | undefined;
+  /**
+   * B4.9: Per-instance cache ID. Each CollectionView instance creates its own
+   * LayoutCache via nativeMod.createLayoutCache(). Layout engines use this to
+   * route all cache reads/writes to the correct isolated C++ cache.
+   */
+  readonly cacheId: number;
 }
 
 /** Per-section metadata for the layout engine. */

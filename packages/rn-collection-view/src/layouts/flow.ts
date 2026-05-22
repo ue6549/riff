@@ -13,8 +13,8 @@
  * All queries go through the LayoutCache so ShadowNode corrections are immediately visible.
  *
  * Standard JSI contract (mirrors GridLayout):
- *   nativeMod.flowLayout.computeSections(sections[])       → void
- *   nativeMod.flowLayout.invalidateSectionsFrom(n, [])     → void
+ *   this._flowEngine.computeSections(sections[])       → void
+ *   this._flowEngine.invalidateSectionsFrom(n, [])     → void
  *
  * ─── STABLE KEY RULE (enforce in every layout engine) ────────────────────────
  * One key per item, used identically in ALL three places:
@@ -47,7 +47,18 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     setHorizontal(horizontal: boolean): void;
     clear(): void;
   };
+  layoutCacheById(id: number): {
+    getAttributesInRect(rect: { x: number; y: number; width: number; height: number }): LayoutAttributes[];
+    getAttributes(key: string): LayoutAttributes | null;
+    getTotalContentSize(): Size;
+    setHorizontal(horizontal: boolean): void;
+    clear(): void;
+  };
   flowLayout: {
+    computeSections(sections: object[]): void;
+    invalidateSectionsFrom(fromSection: number, sections: object[]): void;
+  };
+  getFlowLayoutById(id: number): {
     computeSections(sections: object[]): void;
     invalidateSectionsFrom(fromSection: number, sections: object[]): void;
   };
@@ -58,6 +69,8 @@ class FlowLayoutEngine implements CollectionViewLayout {
   readonly horizontal: boolean;
   readonly delegate: FlowLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
+  private _cache = nativeMod.layoutCache;
+  private _flowEngine = nativeMod.flowLayout;
   // Cached from the last prepare() — max items packed into any single row (V) or
   // column (H). Used by budgetColumns() so applyBudget allocates enough slots to
   // never split a row at a budget boundary, preventing partial-row pop-in.
@@ -69,6 +82,8 @@ class FlowLayoutEngine implements CollectionViewLayout {
   }
 
   prepare(context: LayoutContext): void {
+    this._cache      = nativeMod.layoutCacheById(context.cacheId);
+    this._flowEngine = nativeMod.getFlowLayoutById(context.cacheId);
     const d = this.delegate;
     const H = this.horizontal;
     const w = context.containerWidth;
@@ -76,7 +91,7 @@ class FlowLayoutEngine implements CollectionViewLayout {
     if (w <= 0 || context.sections.length === 0) return;
 
     // Inform LayoutCache of scroll axis for MVC anchor computation.
-    nativeMod.layoutCache.setHorizontal(H);
+    this._cache.setHorizontal(H);
 
     let runningFlatBase = 0;
     let globalMaxPerRow = 1;
@@ -177,7 +192,7 @@ class FlowLayoutEngine implements CollectionViewLayout {
 
     this._maxItemsPerRow = globalMaxPerRow;
     this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
-    nativeMod.flowLayout.computeSections(sections);
+    this._flowEngine.computeSections(sections);
   }
 
   budgetColumns(_viewportWidth: number): number {
@@ -187,7 +202,7 @@ class FlowLayoutEngine implements CollectionViewLayout {
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    return nativeMod.layoutCache.getAttributesInRect(inRect);
+    return this._cache.getAttributesInRect(inRect);
   }
 
   cacheKeyForItem(index: number, section: number): string {
@@ -199,15 +214,15 @@ class FlowLayoutEngine implements CollectionViewLayout {
   }
 
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
+    return this._cache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
+    return this._cache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {
-    return nativeMod.layoutCache.getTotalContentSize();
+    return this._cache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {

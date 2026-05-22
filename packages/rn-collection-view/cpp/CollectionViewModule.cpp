@@ -219,6 +219,15 @@ CollectionViewModule::CollectionViewModule(
   registerLayoutEngine(_layoutCacheId, "masonry", _masonryLayout);
   registerLayoutEngine(_layoutCacheId, "flow", _flowLayout);
   registerLayoutEngine(_layoutCacheId, "compositional", _compositionalLayout);
+
+  // B4.9: Register default instance in per-instance map (backward compat).
+  PerInstanceData& def  = _instances[_layoutCacheId];
+  def.cache               = _layoutCache;
+  def.listLayout          = _listLayout;
+  def.masonryLayout       = _masonryLayout;
+  def.gridLayout          = _gridLayout;
+  def.flowLayout          = _flowLayout;
+  def.compositionalLayout = _compositionalLayout;
 }
 
 std::string CollectionViewModule::ping() {
@@ -237,6 +246,13 @@ void CollectionViewModule::invalidate() {
   _gridLayoutJSI.reset();
   _flowLayoutJSI.reset();
   _compositionalLayoutJSI.reset();
+
+  _instanceCacheJSI.clear();
+  _instanceListLayoutJSI.clear();
+  _instanceMasonryLayoutJSI.clear();
+  _instanceGridLayoutJSI.clear();
+  _instanceFlowLayoutJSI.clear();
+  _instanceCompositionalLayoutJSI.clear();
 
   _memoryPressureJsFn.reset();
   _memoryPressureRt = nullptr;
@@ -524,24 +540,33 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
     //   one triple per section. Omit / pass null for single-section lists.
     obj.setProperty(rt, "processScroll",
       Function::createFromHostFunction(rt,
-        PropNameID::forAscii(rt, "processScroll"), 11,
+        PropNameID::forAscii(rt, "processScroll"), 12,
         [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
-          double vpPrimary        = count > 0 && args[0].isNumber() ? args[0].getNumber() : 0.0;
-          double vpCross          = count > 1 && args[1].isNumber() ? args[1].getNumber() : 0.0;
-          bool   isHoriz          = count > 2 && args[2].isBool()   ? args[2].getBool()   : false;
-          double renderMult       = count > 3 && args[3].isNumber() ? args[3].getNumber() : 1.0;
-          double stride           = count > 4 && args[4].isNumber() ? args[4].getNumber() : 0.0;
-          double measureAheadMult = count > 5 && args[5].isNumber() ? args[5].getNumber() : 0.0;
-          double mountedWindowSz  = count > 6 && args[6].isNumber() ? args[6].getNumber() : 1e10;
-          int    itemCount        = count > 7 && args[7].isNumber()  ? static_cast<int>(args[7].getNumber()) : 0;
-          int    budgetCols       = count > 9 && args[9].isNumber() ? static_cast<int>(args[9].getNumber()) : 1;
-          bool   sorted           = count > 10 && args[10].isBool() ? args[10].getBool()  : false;
+          // B4.9: cacheId is now the first argument; all others shift +1.
+          int32_t cacheId         = count > 0 && args[0].isNumber() ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+          double vpPrimary        = count > 1 && args[1].isNumber() ? args[1].getNumber() : 0.0;
+          double vpCross          = count > 2 && args[2].isNumber() ? args[2].getNumber() : 0.0;
+          bool   isHoriz          = count > 3 && args[3].isBool()   ? args[3].getBool()   : false;
+          double renderMult       = count > 4 && args[4].isNumber() ? args[4].getNumber() : 1.0;
+          double stride           = count > 5 && args[5].isNumber() ? args[5].getNumber() : 0.0;
+          double measureAheadMult = count > 6 && args[6].isNumber() ? args[6].getNumber() : 0.0;
+          double mountedWindowSz  = count > 7 && args[7].isNumber() ? args[7].getNumber() : 1e10;
+          int    itemCount        = count > 8 && args[8].isNumber()  ? static_cast<int>(args[8].getNumber()) : 0;
+          int    budgetCols       = count > 10 && args[10].isNumber() ? static_cast<int>(args[10].getNumber()) : 1;
+          bool   sorted           = count > 11 && args[11].isBool() ? args[11].getBool()  : false;
+
+          // Route to the per-instance cache + scroll result (default if not found).
+          auto instIt = _instances.find(cacheId);
+          PerInstanceData& inst = (instIt != _instances.end())
+              ? instIt->second : _instances[_layoutCacheId];
+          auto& cache = inst.cache;
+          auto& lastResult = inst.lastScrollResult;
 
           // sectionInfoPacked: flat array [start0, headerOffset0, dataCount0, start1, ...]
           struct SecInfo { int start; int headerOffset; int dataCount; };
           std::vector<SecInfo> sections;
-          if (count > 8 && args[8].isObject()) {
-            auto sArr = args[8].getObject(rt);
+          if (count > 9 && args[9].isObject()) {
+            auto sArr = args[9].getObject(rt);
             if (sArr.isArray(rt)) {
               auto arr = sArr.getArray(rt);
               size_t n = arr.size(rt);
@@ -559,7 +584,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
 
           // Opt D: Read scroll offset + velocity + version in a single lock
           // (was 2 locks: getScrollOffsetAndVelocity + version).
-          auto snapshot = _layoutCache->getScrollSnapshotWithVersion();
+          auto snapshot = cache->getScrollSnapshotWithVersion();
           double scrollPrimary = isHoriz ? snapshot.offset.x : snapshot.offset.y;
           double velocity = snapshot.velocity;
           int32_t curVersion = static_cast<int32_t>(snapshot.version);
@@ -600,19 +625,19 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           };
 
           if (vpPrimary <= 0.0 || itemCount == 0) return makeEmpty();
-          if (curVersion == _lastScrollResult.cacheVersion &&
-              scrollPrimary >= _lastScrollResult.bandLow &&
-              scrollPrimary <= _lastScrollResult.bandHigh) {
+          if (curVersion == lastResult.cacheVersion &&
+              scrollPrimary >= lastResult.bandLow &&
+              scrollPrimary <= lastResult.bandHigh) {
             Object r(rt);
-            r.setProperty(rt, "renderFirst",  Value(_lastScrollResult.renderFirst));
-            r.setProperty(rt, "renderLast",   Value(_lastScrollResult.renderLast));
-            r.setProperty(rt, "visibleFirst", Value(_lastScrollResult.visibleFirst));
-            r.setProperty(rt, "visibleLast",  Value(_lastScrollResult.visibleLast));
-            r.setProperty(rt, "measureFirst", Value(_lastScrollResult.measureFirst));
-            r.setProperty(rt, "measureLast",  Value(_lastScrollResult.measureLast));
+            r.setProperty(rt, "renderFirst",  Value(lastResult.renderFirst));
+            r.setProperty(rt, "renderLast",   Value(lastResult.renderLast));
+            r.setProperty(rt, "visibleFirst", Value(lastResult.visibleFirst));
+            r.setProperty(rt, "visibleLast",  Value(lastResult.visibleLast));
+            r.setProperty(rt, "measureFirst", Value(lastResult.measureFirst));
+            r.setProperty(rt, "measureLast",  Value(lastResult.measureLast));
             r.setProperty(rt, "cacheVersion", Value(static_cast<double>(curVersion)));
-            r.setProperty(rt, "blankBefore",  Value(_lastScrollResult.blankBefore));
-            r.setProperty(rt, "blankAfter",   Value(_lastScrollResult.blankAfter));
+            r.setProperty(rt, "blankBefore",  Value(lastResult.blankBefore));
+            r.setProperty(rt, "blankAfter",   Value(lastResult.blankAfter));
             return Value(rt, r);
           }
 
@@ -645,7 +670,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             // Opt D: both render + visible searches in a single lock (was 2 locks).
             double renderLo = scrollPrimary - abovePad;
             double renderHi = scrollPrimary + vpPrimary + belowPad;
-            auto dualRange = _layoutCache->findDualRangeByPrimary(
+            auto dualRange = cache->findDualRangeByPrimary(
                 renderLo, renderHi,
                 scrollPrimary, scrollPrimary + vpPrimary,
                 isHoriz);
@@ -663,7 +688,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             vLast  = vRange.lastIdx  >= 0 ? vRange.lastIdx  : rLast;
           } else {
             // ── Spatial-query path: for custom/non-sorted layouts ────────────
-            auto renderAttrs = _layoutCache->getAttributesInRect(renderRect);
+            auto renderAttrs = cache->getAttributesInRect(renderRect);
             rFirst = std::numeric_limits<int>::max();
             rLast  = std::numeric_limits<int>::min();
             for (const auto& a : renderAttrs) {
@@ -675,7 +700,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
 
             if (rFirst == std::numeric_limits<int>::max()) return makeEmpty();
 
-            auto visAttrs = _layoutCache->getAttributesInRect(visibleRect);
+            auto visAttrs = cache->getAttributesInRect(visibleRect);
             vFirst = std::numeric_limits<int>::max();
             vLast  = std::numeric_limits<int>::min();
             for (const auto& a : visAttrs) {
@@ -742,23 +767,23 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           // Gathers x,y,w,h for every cache entry in [mFirst,mLast] in a single
           // mutex acquisition. JS reads cellWidth/height from this array instead
           // of making ~30 individual JSI calls per render (one per visible cell).
-          auto frames = _layoutCache->getFramesForFlatRange(mFirst, mLast);
+          auto frames = cache->getFramesForFlatRange(mFirst, mLast);
 
           // ── Cache result for Opt 6 stable-band skip ─────────────────────
-          _lastScrollResult.renderFirst  = budgeted.first;
-          _lastScrollResult.renderLast   = budgeted.last;
-          _lastScrollResult.visibleFirst = vFirst;
-          _lastScrollResult.visibleLast  = vLast;
-          _lastScrollResult.measureFirst = mFirst;
-          _lastScrollResult.measureLast  = mLast;
-          _lastScrollResult.cacheVersion = curVersion;
-          _lastScrollResult.blankBefore  = blankBefore;
-          _lastScrollResult.blankAfter   = blankAfter;
-          _lastScrollResult.frames       = frames;
-          _lastScrollResult.framesFirst  = mFirst;
+          lastResult.renderFirst  = budgeted.first;
+          lastResult.renderLast   = budgeted.last;
+          lastResult.visibleFirst = vFirst;
+          lastResult.visibleLast  = vLast;
+          lastResult.measureFirst = mFirst;
+          lastResult.measureLast  = mLast;
+          lastResult.cacheVersion = curVersion;
+          lastResult.blankBefore  = blankBefore;
+          lastResult.blankAfter   = blankAfter;
+          lastResult.frames       = frames;
+          lastResult.framesFirst  = mFirst;
           // Stable band: ±¼ viewport from current scroll position.
-          _lastScrollResult.bandLow  = scrollPrimary - vpPrimary * 0.25;
-          _lastScrollResult.bandHigh = scrollPrimary + vpPrimary * 0.25;
+          lastResult.bandLow  = scrollPrimary - vpPrimary * 0.25;
+          lastResult.bandHigh = scrollPrimary + vpPrimary * 0.25;
 
           // Pack frame data into a flat JSI Array.
           auto frameArr = Array(rt, frames.size());
@@ -780,7 +805,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           return Value(rt, result);
         }));
 
-    // processHScroll(sectionIndex, scrollX, vpWidth, renderMult,
+    // processHScroll(cacheId, sectionIndex, scrollX, vpWidth, renderMult,
     //                sectionY, sectionHeight, flatBase, itemCount)
     //   → { renderFirst, renderLast, frames?, framesFirst?, cacheVersion? }
     //
@@ -801,7 +826,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
     // from processScroll's frames return.
     obj.setProperty(rt, "processHScroll",
       Function::createFromHostFunction(rt,
-        PropNameID::forAscii(rt, "processHScroll"), 8,
+        PropNameID::forAscii(rt, "processHScroll"), 9,
         [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
           auto makeEmpty = [&](int base) -> Value {
             Object r(rt);
@@ -810,16 +835,25 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             return Value(rt, r);
           };
 
-          if (count < 8) return makeEmpty(0);
+          if (count < 9) return makeEmpty(0);
 
-          double scrollX       = args[1].isNumber() ? args[1].getNumber() : 0.0;
-          double vpWidth       = args[2].isNumber() ? args[2].getNumber() : 0.0;
-          double renderMult    = args[3].isNumber() ? args[3].getNumber() : 0.5;
-          double sectionY      = args[4].isNumber() ? args[4].getNumber() : 0.0;
-          double sectionHeight = args[5].isNumber() ? args[5].getNumber() : 0.0;
-          int    flatBase      = args[6].isNumber() ? static_cast<int>(args[6].getNumber()) : 0;
-          int    itemCount     = args[7].isNumber() ? static_cast<int>(args[7].getNumber()) : 0;
-          int    sectionIdx    = args[0].isNumber() ? static_cast<int>(args[0].getNumber()) : 0;
+          // B4.9: cacheId is now the first argument; all others shift +1.
+          int32_t cacheId      = args[0].isNumber() ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+          int    sectionIdx    = args[1].isNumber() ? static_cast<int>(args[1].getNumber()) : 0;
+          double scrollX       = args[2].isNumber() ? args[2].getNumber() : 0.0;
+          double vpWidth       = args[3].isNumber() ? args[3].getNumber() : 0.0;
+          double renderMult    = args[4].isNumber() ? args[4].getNumber() : 0.5;
+          double sectionY      = args[5].isNumber() ? args[5].getNumber() : 0.0;
+          double sectionHeight = args[6].isNumber() ? args[6].getNumber() : 0.0;
+          int    flatBase      = args[7].isNumber() ? static_cast<int>(args[7].getNumber()) : 0;
+          int    itemCount     = args[8].isNumber() ? static_cast<int>(args[8].getNumber()) : 0;
+
+          // Route to per-instance state.
+          auto instIt = _instances.find(cacheId);
+          PerInstanceData& inst = (instIt != _instances.end())
+              ? instIt->second : _instances[_layoutCacheId];
+          auto& cache = inst.cache;
+          auto& hState = inst.hScrollStates[sectionIdx];
 
           RNCV_HSUB_MOD_LOG(
             "IN s=%d scrollX=%.1f vpW=%.1f mult=%.2f "
@@ -845,7 +879,6 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
               std::chrono::duration_cast<std::chrono::microseconds>(
                   std::chrono::steady_clock::now().time_since_epoch()).count()) / 1000.0;
 
-          auto& hState = _hScrollStates[sectionIdx];
           if (hState.lastTimestampMs >= 0.0) {
             double dt = nowMs - hState.lastTimestampMs;
             if (dt > 0.5) {  // skip if < 0.5 ms apart (duplicate event noise)
@@ -889,7 +922,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             sectionHeight                     // height
           };
 
-          auto attrs = _layoutCache->getAttributesInRect(queryRect);
+          auto attrs = cache->getAttributesInRect(queryRect);
 
           int rFirst = std::numeric_limits<int>::max();
           int rLast  = std::numeric_limits<int>::min();
@@ -922,7 +955,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
             // with the same empty result skips the spatial query.
             hState.prevRenderFirst  = flatBase;
             hState.prevRenderLast   = flatBase - 1;
-            hState.prevCacheVersion = _layoutCache->version();
+            hState.prevCacheVersion = cache->version();
             return makeEmpty(flatBase);
           }
 
@@ -931,7 +964,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           // and React re-render. Saves the spatial query on ~80% of scroll ticks
           // during steady H scrolling.
           {
-            uint64_t curVersion = _layoutCache->version();
+            uint64_t curVersion = cache->version();
             if (rFirst == hState.prevRenderFirst &&
                 rLast  == hState.prevRenderLast  &&
                 curVersion == hState.prevCacheVersion) {
@@ -954,7 +987,7 @@ Value CollectionViewModule::getWindowControllerObject(Runtime& rt) {
           // item Y to V-absolute for processScroll spatial queries). We subtract
           // sectionY here to convert to section-local for the renderCell consumer —
           // section-local y is invariant under V-section reflows that change section.y.
-          auto fwv = _layoutCache->getFramesForFlatRangeWithVersion(rFirst, rLast);
+          auto fwv = cache->getFramesForFlatRangeWithVersion(rFirst, rLast);
           // Convert y to section-local in place. Layout: [x, y, w, h, x, y, w, h, ...]
           for (size_t i = 1; i < fwv.frames.size(); i += 4) {
             fwv.frames[i] -= sectionY;
@@ -1003,6 +1036,171 @@ Value CollectionViewModule::get(Runtime& rt, const PropNameID& name) {
   if (prop == "gridLayout")            return getGridLayoutObject(rt);
   if (prop == "flowLayout")            return getFlowLayoutObject(rt);
   if (prop == "compositionalLayout")   return getCompositionalLayoutObject(rt);
+
+  // ── B4.9: Per-instance cache management ──────────────────────────────────────
+
+  // createLayoutCache() → number
+  // Creates a new isolated LayoutCache + layout engine set for one CollectionView
+  // instance. Registers them in the static registry so ShadowNodes can find them.
+  // JS calls this once on mount and stores the returned ID in component state.
+  if (prop == "createLayoutCache") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "createLayoutCache"), 0,
+      [this](Runtime& rt, const Value&, const Value*, size_t) -> Value {
+        PerInstanceData inst;
+        inst.cache               = std::make_shared<rncv::LayoutCache>();
+        inst.listLayout          = std::make_shared<rncv::ListLayout>(inst.cache);
+        inst.masonryLayout       = std::make_shared<rncv::MasonryLayout>(inst.cache);
+        inst.gridLayout          = std::make_shared<rncv::GridLayout>(inst.cache);
+        inst.flowLayout          = std::make_shared<rncv::FlowLayout>(inst.cache);
+        inst.compositionalLayout = std::make_shared<rncv::CompositionalLayout>(
+            inst.cache, inst.listLayout, inst.gridLayout, inst.flowLayout, inst.masonryLayout);
+        int32_t id = registerLayoutCache(inst.cache);
+        registerLayoutEngine(id, "list",          inst.listLayout);
+        registerLayoutEngine(id, "grid",          inst.gridLayout);
+        registerLayoutEngine(id, "masonry",       inst.masonryLayout);
+        registerLayoutEngine(id, "flow",          inst.flowLayout);
+        registerLayoutEngine(id, "compositional", inst.compositionalLayout);
+        _instances[id] = std::move(inst);
+        return Value(static_cast<double>(id));
+      });
+  }
+
+  // destroyLayoutCache(id) → undefined
+  // Cleans up all per-instance state on unmount. Safe to call with the default ID
+  // (no-op). Erases static registry entries so ShadowNodes stop finding the cache.
+  if (prop == "destroyLayoutCache") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "destroyLayoutCache"), 1,
+      [this](Runtime&, const Value&, const Value* args, size_t count) -> Value {
+        if (count < 1 || !args[0].isNumber()) return Value::undefined();
+        int32_t id = static_cast<int32_t>(args[0].getNumber());
+        if (id == _layoutCacheId) return Value::undefined(); // never destroy default
+        _instances.erase(id);
+        _instanceCacheJSI.erase(id);
+        _instanceListLayoutJSI.erase(id);
+        _instanceMasonryLayoutJSI.erase(id);
+        _instanceGridLayoutJSI.erase(id);
+        _instanceFlowLayoutJSI.erase(id);
+        _instanceCompositionalLayoutJSI.erase(id);
+        unregisterLayoutCache(id);
+        return Value::undefined();
+      });
+  }
+
+  // layoutCacheById(id) → cache JSI object (same API as nativeMod.layoutCache)
+  if (prop == "layoutCacheById") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "layoutCacheById"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        int32_t id = (count > 0 && args[0].isNumber())
+            ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+        auto it = _instances.find(id);
+        if (it == _instances.end()) return getLayoutCacheObject(rt); // fallback
+        auto& jsiOpt = _instanceCacheJSI[id];
+        if (!jsiOpt.has_value()) {
+          Object obj(rt);
+          it->second.cache->installJSIBindings(rt, obj);
+          jsiOpt = std::move(obj);
+        }
+        return Value(rt, *jsiOpt);
+      });
+  }
+
+  // getListLayoutById(id) → listLayout JSI object
+  if (prop == "getListLayoutById") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "getListLayoutById"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        int32_t id = (count > 0 && args[0].isNumber())
+            ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+        auto it = _instances.find(id);
+        if (it == _instances.end()) return getListLayoutObject(rt);
+        auto& jsiOpt = _instanceListLayoutJSI[id];
+        if (!jsiOpt.has_value()) {
+          Object obj(rt);
+          it->second.listLayout->installJSIBindings(rt, obj);
+          jsiOpt = std::move(obj);
+        }
+        return Value(rt, *jsiOpt);
+      });
+  }
+
+  // getMasonryLayoutById(id) → masonryLayout JSI object
+  if (prop == "getMasonryLayoutById") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "getMasonryLayoutById"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        int32_t id = (count > 0 && args[0].isNumber())
+            ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+        auto it = _instances.find(id);
+        if (it == _instances.end()) return getMasonryLayoutObject(rt);
+        auto& jsiOpt = _instanceMasonryLayoutJSI[id];
+        if (!jsiOpt.has_value()) {
+          Object obj(rt);
+          it->second.masonryLayout->installJSIBindings(rt, obj);
+          jsiOpt = std::move(obj);
+        }
+        return Value(rt, *jsiOpt);
+      });
+  }
+
+  // getGridLayoutById(id) → gridLayout JSI object
+  if (prop == "getGridLayoutById") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "getGridLayoutById"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        int32_t id = (count > 0 && args[0].isNumber())
+            ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+        auto it = _instances.find(id);
+        if (it == _instances.end()) return getGridLayoutObject(rt);
+        auto& jsiOpt = _instanceGridLayoutJSI[id];
+        if (!jsiOpt.has_value()) {
+          Object obj(rt);
+          it->second.gridLayout->installJSIBindings(rt, obj);
+          jsiOpt = std::move(obj);
+        }
+        return Value(rt, *jsiOpt);
+      });
+  }
+
+  // getFlowLayoutById(id) → flowLayout JSI object
+  if (prop == "getFlowLayoutById") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "getFlowLayoutById"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        int32_t id = (count > 0 && args[0].isNumber())
+            ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+        auto it = _instances.find(id);
+        if (it == _instances.end()) return getFlowLayoutObject(rt);
+        auto& jsiOpt = _instanceFlowLayoutJSI[id];
+        if (!jsiOpt.has_value()) {
+          Object obj(rt);
+          it->second.flowLayout->installJSIBindings(rt, obj);
+          jsiOpt = std::move(obj);
+        }
+        return Value(rt, *jsiOpt);
+      });
+  }
+
+  // getCompositionalLayoutById(id) → compositionalLayout JSI object
+  if (prop == "getCompositionalLayoutById") {
+    return Function::createFromHostFunction(rt,
+      PropNameID::forAscii(rt, "getCompositionalLayoutById"), 1,
+      [this](Runtime& rt, const Value&, const Value* args, size_t count) -> Value {
+        int32_t id = (count > 0 && args[0].isNumber())
+            ? static_cast<int32_t>(args[0].getNumber()) : _layoutCacheId;
+        auto it = _instances.find(id);
+        if (it == _instances.end()) return getCompositionalLayoutObject(rt);
+        auto& jsiOpt = _instanceCompositionalLayoutJSI[id];
+        if (!jsiOpt.has_value()) {
+          Object obj(rt);
+          it->second.compositionalLayout->installJSIBindings(rt, obj);
+          jsiOpt = std::move(obj);
+        }
+        return Value(rt, *jsiOpt);
+      });
+  }
 
   // scrollTo(cacheId, x, y, animated) — triggers programmatic scroll on the
   // native container view via the scroll handler registry.

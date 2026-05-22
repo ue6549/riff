@@ -10,8 +10,8 @@
  * All queries go through the LayoutCache so ShadowNode corrections are immediately visible.
  *
  * Standard JSI contract (mirrors GridLayout):
- *   nativeMod.masonryLayout.computeSections(sections[])       → void
- *   nativeMod.masonryLayout.invalidateSectionsFrom(n, [])     → void
+ *   this._masonryEngine.computeSections(sections[])       → void
+ *   this._masonryEngine.invalidateSectionsFrom(n, [])     → void
  *
  * ─── STABLE KEY RULE (enforce in every layout engine) ────────────────────────
  * One key per item, used identically in ALL three places:
@@ -44,7 +44,18 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     setHorizontal(horizontal: boolean): void;
     clear(): void;
   };
+  layoutCacheById(id: number): {
+    getAttributesInRect(rect: { x: number; y: number; width: number; height: number }): LayoutAttributes[];
+    getAttributes(key: string): LayoutAttributes | null;
+    getTotalContentSize(): Size;
+    setHorizontal(horizontal: boolean): void;
+    clear(): void;
+  };
   masonryLayout: {
+    computeSections(sections: object[]): void;
+    invalidateSectionsFrom(fromSection: number, sections: object[]): void;
+  };
+  getMasonryLayoutById(id: number): {
     computeSections(sections: object[]): void;
     invalidateSectionsFrom(fromSection: number, sections: object[]): void;
   };
@@ -55,6 +66,8 @@ class MasonryLayoutEngine implements CollectionViewLayout {
   readonly horizontal: boolean;
   readonly delegate: MasonryLayoutDelegate;
   private lastSectionKeys: (readonly string[])[] = [];
+  private _cache = nativeMod.layoutCache;
+  private _masonryEngine = nativeMod.masonryLayout;
 
   constructor(delegate: MasonryLayoutDelegate) {
     this.delegate = delegate;
@@ -62,14 +75,15 @@ class MasonryLayoutEngine implements CollectionViewLayout {
   }
 
   prepare(context: LayoutContext): void {
+    this._cache        = nativeMod.layoutCacheById(context.cacheId);
+    this._masonryEngine = nativeMod.getMasonryLayoutById(context.cacheId);
     const d = this.delegate;
     const H = this.horizontal;
     const w = context.containerWidth;
 
     if (w <= 0 || context.sections.length === 0) return;
 
-    // Inform LayoutCache of scroll axis for MVC anchor computation.
-    nativeMod.layoutCache.setHorizontal(H);
+    this._cache.setHorizontal(H);
 
     const effectiveColumns = typeof d.columns === 'function' ? d.columns(w) : d.columns;
 
@@ -143,11 +157,11 @@ class MasonryLayoutEngine implements CollectionViewLayout {
     });
 
     this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
-    nativeMod.masonryLayout.computeSections(sections);
+    this._masonryEngine.computeSections(sections);
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    return nativeMod.layoutCache.getAttributesInRect(inRect);
+    return this._cache.getAttributesInRect(inRect);
   }
 
   cacheKeyForItem(index: number, section: number): string {
@@ -159,15 +173,15 @@ class MasonryLayoutEngine implements CollectionViewLayout {
   }
 
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
+    return this._cache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
+    return this._cache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {
-    return nativeMod.layoutCache.getTotalContentSize();
+    return this._cache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {

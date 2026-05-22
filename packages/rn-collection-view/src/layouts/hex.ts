@@ -31,6 +31,11 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     setAttributesBatch(batch: object[]): void;
     getAttributes(key: string): LayoutAttributes | null;
   };
+  layoutCacheById(id: number): {
+    setAttributes(attrs: object): void;
+    setAttributesBatch(batch: object[]): void;
+    getAttributes(key: string): LayoutAttributes | null;
+  };
 };
 
 export interface HexOptions {
@@ -53,6 +58,7 @@ class HexLayout implements CollectionViewLayout {
   private ctx: LayoutContext | null = null;
   private itemKeys: string[] = [];
   private _contentSize: Size = { width: 0, height: 0 };
+  private _cache = nativeMod.layoutCache;
 
   constructor(opts: HexOptions) {
     this.opts = {
@@ -64,6 +70,7 @@ class HexLayout implements CollectionViewLayout {
   }
 
   prepare(context: LayoutContext): void {
+    this._cache = nativeMod.layoutCacheById(context.cacheId);
     this.ctx = context;
     const sec = context.sections[0];
     if (!sec) {
@@ -110,7 +117,7 @@ class HexLayout implements CollectionViewLayout {
       };
     }
 
-    nativeMod.layoutCache.setAttributesBatch(batch);
+    this._cache.setAttributesBatch(batch);
     this._contentSize = { width: cw, height: maxBottom + this.opts.paddingY };
   }
 
@@ -119,7 +126,7 @@ class HexLayout implements CollectionViewLayout {
   attributesForElements(_inRect: Rect): LayoutAttributes[] {
     const result: LayoutAttributes[] = [];
     for (let i = 0; i < this.itemKeys.length; i++) {
-      const a = nativeMod.layoutCache.getAttributes(this.itemKeys[i]);
+      const a = this._cache.getAttributes(this.itemKeys[i]);
       if (a) result.push(a);
     }
     return result;
@@ -127,7 +134,7 @@ class HexLayout implements CollectionViewLayout {
 
   attributesForItem(index: number, _section: number): LayoutAttributes | null {
     const k = this.itemKeys[index];
-    return k ? nativeMod.layoutCache.getAttributes(k) : null;
+    return k ? this._cache.getAttributes(k) : null;
   }
 
   attributesForSupplementary(_kind: string, _section: number): LayoutAttributes | null {

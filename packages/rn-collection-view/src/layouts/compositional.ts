@@ -49,12 +49,23 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     getTotalContentSize(): Size;
     setHorizontal(horizontal: boolean): void;
     clear(): void;
-    /** Stash API: save primary-axis size for every Measured entry. Call before clear(). */
     stashHeights(): void;
-    /** Stash API: release stash memory. Call after computeSections(). */
+    clearStash(): void;
+  };
+  layoutCacheById(id: number): {
+    getAttributesInRect(rect: { x: number; y: number; width: number; height: number }): LayoutAttributes[];
+    getAttributes(key: string): LayoutAttributes | null;
+    getTotalContentSize(): Size;
+    setHorizontal(horizontal: boolean): void;
+    clear(): void;
+    stashHeights(): void;
     clearStash(): void;
   };
   compositionalLayout: {
+    computeSections(sections: object[]): void;
+    invalidateSectionsFrom(fromSection: number, sections: object[]): void;
+  };
+  getCompositionalLayoutById(id: number): {
     computeSections(sections: object[]): void;
     invalidateSectionsFrom(fromSection: number, sections: object[]): void;
   };
@@ -452,6 +463,9 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
   private hSectionMetaArr: (HSectionMeta | null)[] = [];
   /** Fingerprint of the last prepare() call — skip redundant computeSections. */
   private _lastFingerprint = '';
+  // B4.9: Per-instance cache + engine (set in prepare() via context.cacheId).
+  private _cache = nativeMod.layoutCache;
+  private _compEngine = nativeMod.compositionalLayout;
 
   constructor(entries: CompositionalEntry[]) {
     this.entries = entries;
@@ -482,7 +496,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     if (!cached) return null;
     // Read wrapper Y and height from LayoutCache — always reflects latest
     // applyMeasurements / invalidateSectionsFrom reflows (avoids stale sectionY).
-    const wrapperAttrs = nativeMod.layoutCache.getAttributes(`h-section-wrapper-${sectionIndex}`);
+    const wrapperAttrs = this._cache.getAttributes(`h-section-wrapper-${sectionIndex}`);
     if (wrapperAttrs) {
       return {
         ...cached,
@@ -512,6 +526,8 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
   }
 
   prepare(context: LayoutContext): void {
+    this._cache      = nativeMod.layoutCacheById(context.cacheId);
+    this._compEngine = nativeMod.getCompositionalLayoutById(context.cacheId);
     const w = context.containerWidth;
     const h = context.containerHeight;
     if (w <= 0 || context.sections.length === 0) return;
@@ -531,10 +547,10 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     }
     this._lastFingerprint = fingerprint;
 
-    nativeMod.layoutCache.setHorizontal(false);
+    this._cache.setHorizontal(false);
 
     // Stash Yoga-measured sizes before cache clear (computeSections clears).
-    nativeMod.layoutCache.stashHeights();
+    this._cache.stashHeights();
 
     this.sectionTypes = [];
     let runningFlatBase = 0;
@@ -637,23 +653,23 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     });
 
     this.lastSectionKeys = context.sections.map(s => s.itemKeys ?? []);
-    nativeMod.compositionalLayout.computeSections(sections);
-    nativeMod.layoutCache.clearStash();
+    this._compEngine.computeSections(sections);
+    this._cache.clearStash();
 
     // After computeSections(), populate H-section metadata from LayoutCache.
     // C++ wrote "h-section-wrapper-{sIdx}" and "h-section-cw-{sIdx}" entries.
     this.hSectionMetaArr = context.sections.map((sec, sIdx) => {
       if (!this.isHSection(sIdx)) return null;
       const prefix = this.keyPrefixForSection(sIdx);
-      const wrapperAttrs = nativeMod.layoutCache.getAttributes(`h-section-wrapper-${sIdx}`);
-      const cwAttrs      = nativeMod.layoutCache.getAttributes(`h-section-cw-${sIdx}`);
+      const wrapperAttrs = this._cache.getAttributes(`h-section-wrapper-${sIdx}`);
+      const cwAttrs      = this._cache.getAttributes(`h-section-cw-${sIdx}`);
 
       // Fallback: scan last item for content width if cw entry is missing.
       let contentWidth = cwAttrs?.frame.width ?? 0;
       if (contentWidth <= 0 && sec.itemCount > 0) {
         const lastKey = sec.itemKeys?.[sec.itemCount - 1]
           ?? `${prefix}-${sIdx}-${sec.itemCount - 1}`;
-        const lastItem = nativeMod.layoutCache.getAttributes(lastKey);
+        const lastItem = this._cache.getAttributes(lastKey);
         if (lastItem) contentWidth = lastItem.frame.x + lastItem.frame.width;
       }
 
@@ -676,7 +692,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
   }
 
   attributesForElements(inRect: Rect): LayoutAttributes[] {
-    return nativeMod.layoutCache.getAttributesInRect(inRect);
+    return this._cache.getAttributesInRect(inRect);
   }
 
   cacheKeyForItem(index: number, section: number): string {
@@ -691,15 +707,15 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
   }
 
   attributesForItem(index: number, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForItem(index, section));
+    return this._cache.getAttributes(this.cacheKeyForItem(index, section));
   }
 
   attributesForSupplementary(kind: string, section: number): LayoutAttributes | null {
-    return nativeMod.layoutCache.getAttributes(this.cacheKeyForSupplementary(kind, section));
+    return this._cache.getAttributes(this.cacheKeyForSupplementary(kind, section));
   }
 
   contentSize(): Size {
-    return nativeMod.layoutCache.getTotalContentSize();
+    return this._cache.getTotalContentSize();
   }
 
   shouldInvalidate(oldBounds: Rect, newBounds: Rect): boolean {

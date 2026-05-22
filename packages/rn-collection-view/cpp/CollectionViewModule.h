@@ -162,6 +162,26 @@ private:
   };
   LastScrollResult _lastScrollResult;
 
+  // B4.9: Per-instance data. One entry per CollectionView instance.
+  // The default instance (_layoutCacheId) mirrors the legacy singleton objects.
+  struct PerInstanceData {
+    std::shared_ptr<rncv::LayoutCache>         cache;
+    std::shared_ptr<rncv::ListLayout>          listLayout;
+    std::shared_ptr<rncv::MasonryLayout>       masonryLayout;
+    std::shared_ptr<rncv::GridLayout>          gridLayout;
+    std::shared_ptr<rncv::FlowLayout>          flowLayout;
+    std::shared_ptr<rncv::CompositionalLayout> compositionalLayout;
+    LastScrollResult                           lastScrollResult;
+    std::unordered_map<int, HScrollState>      hScrollStates;
+  };
+  std::unordered_map<int32_t, PerInstanceData>            _instances;
+  std::unordered_map<int32_t, std::optional<jsi::Object>> _instanceCacheJSI;
+  std::unordered_map<int32_t, std::optional<jsi::Object>> _instanceListLayoutJSI;
+  std::unordered_map<int32_t, std::optional<jsi::Object>> _instanceMasonryLayoutJSI;
+  std::unordered_map<int32_t, std::optional<jsi::Object>> _instanceGridLayoutJSI;
+  std::unordered_map<int32_t, std::optional<jsi::Object>> _instanceFlowLayoutJSI;
+  std::unordered_map<int32_t, std::optional<jsi::Object>> _instanceCompositionalLayoutJSI;
+
   // Called when JS invokes windowController.attachScrollView(tag).
   std::function<void(int)> _attachScrollViewCallback;
 

@@ -28,6 +28,11 @@ const nativeMod = NativeCollectionViewModule as unknown as {
     setAttributesBatch(batch: object[]): void;
     getAttributes(key: string): LayoutAttributes | null;
   };
+  layoutCacheById(id: number): {
+    setAttributes(attrs: object): void;
+    setAttributesBatch(batch: object[]): void;
+    getAttributes(key: string): LayoutAttributes | null;
+  };
 };
 
 export interface SpiralOptions {
@@ -67,6 +72,7 @@ function scaleMatrix(s: number): readonly number[] {
 class SpiralLayout implements CollectionViewLayout {
   readonly type = 'spiral';
   readonly horizontal = false;
+  private _cache = nativeMod.layoutCache;
   readonly needsSpatialQuery = false;
 
   private readonly opts: Required<SpiralOptions>;
@@ -87,6 +93,7 @@ class SpiralLayout implements CollectionViewLayout {
   }
 
   prepare(context: LayoutContext): void {
+    this._cache = nativeMod.layoutCacheById(context.cacheId);
     this.ctx = context;
     const sec = context.sections[0];
     if (!sec) {
@@ -143,13 +150,13 @@ class SpiralLayout implements CollectionViewLayout {
         transform3D: scaleMatrix(scale),
       };
     }
-    nativeMod.layoutCache.setAttributesBatch(batch);
+    this._cache.setAttributesBatch(batch);
   }
 
   attributesForElements(_inRect: Rect): LayoutAttributes[] {
     const result: LayoutAttributes[] = [];
     for (let i = 0; i < this.itemKeys.length; i++) {
-      const a = nativeMod.layoutCache.getAttributes(this.itemKeys[i]);
+      const a = this._cache.getAttributes(this.itemKeys[i]);
       if (a) result.push(a);
     }
     return result;
@@ -157,7 +164,7 @@ class SpiralLayout implements CollectionViewLayout {
 
   attributesForItem(index: number, _section: number): LayoutAttributes | null {
     const k = this.itemKeys[index];
-    return k ? nativeMod.layoutCache.getAttributes(k) : null;
+    return k ? this._cache.getAttributes(k) : null;
   }
 
   attributesForSupplementary(_kind: string, _section: number): LayoutAttributes | null {
