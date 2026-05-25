@@ -10,7 +10,7 @@
  */
 import React, {useState} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
-import RNCollectionViewContainer from '../components/RNCollectionViewContainerNativeComponent';
+import RNCollectionViewContainer from '@riff/specs/RNCollectionViewContainerNativeComponent';
 
 const COLORS = [
   '#e63946',

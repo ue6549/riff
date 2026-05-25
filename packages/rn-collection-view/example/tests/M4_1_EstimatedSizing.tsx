@@ -29,7 +29,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Riff } from '../components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
 
 // ─── Dataset ──────────────────────────────────────────────────────────────────
 

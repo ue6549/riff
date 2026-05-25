@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, Animated, Easing } from 'react-native';
-import { Riff as CollectionView, type RiffHandle } from '../../components/CollectionView';
+import { Riff as CollectionView, type RiffHandle } from '@riff/components/CollectionView';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { masonry } from '@riff/layouts/masonry';

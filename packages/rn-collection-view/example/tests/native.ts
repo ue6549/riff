@@ -3,7 +3,7 @@
  * Import `native` in every test screen instead of casting inline.
  */
 import type { LayoutAttributes, Rect, Size } from '@riff/types';
-import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
+import NativeCollectionViewModule from '@riff/specs/NativeCollectionViewModule';
 
 type NativeModule = {
   ping(): string;

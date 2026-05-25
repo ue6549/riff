@@ -13,7 +13,7 @@ declare const performance: { now(): number };
  *   · invalidateSectionsFrom(5) reflows sections 5–9 from the correct Y
  */
 import React, { useEffect, useState } from 'react';
-import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
+import NativeCollectionViewModule from '@riff/specs/NativeCollectionViewModule';
 import { TestResult, TestScreen } from './shared';
 
 // ─── Native types ──────────────────────────────────────────────────────────────

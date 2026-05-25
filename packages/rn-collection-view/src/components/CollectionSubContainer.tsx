@@ -29,9 +29,9 @@
 import * as React from 'react';
 import { View, type LayoutChangeEvent, type NativeSyntheticEvent } from 'react-native';
 
-import RNCollectionSubContainer from './RNCollectionSubContainerNativeComponent';
-import RNMeasuredCell from './RNMeasuredCellNativeComponent';
-import NativeCollectionViewModule from './NativeCollectionViewModule';
+import RNCollectionSubContainer from '../specs/RNCollectionSubContainerNativeComponent';
+import RNMeasuredCell from '../specs/RNMeasuredCellNativeComponent';
+import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
 import type {
   RiffLayout,
   LayoutContext,

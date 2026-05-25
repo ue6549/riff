@@ -23,7 +23,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Riff, RiffHandle } from '../components/CollectionView';
+import { Riff, RiffHandle } from '@riff/components/CollectionView';
 
 // ─── Data ────────────────────────────────────────────────────────────────────
 

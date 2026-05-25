@@ -57,15 +57,15 @@ const Activity = (React as any).Activity as
   | React.ComponentType<{ mode: 'visible' | 'hidden'; children: React.ReactNode }>
   | undefined;
 
-import NativeCollectionViewModule from './NativeCollectionViewModule';
-import RNMeasuredCell from './RNMeasuredCellNativeComponent';
-import RNScrollCoordinatedView from './RNScrollCoordinatedViewNativeComponent';
-import RNCollectionViewContainer from './RNCollectionViewContainerNativeComponent';
+import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
+import RNMeasuredCell from '../specs/RNMeasuredCellNativeComponent';
+import RNScrollCoordinatedView from '../specs/RNScrollCoordinatedViewNativeComponent';
+import RNCollectionViewContainer from '../specs/RNCollectionViewContainerNativeComponent';
 // H-2: replaced by RNCollectionSubContainer (generic native sub-container with
 // internal UIScrollView and native frame/transform application). Old wrapper
 // kept available behind the flag for fallback debugging only.
-import RNOrthogonalSectionView from './RNOrthogonalSectionNativeComponent';
-import RNCollectionSubContainer from './RNCollectionSubContainerNativeComponent';
+import RNOrthogonalSectionView from '../specs/RNOrthogonalSectionNativeComponent';
+import RNCollectionSubContainer from '../specs/RNCollectionSubContainerNativeComponent';
 import type { HSectionMeta } from '@riff/layouts/compositional';
 import { RiffSnapshot } from './CollectionSnapshot';
 import { SlotManager } from './SlotManager';

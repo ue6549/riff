@@ -13,9 +13,8 @@ export * from './types';
 export { LayoutCache, layoutCache } from './LayoutCache';
 
 // M2.1: CollectionView component
-// NOTE: During POC development the component lives in example/components/
-// (avoids dual-React-instance crash from the package's own node_modules/react).
-// Will re-export from here once the monorepo uses workspace-hoisted React.
+export { Riff } from './components/CollectionView';
+export type { RiffProps, RiffHandle } from './components/CollectionView';
 
 // Custom layout plugin interface (legacy — use protocol types for new code)
 export type { CustomLayoutPlugin, LayoutPluginContext } from './types/plugin';
@@ -37,8 +36,6 @@ export type {
   RiffCustomConfig,
   RiffSupplementary,
   RiffSection,
-  // Riff component API types (RiffProps / RiffHandle live in example/components/CollectionView.tsx
-  // until the dual-React-instance constraint is lifted and the component moves to src/)
   RiffRenderItemInfo,
   RiffScrollOptions,
   RiffScrollOffsetOptions,
