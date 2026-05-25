@@ -1,8 +1,24 @@
 # Riff — Consolidated Backlog
 
 > Single source of truth for all remaining work. Replaces cursor-plan.md, ethereal-seeking-willow.md, PERF-PLAN.md, and perf-opti-claude.md (archived in `docs/archived-plans/`).
->
-> Priority ordering: B0 (bugs) > B1 (architecture) > B2 (features) > B3 (API) > B4 (perf) > B5 (docs) > B6 (state) > B7 (polish) > B8 (testing) > B9 (platform)
+
+---
+
+## Execution Order
+
+| # | Item | Est | Notes |
+|---|------|-----|-------|
+| 1 | **B1.5b** Re-render burst — H-MVC version isolation | 0.5d | ✅ DONE |
+| 2 | **B1.3** MVC semantics for H sections | 1d | ✅ DONE — snapshotHAnchor now layout-agnostic (list/grid/masonry/flow) |
+| 3 | **B2.5** Interludes — `splitInterludes` API | 1.5d | ✅ DONE — `src/layouts/interludes.ts`; `splitInterludes(primary, interludes)` → `{ sections, layout }` |
+| 3b | **B0.4.4** H scroll vertical bounce | 0.5d | ✅ DONE — `updateState:` syncs `frame.size.height = contentSize.height` for H sections; `_applyOrDeferScrollViewFrame` clamps height to max(bounds, contentSize) |
+| 4 | **P6.2** Device measurement session | — | ✅ DONE — `docs/BENCHMARKS.md`; Search fast-scroll: Riff 59 FPS vs Flash 37–38; HP: tied FPS, Riff 2× lower CPU + ~27 MB lower memory; Storefront: broadly even |
+| 5 | **B3.1** API review | 1–2d | ✅ DONE (rename pass) — all public types Riff-prefixed (RiffLayout, RiffSection, RiffListConfig, etc.); handle→ref via forwardRef; renderItem → RiffRenderItemInfo<T>. Remaining: ScrollView callback surface, deprecated prop cleanup, renderSectionHeader missing prop |
+| 7 | **JS layouts audit** | 1d | Review Radial/Carousel/Spiral/Hex implementations: layout math stays in JS, but verify they wire through the core C++ engine (LayoutCache, ShadowNode positioning) correctly rather than going around it. Fix any bypasses found. B4.10 (scrollTo for these tabs) folds in here. |
+| 8 | **B2.6** Snap behaviors (H-6) | 1d | UIKit paging/groupPaging on H sections; FlashList has no equivalent |
+| 9 | **B5.2** Shareable artifacts — round 1 | 1d | README, benchmarks doc, FlashList comparison matrix (needs P6.2 numbers) |
+| 10 | **B2.2 + B2.1** Snapshot API + C++ diff engine | 2d | NSDiffableDataSource-style mutation API + off-thread key diff |
+| 11 | Post-POC items | — | See section below |
 
 ---
 
@@ -61,6 +77,14 @@ naturally, producing the waterfall height variance.
    `contentSize.height` inflated after deletes.
 3. **Delayed resize.** Fixed by B0.2 Yoga-hash fix — shouldSkipCorrection no longer skips on
    content-only changes. ✅ FIXED.
+4. **H scroll vertical bounce during measurement convergence.** ✅ FIXED — `alwaysBounceVertical=NO`
+   suppresses bounce only when `contentSize.height <= frame.height`. During cell measurement, the
+   ShadowNode state commit updates `contentSize.height` before the parent Fabric commit propagates
+   the updated wrapper frame, opening a temporary window where UIKit allows vertical scrolling.
+   Fix in `RNCollectionSubContainerView.mm`: in `updateState:`, when `contentSize.height` changes
+   for H sections, also sync `_scrollView.frame.size.height = cs.height` immediately. In
+   `_applyOrDeferScrollViewFrame`, clamp `targetFrame.size.height = max(bounds.height, contentSize.height)`
+   so `layoutSubviews` can't shrink the frame back below contentSize height between commits.
 
 ### B0.5 S6 "Control" section — clarify purpose ✅ FIXED
 
@@ -93,16 +117,9 @@ on first render. With drift eliminated, also removed:
 
 **Effort:** ~3d total
 
-### B1.3 MVC semantics for non-list H sections (design TBD)
+### B1.3 MVC semantics for H sections ✅ FIXED
 
-MVC in H sections is only well-defined for H-list (linearly ordered items — all shift by new-item width on insert). For H-grid, masonry, and flow, inserts cause items to shift across rows/columns, making a single "anchor shift" correction semantically ambiguous.
-
-**Define what MVC should mean for each:**
-- **H-grid**: A `+top` insert shifts all items by one slot; existing items may cross row boundaries. Correction = how much the anchor item's X changed (deterministic for full-row-shift inserts, ambiguous for partial). Likely want to correct by one item-width if inserting into the leading row, zero otherwise.
-- **H-masonry**: Items are assigned to shortest column; any insert scrambles the column map. Correction is not well-defined. Suggestion: don't correct (accept the jump) or re-anchor to nearest item at old X.
-- **H-flow**: Items flow left-to-right; insert at top shifts all items by one item's width along the primary axis (similar to H-list if items are uniform). May be correctable with the same anchor-delta approach as H-list.
-
-**Current state:** H-list MVC fix applied (B1.3 fix). H-grid/masonry/flow MVC deferred.
+**Fixed:** `snapshotHAnchor` in the `prepare` useMemo was gated on `hSectionTypes?.[sIdx] === 'list'`, excluding grid/masonry/flow. The correction mechanism (`snapshotHAnchor` → `computeHCorrection` in native `updateState`) is layout-agnostic — it records the first-visible item key + X before `prepare()`, then reads the item's new X from the cache after `applyMeasurements` and applies the delta to the H scroll view. Removed the type guard; correction now fires for all H layouts.
 
 ---
 
@@ -187,21 +204,56 @@ row positions for subsequent items.
 **Expected result:** `vLCV` drops from ~70 per scroll to ~initial measurement count (~cold mounts
 only). Stutter in masonry/flow sections eliminated.
 
-### B1.5 Sub-container owns its own LayoutCache slice
+### B1.5 Sub-container owns its own LayoutCache slice ⚠️ ATTEMPTED — PARKED
 
-Currently the shared main LayoutCache holds both V section items and H section items (H items at section-local X coords). The sub-container ShadowNode reads the main cache filtered by section index.
+**Status:** Implemented and partially working on branch `fix/b0-h-section-wrapper-stale`, then reverted (2026-05-23). Root issues not fully resolved; complexity growing faster than confidence.
 
-**Proposed design:** CompositionalLayout writes H items to a per-section sub-cache instead of the main cache. The sub-container's ShadowNode and native view use that sub-cache for all operations.
+**What was done:**
+- Per-section sub-caches allocated by `CompositionalLayout` JS engine; H items written there instead of main cache.
+- New `mainCacheId` / `sectionLayoutType` props wired through `RNCollectionSubContainer`.
+- `CollectionSubContainerShadowNode` updated to read from sub-cache and call leaf engine's `applyMeasurements`.
+- `injectMeasuredDimensionsIfNeeded` updated to read H-cell widths from sub-cache.
+- Stash/clear sequencing for sub-cache added in `computeOneSection`.
 
-**What this unlocks:**
-- `snapshotAnchor()`/`computeCorrection()` on the sub-cache work directly — same code path as standalone H. `snapshotHAnchor`/`computeHCorrection` become unnecessary.
-- MVC for H-grid, H-masonry, H-flow (B1.3) falls out naturally — no more per-type guards or duck-typing of `sectionTypes`.
-- Cleaner isolation: stash, clear, and version operations are fully section-scoped.
-- Eliminates the `sectionTypes` duck-type check in JS prepare() MVC logic.
+**Why parked:** Two persistent bugs could not be stabilised in acceptable complexity:
+1. **Full-screen-wide cells** — Placeholder H cells injected at initial `p.itemHeight` estimate constrained Yoga, blocking natural width discovery. Fix (inject only for Measured in free-width sections) added a masonry/flow carve-out, and the `std::optional` vs pointer issue in the injection check was a compile error. Fixable but multiplying carve-outs.
+2. **Oscillation / shifting sizes** — sub-cache cleared without stashing measured widths on every `computeSections` call. Fix (`stashMeasuredSizes` before `clear`) is correct in isolation but revealed that the stash/injection interaction had deeper timing issues.
 
-**Cost:** ~1.5–2d refactor. Layout engines currently take a single `LayoutCache*`; they'd need to dispatch writes to the correct cache. Version coordination between main and sub-caches needed.
+**Original motivation:** H scroll `applyMeasurements` writes to the main cache → bumps `cache->version()` → `shouldSkipCorrection()` sees a bump for ALL sub-containers → all re-run their O(N) hash check → potentially triggers redundant layout cascade.
 
-**Priority:** Do after B1.1 and B1.2. Prerequisite for properly resolving B1.3.
+**Lighter-weight alternatives for the version-burst problem (see B1.5b below).**
+
+**Re-attempt when:** B1.3 (H-grid/masonry/flow MVC semantics) is prioritised AND there is dedicated time to handle sub-cache stash lifecycle end-to-end.
+
+### B1.5b H-MVC version isolation (lightweight alternative to B1.5)
+
+**Problem being solved:** H section `applyMeasurements` during scroll bumps the shared main cache version. All V sub-containers see the bump in `shouldSkipCorrection()` and re-run their Yoga-frame hash check even though no V item moved.
+
+**Proposed fix (30–40 lines):**
+- Add `uint64_t _hMvcVersion` to `LayoutCache`, exposed as `hMvcVersion()`.
+- `CollectionSubContainerShadowNode`: when section is H, wrap `applyMeasurements` call with `cache->beginHBatch()` / `cache->endHBatch()` — these bump `_hMvcVersion` but NOT `_version`.
+- `shouldSkipCorrection()` for H sub-containers checks `_hMvcVersion`; for V sub-containers checks `_version` only.
+
+**Why this is legitimate:**
+- V sub-containers genuinely do not care when H item positions shift. Their children live in V coordinate space; H item frames in the shared cache are irrelevant to them.
+- Zero sub-cache complexity — no stash lifecycle, no injection changes, no new props.
+- The `beginBatch`/`endBatch` pattern already exists; `endHBatch` is a 3-line variant.
+
+**Estimated cost:** ~0.5d. **Priority:** medium; only measurable benefit when there are many V sections alongside busy H sections.
+
+### B1.9 Precise Activity=hidden detection via forwarded prop (guards in delta loops)
+
+**Problem — current state:** Both `CollectionSubContainerShadowNode` and `CollectionViewContainerShadowNode` detect Activity=hidden via dimension proxies (`yogaHeight == 0`). This works because:
+- For H cells: cross-axis height is always > 0 when rendered; only Activity=hidden collapses it to 0.
+- For V cells: `display:none` collapses all Yoga dims to 0.
+
+The proxy is reliable today but not semantically precise. `displayType == DisplayType::None` does NOT work — Activity=hidden sets `display:none` on the Activity ancestor ShadowNode, not on the cell's own ShadowNode. The cell's own `displayType` stays `Inline`.
+
+**Proper fix:** Add `isHidden: Bool` to the `RNMeasuredCell` codegen spec. In `CollectionView.tsx`, pass `isHidden={mode === 'hidden'}` from the `CellWrapper` to the `RNMeasuredCell` prop. In C++, read `cellProps.isHidden` directly instead of any dimension proxy. This is the cleanest, intent-explicit approach.
+
+**Scope:** Codegen spec change → pod install; C++ changes in both container ShadowNodes; JS wiring in `renderCell`.
+
+**Estimated cost:** ~0.5d. **Priority:** low — current proxies are reliable, this is a correctness and future-proofing improvement.
 
 ### B1.4 Decouple measureAhead from isVariableHeight ✅ FIXED
 
@@ -237,11 +289,17 @@ Per-item animation types (fade, slide, custom). Interruptible spring physics. Co
 
 **Effort:** ~2d
 
-### B2.5 F3.6: Interludes
+### B2.5 F3.6: Interludes ✅ DONE
 
-`{ primary, interludes }` API shape — one flat feed + special sections anchored by key/index. Pure JS splitter on top of existing compositional engine. No native changes. See PLAN.md F3.6 for full spec.
+**Fixed:** `src/layouts/interludes.ts` exports `splitInterludes(primary, interludes)` → `{ sections, layout }`.
+Pure JS splitter on top of the existing compositional engine — no native changes.
+Anchors: `{ afterKey }` (tracks item identity across mutations), `{ afterIndex }`, `{ atKey: 'top'|'bottom' }`.
+Multiple interludes at the same anchor are stacked in declaration order.
+Wrap in `useMemo` with data arrays as deps; the resulting `layout` object is created fresh each call
+but `stashHeights()` in `prepare()` preserves Yoga-measured sizes across recreations.
 
-**Effort:** ~1.5d
+**Limitation:** all primary chunks share the same layout config, header, and footer from `PrimaryConfig`.
+For per-chunk variation, use the explicit `compositional([...])` API directly.
 
 ### B2.6 H-6: Snap behaviors
 
@@ -437,6 +495,31 @@ Replace JSON with FlatBuffers. Zero-copy mmap hydration. 10k items: serialize < 
 
 ## B7 — Layout Polish
 
+### B7.0a Suppress range recalculation and cell eviction during overscroll bounce
+
+**Problem:** During overscroll/rubber-band bounce, the scroll offset changes beyond the content bounds. This triggers H/V render-range recalculation, which can evict cells currently in the window (because the range contracts at the bounce edge). Any loading indicator or content in the overscroll region can mount, but cells already in the render window should not be evicted — they're still visible.
+
+**Desired behavior:** During a bounce, only EXPAND the render range (allow new cells to enter if the range grows), never shrink it. On snap-back, normal range logic resumes.
+
+**Scope:** H render range in compositional layouts confirmed affected. V layouts and standalone H layouts likely same behavior — needs verification.
+
+**Signal:** Detect bounce via `scrollViewDidEndDecelerating` or by checking if content offset is outside `[0, contentSize - viewportSize]`.
+
+**Estimated cost:** ~0.5d. **Priority:** TBD — discuss after current B1.5b work is verified.
+
+### B7.0b H free-width cell measurement ceiling at vpWidth
+
+**Problem:** H free-width cells (H-list, H-grid) are measured by Yoga within the H sub-container, whose Yoga width = vpWidth. Even with the `alignSelf/alignItems: flex-start` chain on the inner wrapper, Yoga passes `YGMeasureModeAtMost(vpWidth)` to Text nodes. Cells whose content naturally needs more than vpWidth will wrap at vpWidth.
+
+The `hFreeWidthInnerStyle` fix is correct for its purpose (cells < vpWidth don't stretch to vpWidth). This is a separate ceiling issue, not a regression.
+
+**Options:**
+1. Document as known limitation: consumers should set explicit `width` on cells that need > vpWidth.
+2. Framework provides a `maxMeasureWidth` hint prop on the H sub-container that overrides the Yoga available width for cell measurement.
+3. Make H cells `position: absolute` at the React level (unconstrained Yoga measurement). Complex, likely breaks other things.
+
+**Estimated cost:** Option 1 = 0 (just docs). Option 2 = ~0.5d. **Priority:** low — real-world H-list cells are rarely wider than the screen.
+
 ### B7.1 Flow justification
 
 Leading / center / trailing / spaceBetween / spaceEvenly.
@@ -522,6 +605,39 @@ Bugs reported but not reproducible on re-test. Keep for reference in case they r
 **Hypothesis:** MVC anchor correction was under-correcting because `MasonryLayout::computeSectionFromCache` (called from `applyMeasurements`) reads item heights from the cache post-`computeSections()` fresh path (estimated), not from stash. Since all masonry items have `heightForItem: () => 100`, actual heights may equal estimates, making the error zero — which may explain why it's not reproducible once B0.3 (hardcoded heights) is fixed.
 
 **Next steps if it resurfaces:** Enable `RNCV_MVC_TRACE` logs and capture `snapshotAnchor` / `computeCorrection` output around a `+top` insert. Check whether `MasonryLayout::computeSectionFromCache` needs stash fallback (analogous to the fix applied to `ListLayout::computeSection` in this session).
+
+---
+
+## Post-POC Items
+
+Items that don't block the POC or FlashList comparison but are worth doing afterward.
+
+| Item | Est | Notes |
+|------|-----|-------|
+| **B2.3** Enter/exit cell animations | 1.5d | Fade/collapse on delete, expand on insert |
+| **B2.4** Coordinated batch animations | 2d | UIKit-parity simultaneous insert/delete/move spring animation |
+| **B3.2** Cross-section sticky headers | TBD | Design needed; single sticky spanning multiple sections |
+| **B3.3** Sub-container as public extension point | 0.5d | Document + export H-2 framework; C++ reference layout |
+| **B4.5** Transform-based cell positioning | 1d | `layer.transform` instead of `setFrame:` for position-only changes |
+| **B4.6** Flat arrays from spatial queries | 0.5d | `Float64Array` from `getAttributesInRect` — only if custom spatial layouts bottleneck |
+| **B4.7** Threading model audit | 0.5–1.5d | Verify `setContentOffset:` reaches UIKit on main thread; fix if not |
+| **B5.1** HLD + LLDs | 2.5d | Full architecture docs (LayoutCache, ShadowNode, ScrollPath, MVC, H sections) |
+| **B5.3** Contributor + optimization docs | 0.5d | Adding layouts walkthrough, Opt 1-7 reference |
+| **B6.1–B6.4** State persistence | 3.5d | JSON → FlatBuffers cache serialization + scroll position restore |
+| **B7.4** H-masonry H mode | 0.5d | All items same size in H mode; likely cross-axis sizing not reaching computeSection |
+| **B7.5** L-5/L-6 demo updates | — | H list/grid resize test in RiffDemo; supplementary model deliberation |
+| **B7.6** MVC on container resize | TBD | Keep anchor on orientation change / split view |
+| **B7.8** `apply()` removeAttributes key mismatch | trivial | Raw keyExtractor IDs vs prefixed cache keys; harmless until fingerprint-clear is removed |
+| **B7.9** Duplicate item at s[0][0] on insert/delete | TBD | Intermittent; SlotManager or LayoutAnimation edge case |
+| **B8.1** C++ unit tests | 2d | GoogleTest for all layout engines + LayoutCache |
+| **B8.2** TS layout wrapper tests | 1d | Jest for list/grid/masonry/flow |
+| **B9.1** Android port | 5d+ | CMakeLists + TurboModule Kotlin registration |
+| **B9.2** Web port | 3d+ | JS fallbacks for JSI; DOM scroll container |
+| **B7.7** Separator toggle scroll position shift | 0.5d | MVC anchor correction doesn't fully compensate for separator height delta; accept the jump for now |
+| **B1.3-masonry** MVC semantics for H-masonry | TBD | Correction not well-defined; items assigned to shortest column scramble on insert. Options: no correction or re-anchor to nearest item at old X. **Also:** revisit `setLayoutCacheVersion` guard in `CollectionView.tsx` scroll handler — current guard fires only when `effectiveLayout.contentSize()` changes. H-masonry uses per-cell explicit column-assigned widths; a width change without total contentSize change skips the JS re-render, leaving `containerStyle.width` stale. Add a per-cell width-change trigger when implementing. |
+| **B1.3-flow** MVC semantics for H-flow | 0.5d | Items flow left-to-right; same anchor-delta approach as H-list may work for uniform items. **Also:** same `setLayoutCacheVersion` guard caveat as B1.3-masonry — H-flow cells have flow-assigned explicit widths, so a reflow that changes widths without changing total contentSize would not trigger the current guard. Add a per-cell width-change trigger when implementing. |
+| **B1.5** Sub-cache isolation (reattempt) | 2.5d | Parked; re-attempt when B1.3 is done and full stash lifecycle can be handled end-to-end |
+| **B1.5a** Stable section identity for sub-cache | 0.5d | Prerequisite: B1.5 |
 
 ---
 
