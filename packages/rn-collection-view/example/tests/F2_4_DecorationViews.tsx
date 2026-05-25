@@ -18,7 +18,7 @@
  */
 import React, { useCallback } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Riff, SectionConfig } from '../components/CollectionView';
+import { Riff, RiffSection } from '../components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -35,7 +35,7 @@ const SECTION_DATA = [
 function makeSection(
   idx: number,
   info: typeof SECTION_DATA[number],
-): SectionConfig<Item> {
+): RiffSection<Item> {
   return {
     key: `sec_${idx}`,
     data: Array.from({ length: info.count }, (_, i) => ({
@@ -56,7 +56,7 @@ function makeSection(
   };
 }
 
-const SECTIONS: SectionConfig<Item>[] = SECTION_DATA.map((info, i) => makeSection(i, info));
+const SECTIONS: RiffSection<Item>[] = SECTION_DATA.map((info, i) => makeSection(i, info));
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 

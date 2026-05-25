@@ -33,7 +33,7 @@ import RNCollectionSubContainer from './RNCollectionSubContainerNativeComponent'
 import RNMeasuredCell from './RNMeasuredCellNativeComponent';
 import NativeCollectionViewModule from './NativeCollectionViewModule';
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
   SectionInfo,
 } from '@riff/types/protocol';
@@ -50,8 +50,8 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 type ScrollDirection = 'vertical' | 'horizontal' | 'none';
 
 export interface CollectionSubContainerProps<T> {
-  /** Layout engine for this section. Must implement CollectionViewLayout. */
-  layout: CollectionViewLayout;
+  /** Layout engine for this section. Must implement RiffLayout. */
+  layout: RiffLayout;
 
   /** Data items for this section. */
   data: T[];

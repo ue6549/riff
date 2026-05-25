@@ -28,7 +28,7 @@ import { Riff } from '../components/CollectionView';
 import { compositional } from '@riff/layouts/compositional';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 import { PerfHood } from '../components/PerfHood';
 import {
   ProductItem,
@@ -82,7 +82,7 @@ function RiffSearchResults({ listRef }: { listRef: React.RefObject<any> }) {
     { range: 8, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
   ]), []);
 
-  const sections = useMemo<SectionConfig<ProductItem | BannerItem>[]>(() => [
+  const sections = useMemo<RiffSection<ProductItem | BannerItem>[]>(() => [
     {
       key: 'search-grid-0',
       data: GRID_0,
@@ -161,7 +161,7 @@ function RiffSearchResults({ listRef }: { listRef: React.RefObject<any> }) {
 
   return (
     <Riff
-      handle={listRef}
+      ref={listRef}
       sections={sections}
       layout={layout}
       keyExtractor={keyExtractor}

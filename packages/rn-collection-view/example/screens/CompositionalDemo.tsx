@@ -24,7 +24,7 @@ import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { flow } from '@riff/layouts/flow';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 
 // ── Item types — explicit _type discriminant ──────────────────────────────────
 
@@ -298,7 +298,7 @@ export function CompositionalDemo() {
 
   // ── Sections (rebuilt on data changes) ───────────────────────────────────────
 
-  const sections = useMemo<SectionConfig<AnyItem>[]>(() => [
+  const sections = useMemo<RiffSection<AnyItem>[]>(() => [
     {
       key: 'banners', data: banners as AnyItem[],
       header: { render: () => <SectionHeader title={`Featured (${banners.length})`} subtitle="list · type: banner" />, height: HEADER_H, sticky: true },
@@ -372,7 +372,7 @@ export function CompositionalDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={layout}
         keyExtractor={keyExtractor}

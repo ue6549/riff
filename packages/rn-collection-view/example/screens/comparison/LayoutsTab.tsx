@@ -435,7 +435,7 @@ export function ListDemo() {
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
   const insertCounter = useRef(S0_DATA.length);
-  const cvRef = useRef<RiffHandle>(null);
+  const cvRef = useRef<RiffHandle<any>>(null);
 
   const listLayout = useMemo(() => list({
     estimatedItemHeight: 56,
@@ -586,7 +586,7 @@ export function ListDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={listLayout}
         stickyMode="push"
@@ -778,7 +778,7 @@ export function GridDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={gridLayout}
         stickyMode="push"
@@ -903,7 +903,7 @@ export function MasonryDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={masonryLayout}
         stickyMode="push"
@@ -1047,7 +1047,7 @@ export function HMasonryDemo() {
 
       <View style={[HMS.listBg, { height: containerH }]}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={sections}
           layout={hmLayout}
           renderItem={renderItem}
@@ -1276,7 +1276,7 @@ export function FlowDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={flowLayout}
         stickyMode="push"
@@ -1423,7 +1423,7 @@ export function HFlowDemo() {
 
       <View style={[HFS.listBg, { height: HF_CONTAINER_H }]}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={sections}
           layout={hfLayout}
           renderItem={renderItem}
@@ -1773,7 +1773,7 @@ export function HorizontalListDemo() {
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
   const insertCounter = useRef(staticSections[0]!.items.length);
-  const cvRef = useRef<RiffHandle>(null);
+  const cvRef = useRef<RiffHandle<any>>(null);
 
   // ── Mutation handlers ──────────────────────────────────────────────────────
 
@@ -1923,7 +1923,7 @@ export function HorizontalListDemo() {
       {/* Horizontal mode now auto-sizes cross-axis height internally. */}
       <View style={HS.listBackground}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={riffSections}
           layout={hLayout}
           renderItem={renderCard}
@@ -2042,7 +2042,7 @@ export function HorizontalGridDemo() {
   const [decoCount, setDecoCount] = useState(0);
   const [containerH, setContainerH] = useState(HG_CONTAINER_H);
   const insertCounter = useRef(staticSections[0]!.items.length);
-  const cvRef = useRef<RiffHandle>(null);
+  const cvRef = useRef<RiffHandle<any>>(null);
 
   const handleInsert1 = useCallback(() => {
     const idx = insertCounter.current++;
@@ -2192,7 +2192,7 @@ export function HorizontalGridDemo() {
 
       <View style={[HGS.listBackground, { height: containerH }]}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={riffSections}
           layout={hgLayout}
           renderItem={renderCard}
@@ -2322,8 +2322,6 @@ function AdaptiveHGridDemo() {
   const [s2Items] = useState<AHGCard[]>(staticAHGSections[2]!.items);
   const [containerH, setContainerH] = useState(AHG_ESTIMATED_H);
   const [mvcEnabled, setMvcEnabled] = useState(false);
-  const [decoCount, setDecoCount] = useState(0);
-
   // Counter for unique inserted item IDs
   const insertCounter = useRef(100);
 
@@ -2421,16 +2419,12 @@ function AdaptiveHGridDemo() {
         <CtrlBtn label="×4" onPress={handleDelete} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
-        <View style={{ paddingHorizontal: 6, justifyContent: 'center' }}>
-          <Text style={{ color: '#888', fontSize: 10, fontWeight: '600' }}>Deco:{decoCount}</Text>
-        </View>
       </ScrollView>
 
       {/* Container auto-sized from contentSize reported after first layout pass */}
       <View style={[AHGS.listBackground, { height: containerH }]}>
         <CollectionView
           ref={cvRef}
-          horizontal
           sections={sections}
           layout={layoutRef.current}
           keyExtractor={keyExtractor}
@@ -2438,16 +2432,13 @@ function AdaptiveHGridDemo() {
           renderSectionHeader={renderHeader}
           renderSectionFooter={renderFooter}
           decorationRenderers={{
-            sectionBackground: {
-              render: (si, frame) => (
-                <View style={{
-                  ...StyleSheet.absoluteFillObject,
-                  backgroundColor: Object.values(META)[si % 3]?.color + '33',
-                  borderRadius: 8,
-                }} />
-              ),
-              onCountChange: setDecoCount,
-            },
+            sectionBackground: (si, _frame) => (
+              <View style={{
+                ...StyleSheet.absoluteFillObject,
+                backgroundColor: Object.values(META)[si % 3]?.color + '33',
+                borderRadius: 8,
+              }} />
+            ),
           }}
           stickyHeaderIndices={[]}
           scrollEventThrottle={16}

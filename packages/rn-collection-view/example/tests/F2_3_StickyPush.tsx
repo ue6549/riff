@@ -16,7 +16,7 @@
  */
 import React, { useCallback } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Riff, SectionConfig } from '../components/CollectionView';
+import { Riff, RiffSection } from '../components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -25,7 +25,7 @@ type Item = { id: string; label: string };
 const BG_COLORS = ['#172554', '#14532d', '#450a0a', '#2e1065', '#431407', '#083344'];
 const NAMES     = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta'];
 
-function makeSection(idx: number): SectionConfig<Item> {
+function makeSection(idx: number): RiffSection<Item> {
   const count = 25 + idx * 5;
   return {
     key: `s${idx}`,
@@ -49,7 +49,7 @@ function makeSection(idx: number): SectionConfig<Item> {
 
 const ACCENT_COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7', '#f97316', '#06b6d4'];
 
-const SECTIONS: SectionConfig<Item>[] = Array.from({ length: 6 }, (_, i) => makeSection(i));
+const SECTIONS: RiffSection<Item>[] = Array.from({ length: 6 }, (_, i) => makeSection(i));
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 

@@ -23,7 +23,7 @@ import { compositional } from '@riff/layouts/compositional';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 import { PerfHood } from '../components/PerfHood';
 import {
   ProductItem, BannerItem, CategoryItem,
@@ -113,7 +113,7 @@ function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
     { subtitle: 'masonry V — 2 columns' },
   ];
 
-  const sections = useMemo<SectionConfig<any>[]>(() =>
+  const sections = useMemo<RiffSection<any>[]>(() =>
     ALL_SECTIONS.map((sec, i) => {
       const base: any = {
         key: sec.key,
@@ -166,7 +166,7 @@ function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
 
   return (
     <Riff
-      handle={listRef}
+      ref={listRef}
       sections={sections}
       layout={layout}
       keyExtractor={keyExtractor}

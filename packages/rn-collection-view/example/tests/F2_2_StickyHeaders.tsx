@@ -13,7 +13,7 @@
  */
 import React, { useCallback } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Riff, SectionConfig } from '../components/CollectionView';
+import { Riff, RiffSection } from '../components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ type Item = { id: string; label: string };
 const COLORS  = ['#1e3a5f', '#1a3a2a', '#3a1a1a', '#2a1a3a', '#3a2a1a', '#2a2a1a'];
 const NAMES   = ['Unread', 'Flagged', 'Today', 'Yesterday', 'Last Week', 'Older'];
 
-function makeSection(idx: number, count: number): SectionConfig<Item> {
+function makeSection(idx: number, count: number): RiffSection<Item> {
   return {
     key: `s${idx}`,
     data: Array.from({ length: count }, (_, i) => ({
@@ -43,7 +43,7 @@ function makeSection(idx: number, count: number): SectionConfig<Item> {
   };
 }
 
-const SECTIONS: SectionConfig<Item>[] = [
+const SECTIONS: RiffSection<Item>[] = [
   makeSection(0, 12),
   makeSection(1, 18),
   makeSection(2, 25),

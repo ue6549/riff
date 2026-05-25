@@ -22,22 +22,26 @@ export type { CustomLayoutPlugin, LayoutPluginContext } from './types/plugin';
 
 // Layout protocol — unified interface for all layout engines
 export type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
   SectionInfo,
   SupplementaryInfo,
-  SupplementaryAlignment,
-  PinBehavior,
-  StickyMode,
-  InvalidationScope,
-  ListLayoutDelegate,
-  MasonryLayoutDelegate,
-  GridLayoutDelegate,
-  FlowLayoutDelegate,
-  CustomLayoutDelegate,
-  SupplementaryItem,
-  SectionConfig,
-  CollectionViewProps,
+  RiffSupplementaryAlignment,
+  RiffPinBehavior,
+  RiffStickyMode,
+  RiffInvalidationScope,
+  RiffListConfig,
+  RiffMasonryConfig,
+  RiffGridConfig,
+  RiffFlowConfig,
+  RiffCustomConfig,
+  RiffSupplementary,
+  RiffSection,
+  // Riff component API types (RiffProps / RiffHandle live in example/components/CollectionView.tsx
+  // until the dual-React-instance constraint is lifted and the component moves to src/)
+  RiffRenderItemInfo,
+  RiffScrollOptions,
+  RiffScrollOffsetOptions,
 } from './types/protocol';
 
 // Layout factories

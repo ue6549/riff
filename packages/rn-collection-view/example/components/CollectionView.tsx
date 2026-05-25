@@ -70,7 +70,7 @@ import type { HSectionMeta } from '@riff/layouts/compositional';
 import { RiffSnapshot } from './CollectionSnapshot';
 import { SlotManager } from './SlotManager';
 import type { SlotInfo } from './SlotManager';
-import type { CollectionViewLayout, LayoutContext } from '@riff/types/protocol';
+import type { RiffLayout, LayoutContext, RiffRenderItemInfo, RiffScrollOptions, RiffScrollOffsetOptions } from '@riff/types/protocol';
 import type { LayoutAttributes } from '@riff/types/layout';
 import { list as listLayout } from '@riff/layouts/list';
 
@@ -220,7 +220,7 @@ export interface RenderItemInfo<T> {
 
 // ── Section model ──────────────────────────────────────────────────────────────
 
-export interface SectionConfig<T> {
+export interface RiffSection<T> {
   key: string;
   data: T[];
   header?: {
@@ -250,46 +250,29 @@ export interface SectionedRenderItemInfo<T> {
 }
 
 /**
- * F1.2 — Imperative handle exposed via the `handle` prop.
- * Generic forwardRef doesn't compose well with TypeScript generics, so we use
- * a handle prop instead — identical ergonomics without the casting ceremony.
+ * F1.2 — Imperative handle exposed via the `ref` prop (React 19 style).
  *
  * Usage:
  *   const ref = useRef<RiffHandle<MyItem>>(null);
- *   <Riff handle={ref} ... />
+ *   <Riff ref={ref} ... />
  *   const snap = ref.current.snapshot();
  *   snap.appendItems(newItems);
  *   ref.current.apply(snap);   // diff + LayoutAnimation + startTransition
+ *
+ * RiffScrollOptions and RiffScrollOffsetOptions are re-exported from @riff/types/protocol.
  */
-export interface ScrollToItemOptions {
-  /** Whether to animate the scroll. Default: true. */
-  animated?: boolean;
-  /**
-   * Where to position the target item relative to the viewport.
-   * 'nearest' is a no-op if the item is already fully visible.
-   * Default: 'top'.
-   */
-  position?: 'top' | 'center' | 'bottom' | 'nearest' | 'start' | 'end';
-}
-
-export interface ScrollToOffsetOptions {
-  x?: number;
-  y?: number;
-  animated?: boolean;
-}
-
 export interface RiffHandle<T = unknown> {
   /**
    * Scroll to the item at the given index path.
    * section: 0-based section index. item: 0-based item index within the section.
    */
-  scrollToIndexPath(indexPath: { section: number; item: number }, options?: ScrollToItemOptions): void;
+  scrollToIndexPath(indexPath: { section: number; item: number }, options?: RiffScrollOptions): void;
 
   /**
    * Scroll to the start of a section — its header if one exists, otherwise its first item.
    * Equivalent to UICollectionView's scrollToItemAtIndexPath:item=0 atScrollPosition:.
    */
-  scrollToSection(sectionIndex: number, options?: ScrollToItemOptions): void;
+  scrollToSection(sectionIndex: number, options?: RiffScrollOptions): void;
 
   /** Scroll to the very beginning of the content (offset 0,0). */
   scrollToTop(options?: { animated?: boolean }): void;
@@ -298,14 +281,14 @@ export interface RiffHandle<T = unknown> {
   scrollToEnd(options?: { animated?: boolean }): void;
 
   /** Scroll to an absolute content offset. */
-  scrollToOffset(options: ScrollToOffsetOptions): void;
+  scrollToOffset(options: RiffScrollOffsetOptions): void;
 
   /**
    * Scroll to the item with the given cache key (low-level).
    * Prefer scrollToIndexPath for consumer use.
    * Key format for sectioned mode: `${sectionKey}:${keyExtractor(item)}`.
    */
-  scrollToItem(key: string, options?: ScrollToItemOptions): void;
+  scrollToItem(key: string, options?: RiffScrollOptions): void;
 
   /**
    * Create a snapshot seeded with the current data array and key extractor.
@@ -341,10 +324,10 @@ export interface RiffProps<T = unknown> {
   /** Flat mode data. Mutually exclusive with `sections`. */
   data?: T[];
   /** Sectioned mode. Mutually exclusive with `data`. */
-  sections?: SectionConfig<T>[];
+  sections?: RiffSection<T>[];
 
   /**
-   * Layout engine conforming to the CollectionViewLayout protocol.
+   * Layout engine conforming to the RiffLayout protocol.
    * When provided, the layout handles position computation, content sizing,
    * and invalidation. Built-in props (itemHeight, estimatedItemHeight) are
    * ignored — the layout's delegate owns sizing.
@@ -353,13 +336,13 @@ export interface RiffProps<T = unknown> {
    *   import { list, masonry, grid, flow, customLayout } from 'riff/layouts';
    *   <CollectionView layout={masonry({ columns: 3, heightForItem: fn })} ... />
    */
-  layout?: CollectionViewLayout;
+  layout?: RiffLayout;
 
   /**
-   * Flat mode: (info: { item: T; index: number }) => element
-   * Sectioned mode: (info: { item: T; sectionIndex: number; itemIndex: number }) => element
+   * Called for each item. Receives a `RiffRenderItemInfo<T>` with all four
+   * fields always present (flat mode: sectionIndex=0, itemIndex=index).
    */
-  renderItem: (info: any) => React.ReactElement | null;
+  renderItem: (info: RiffRenderItemInfo<T>) => React.ReactElement | null;
   keyExtractor?: (item: T, ...args: any[]) => string;
   /**
    * Returns a string type identifier for an item. Items with the same type
@@ -495,14 +478,11 @@ export interface RiffProps<T = unknown> {
    */
   onBlankArea?: (event: { offsetStart: number; offsetEnd: number }) => void;
 
-  /**
-   * F1.2 — Imperative handle ref. Exposes snapshot(), apply(), invalidateKeys().
-   * Pass a ref created with useRef<RiffHandle<T>>(null).
-   */
-  handle?: React.RefObject<RiffHandle<T>>;
+  // ref is exposed via React.forwardRef — not declared here.
+  // Usage: const ref = useRef<RiffHandle<T>>(null); <Riff ref={ref} />
 
   /**
-   * F1.2 — Called by handle.apply(snap) with the new data array.
+   * F1.2 — Called by ref.current.apply(snap) with the new data array.
    * The consumer should update their data state with this value.
    * Already wrapped in startTransition internally — no extra wrapping needed.
    */
@@ -752,7 +732,7 @@ function rncvVerboseLog(...args: any[]) {
   console.log(...args);
 }
 
-function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
+function flattenSections<T>(sections: RiffSection<T>[]): FlattenResult<T> {
   const flatData:                FlatItem<T>[] = [];
   const stickyHeaderFlatIndices: number[]      = [];
   const stickyFooterFlatIndices: number[]      = [];
@@ -831,7 +811,7 @@ function flattenSections<T>(sections: SectionConfig<T>[]): FlattenResult<T> {
 function attrToFlatIndex(
   attr: LayoutAttributes,
   sectionStartFlatIndices: number[],
-  sections: SectionConfig<any>[],
+  sections: RiffSection<any>[],
 ): number {
   if (attr.isDecoration) return -1;
   const si = attr.section;
@@ -856,7 +836,7 @@ function attrToFlatIndex(
 
 /** Flat-mode key extractor for sectioned items. */
 function sectionedKeyExtractor<T>(
-  sections: SectionConfig<T>[],
+  sections: RiffSection<T>[],
   userKE: ((item: T, ...args: any[]) => string) | undefined,
   fi: FlatItem<T>,
   flatIndex: number,
@@ -978,6 +958,11 @@ function CollectionViewHUD({
   );
 }
 
+// Breaks circular Yoga sizing for H-free-width cells (H-list/H-grid/V-flow).
+// alignSelf: own width = content; alignItems: consumer cell inherits flex-start
+// instead of the default stretch, so it also measures to its own content width.
+const hFreeWidthInnerStyle = { alignSelf: 'flex-start' as const, alignItems: 'flex-start' as const };
+
 const HUD = StyleSheet.create({
   overlay: {
     position:        'absolute',
@@ -1005,10 +990,9 @@ const HUD = StyleSheet.create({
 // or `index` actually changes. For scroll events where data is stable, the
 // consumer's component tree is skipped entirely.
 //
-// renderItem is typed `any` here because this is a module-level component
-// that must be generic-agnostic. CollectionView passes a stable wrapper
-// (renderItemRef pattern) so memo's prop comparison always sees the same
-// function reference, preventing reference-equality false positives.
+// renderItem uses RiffRenderItemInfo<any> (module-level, generic-agnostic).
+// CollectionView passes a stable wrapper (renderItemRef pattern) so memo's
+// prop comparison always sees the same function reference.
 const MemoizedCellContent = React.memo(function MemoizedCellContent({
   item,
   index,
@@ -1017,15 +1001,15 @@ const MemoizedCellContent = React.memo(function MemoizedCellContent({
 }: {
   item: any;
   index: number;
-  renderItem: (info: any) => React.ReactElement | null;
+  renderItem: (info: RiffRenderItemInfo<any>) => React.ReactElement | null;
   extraData?: unknown;
 }) {
-  return renderItem({ item, index });
+  return renderItem({ item, index, sectionIndex: 0, itemIndex: index });
 });
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function Riff<T = unknown>({
+function RiffBase<T = unknown>({
   data: propData,
   sections: propSections,
   layout: layoutProp,
@@ -1048,7 +1032,6 @@ export function Riff<T = unknown>({
   recyclePoolSize,
   onRenderCountChange,
   onBlankArea,
-  handle,
   onDataChange,
   onItemPositionsChange,
   onPrefetch,
@@ -1071,7 +1054,7 @@ export function Riff<T = unknown>({
   initialWidth,
   initialHeight,
   maintainVisibleContentPosition = false,
-}: RiffProps<T>) {
+}: RiffProps<T>, ref: React.ForwardedRef<RiffHandle<T>>) {
 
   // ── H-1 debug: 1-second JS health summary ──────────────────────────────────
   // Counts per second (flushed via setInterval from inside an effect):
@@ -1154,12 +1137,12 @@ export function Riff<T = unknown>({
 
   // In sectioned mode, wrap the consumer's renderItem to dispatch
   // headers/footers to their section render functions.
-  const sectionedRenderItem = useCallback((info: RenderItemInfo<any>) => {
+  const sectionedRenderItem = useCallback((info: RiffRenderItemInfo<any>) => {
     if (!propSections) return propRenderItem(info);
     const fi = info.item as FlatItem<T>;
     if (fi._kind === 'header') return propSections[fi.sectionIndex]?.header?.render() ?? null;
     if (fi._kind === 'footer') return propSections[fi.sectionIndex]?.footer?.render() ?? null;
-    return propRenderItem({ item: fi.item, sectionIndex: fi.sectionIndex, itemIndex: fi.itemIndex });
+    return propRenderItem({ item: fi.item, index: info.index, sectionIndex: fi.sectionIndex, itemIndex: fi.itemIndex });
   }, [propSections, propRenderItem]);
 
   const sectionedKeyExtractorCb = useCallback((item: any, index: number) => {
@@ -1310,6 +1293,11 @@ export function Riff<T = unknown>({
   // by NEW flat indices feeds an item the OLD width of a footer/header (and vice versa),
   // poisoning the cache via Yoga deltas.
   const frameDataRef = useRef<{ frames: number[]; first: number; gen: number; cacheVersion: number } | null>(null);
+  // Last content size seen by the scroll handler. setLayoutCacheVersion is only
+  // called when this changes — not on every raw _version bump. Position
+  // corrections are applied natively by ShadowNode; JS re-render is only needed
+  // when the scroll area dimensions shift.
+  const lastContentSizeRef = useRef({ width: 0, height: 0 });
   // Snapshot function updated every render so the HUD always reads fresh values.
   const hudSnapshotRef = useRef<() => HUDSnapshot>(() => ({
     mountedCells: 0, coldMountCount: 0, scrollCorrectionCount: 0, offsetStart: 0, offsetEnd: 0,
@@ -1437,7 +1425,7 @@ export function Riff<T = unknown>({
   const renderItemRef    = useRef(renderItem);
   renderItemRef.current  = renderItem;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const stableRenderItem = useCallback((info: RenderItemInfo<T>) => renderItemRef.current(info), []);
+  const stableRenderItem = useCallback((info: RiffRenderItemInfo<T>) => renderItemRef.current(info), []);
 
   const itemCount = data.length;
 
@@ -1594,13 +1582,13 @@ export function Riff<T = unknown>({
     if (maintainVisibleContentPosition) {
       rncvMvcTrace('prepare: calling snapshotAnchor() (MVC enabled, correctionConsumed reset)');
       nativeLayoutCache.snapshotAnchor();
-      // H-list MVC: snapshot per-section H anchor before positions are overwritten.
-      // Only for H sections with list layout — grid/masonry/flow correction semantics TBD.
-      const hSectionTypes = (effectiveLayout as any).sectionTypes as string[] | undefined;
+      // H MVC: snapshot per-section H anchor before positions are overwritten.
+      // Layout-agnostic — snapshotHAnchor just records the first visible item key + X;
+      // computeHCorrection (called in native updateState) reads the item's new X from
+      // the cache after applyMeasurements and applies the delta to the H scroll view.
+      // Works for list, grid, masonry, flow, and any future H layout type.
       for (const [sIdx, hScrollX] of hScrollXMapRef.current) {
-        if (hSectionTypes?.[sIdx] === 'list') {
-          nativeLayoutCache.snapshotHAnchor(sIdx, hScrollX);
-        }
+        nativeLayoutCache.snapshotHAnchor(sIdx, hScrollX);
       }
     }
     effectiveLayout.prepare(layoutContext);
@@ -1853,8 +1841,8 @@ export function Riff<T = unknown>({
 
   // ── F1.2: Imperative handle ───────────────────────────────────────────────────
 
-  useImperativeHandle(handle, () => ({
-    scrollToIndexPath: ({ section, item }: { section: number; item: number }, options?: ScrollToItemOptions) => {
+  useImperativeHandle(ref, () => ({
+    scrollToIndexPath: ({ section, item }: { section: number; item: number }, options?: RiffScrollOptions) => {
       const isHoriz  = effectiveLayout.horizontal ?? false;
       const position = options?.position ?? (isHoriz ? 'start' : 'top');
       // Single C++ call: resolves (section,item)→key via O(1) reverse index in LayoutCache.
@@ -1868,7 +1856,7 @@ export function Riff<T = unknown>({
       );
     },
 
-    scrollToSection: (sectionIndex: number, options?: ScrollToItemOptions) => {
+    scrollToSection: (sectionIndex: number, options?: RiffScrollOptions) => {
       const isHoriz  = effectiveLayout.horizontal ?? false;
       const position = options?.position ?? (isHoriz ? 'start' : 'top');
       // Single C++ call: tries section header key first, falls back to first item of section.
@@ -1894,11 +1882,11 @@ export function Riff<T = unknown>({
       );
     },
 
-    scrollToOffset: ({ x = 0, y = 0, animated = true }: ScrollToOffsetOptions) => {
+    scrollToOffset: ({ x = 0, y = 0, animated = true }: RiffScrollOffsetOptions) => {
       nativeMod.scrollTo(layoutCacheId, x, y, animated);
     },
 
-    scrollToItem: (key: string, options?: ScrollToItemOptions) => {
+    scrollToItem: (key: string, options?: RiffScrollOptions) => {
       const isHoriz  = effectiveLayout.horizontal ?? false;
       const position = options?.position ?? (isHoriz ? 'start' : 'top');
       nativeMod.scrollToKey(
@@ -2084,9 +2072,20 @@ export function Riff<T = unknown>({
       if (_lcvChanged) {
         lastCacheVersionRef.current = scrollResult.cacheVersion;
         if (__DEV__ && RNCV_HGEST_DIAG) diagRef.current.cvBumps++;
-        if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.vLCV++;
-        scrollHandledCVRef.current = true; // H-6: tell useLayoutEffect to skip
-        setLayoutCacheVersion(v => v + 1);
+        // Only trigger a JS re-render when content dimensions actually changed.
+        // Most _version bumps are ShadowNode position corrections (cell heights
+        // measured, items shifted) — those are applied natively and don't
+        // require CollectionView to re-render. Without this guard, every
+        // endBatch() in the ShadowNode produces a re-render (~60/s during
+        // V scroll), even when neither the scroll area nor the render range changed.
+        const _newSize = effectiveLayout.contentSize();
+        if (_newSize.width  !== lastContentSizeRef.current.width ||
+            _newSize.height !== lastContentSizeRef.current.height) {
+          lastContentSizeRef.current = { width: _newSize.width, height: _newSize.height };
+          if (__DEV__ && RNCV_HEALTH_DIAG) healthRef.current.vLCV++;
+          scrollHandledCVRef.current = true; // H-6: tell useLayoutEffect to skip
+          setLayoutCacheVersion(v => v + 1);
+        }
       }
 
       // Keep windowing robust: always include visible span and pad by one cell
@@ -2660,9 +2659,18 @@ export function Riff<T = unknown>({
     ];
 
     // ShadowNode measures via Yoga — no RNMeasuredCell wrapping needed.
+    // For H-free-width cells: wrap in a thin View with alignSelf+alignItems=flex-start.
+    // Without this, the consumer's cell (alignSelf:auto) inherits the outer wrapper's
+    // alignItems:stretch, causing a circular Yoga sizing dependency that resolves to
+    // vpWidth. The inner wrapper breaks the cycle: its alignItems:flex-start propagates
+    // to the consumer cell via alignSelf:auto inheritance, so the cell measures to its
+    // actual text/content width instead of filling the container.
+    const cellContent = <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} extraData={extraData} />;
     const content = (
       <CellWrapper mode={mode}>
-        <MemoizedCellContent item={item} index={index} renderItem={stableRenderItem} extraData={extraData} />
+        {isHFreeWidthCell
+          ? <View style={hFreeWidthInnerStyle}>{cellContent}</View>
+          : cellContent}
       </CellWrapper>
     );
 
@@ -3441,3 +3449,10 @@ export function Riff<T = unknown>({
     </View>
   );
 }
+
+// React.forwardRef doesn't preserve generics in TypeScript, so we cast the
+// result back to the generic function signature. This gives consumers the
+// correct <T> inference on both React 18 (RN 0.80.x) and React 19 (RN 0.83+).
+export const Riff = React.forwardRef(RiffBase) as <T = unknown>(
+  props: RiffProps<T> & React.RefAttributes<RiffHandle<T>>,
+) => React.ReactElement | null;

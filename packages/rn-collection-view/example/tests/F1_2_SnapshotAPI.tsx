@@ -253,7 +253,7 @@ export default function F1_2_SnapshotAPI() {
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           estimatedItemHeight={44}
-          handle={listRef}
+          ref={listRef}
           onDataChange={setData}
         />
       </View>

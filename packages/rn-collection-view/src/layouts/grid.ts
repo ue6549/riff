@@ -28,10 +28,10 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
-  GridLayoutDelegate,
-  InvalidationScope,
+  RiffGridConfig,
+  RiffInvalidationScope,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -65,15 +65,15 @@ const nativeMod = NativeCollectionViewModule as unknown as {
   };
 };
 
-class GridLayoutEngine implements CollectionViewLayout {
+class GridLayoutEngine implements RiffLayout {
   readonly type = 'grid';
   readonly horizontal: boolean;
-  readonly delegate: GridLayoutDelegate;
+  readonly delegate: RiffGridConfig;
   private lastSectionKeys: (readonly string[])[] = [];
   private _cache = nativeMod.layoutCache;
   private _gridEngine = nativeMod.gridLayout;
 
-  constructor(delegate: GridLayoutDelegate) {
+  constructor(delegate: RiffGridConfig) {
     this.delegate = delegate;
     this.horizontal = delegate.horizontal ?? false;
   }
@@ -205,7 +205,7 @@ class GridLayoutEngine implements CollectionViewLayout {
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
-  invalidationScope(): InvalidationScope {
+  invalidationScope(): RiffInvalidationScope {
     return { type: 'full' };
   }
 }
@@ -231,6 +231,6 @@ class GridLayoutEngine implements CollectionViewLayout {
  * })}
  * ```
  */
-export function grid(delegate: GridLayoutDelegate): CollectionViewLayout {
+export function grid(delegate: RiffGridConfig): RiffLayout {
   return new GridLayoutEngine(delegate);
 }

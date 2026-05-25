@@ -30,14 +30,14 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
   SectionInfo,
-  InvalidationScope,
-  ListLayoutDelegate,
-  GridLayoutDelegate,
-  FlowLayoutDelegate,
-  MasonryLayoutDelegate,
+  RiffInvalidationScope,
+  RiffListConfig,
+  RiffGridConfig,
+  RiffFlowConfig,
+  RiffMasonryConfig,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -79,7 +79,7 @@ export type SectionRange = number | [number, number];
 /** Maps a section range to a layout engine. */
 export interface CompositionalEntry {
   range: SectionRange;
-  layout: CollectionViewLayout;
+  layout: RiffLayout;
   /**
    * Phase 2: set `horizontal: true` to make this section scroll horizontally.
    * The section is rendered inside `RNOrthogonalSectionView` (a UIScrollView)
@@ -155,7 +155,7 @@ function extractSupplementaryHeights(
 }
 
 function buildListSectionParams(
-  d: ListLayoutDelegate,
+  d: RiffListConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -245,7 +245,7 @@ function buildListSectionParams(
 }
 
 function buildGridSectionParams(
-  d: GridLayoutDelegate,
+  d: RiffGridConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -317,7 +317,7 @@ function buildGridSectionParams(
 }
 
 function buildFlowSectionParams(
-  d: FlowLayoutDelegate,
+  d: RiffFlowConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -384,7 +384,7 @@ function buildFlowSectionParams(
 }
 
 function buildMasonrySectionParams(
-  d: MasonryLayoutDelegate,
+  d: RiffMasonryConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -451,7 +451,7 @@ function buildMasonrySectionParams(
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
-class CompositionalLayoutEngine implements CollectionViewLayout {
+class CompositionalLayoutEngine implements RiffLayout {
   readonly type = 'compositional';
   readonly horizontal = false;
   readonly needsSpatialQuery = false;
@@ -517,7 +517,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     for (const entry of this.entries) {
       const { type } = entry.layout;
       if (type === 'grid' || type === 'masonry') {
-        const d = (entry.layout as unknown as { delegate: GridLayoutDelegate | MasonryLayoutDelegate }).delegate;
+        const d = (entry.layout as unknown as { delegate: RiffGridConfig | RiffMasonryConfig }).delegate;
         const cols = typeof d.columns === 'function' ? d.columns(viewportWidth) : (d.columns ?? 1);
         if (cols > maxCols) maxCols = cols;
       }
@@ -587,22 +587,22 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
 
       if (layoutType === 'grid') {
         params = buildGridSectionParams(
-          d as GridLayoutDelegate, sec, sectionIndex, sectionFlatBase, w,
+          d as RiffGridConfig, sec, sectionIndex, sectionFlatBase, w,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       } else if (layoutType === 'flow') {
         params = buildFlowSectionParams(
-          d as FlowLayoutDelegate, sec, sectionIndex, sectionFlatBase, w,
+          d as RiffFlowConfig, sec, sectionIndex, sectionFlatBase, w,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       } else if (layoutType === 'masonry') {
         params = buildMasonrySectionParams(
-          d as MasonryLayoutDelegate, sec, sectionIndex, sectionFlatBase, w,
+          d as RiffMasonryConfig, sec, sectionIndex, sectionFlatBase, w,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       } else {
         params = buildListSectionParams(
-          d as ListLayoutDelegate, sec, sectionIndex, sectionFlatBase, w, h,
+          d as RiffListConfig, sec, sectionIndex, sectionFlatBase, w, h,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       }
@@ -623,7 +623,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
         if (layoutType === 'flow') {
           let vh = entry.estimatedSectionHeight;
           if (!vh) {
-            const fd = (layout as unknown as { delegate: FlowLayoutDelegate }).delegate;
+            const fd = (layout as unknown as { delegate: RiffFlowConfig }).delegate;
             const itemH = sec.itemCount > 0 ? fd.sizeForItem(0, sectionIndex, w).height : 44;
             const topInset  = (params as any).sectionInsetTop    ?? 0;
             const botInset  = (params as any).sectionInsetBottom ?? 0;
@@ -723,7 +723,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
-  invalidationScope(): InvalidationScope {
+  invalidationScope(): RiffInvalidationScope {
     return { type: 'full' };
   }
 }
@@ -744,6 +744,6 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
  *
  * Last entry repeats for any sections beyond those explicitly listed.
  */
-export function compositional(entries: CompositionalEntry[]): CollectionViewLayout {
+export function compositional(entries: CompositionalEntry[]): RiffLayout {
   return new CompositionalLayoutEngine(entries);
 }

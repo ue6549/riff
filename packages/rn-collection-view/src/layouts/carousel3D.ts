@@ -16,7 +16,7 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
@@ -75,7 +75,7 @@ function buildRotationMatrix(angleRad: number, perspective: number): readonly nu
   ];
 }
 
-class Carousel3DLayout implements CollectionViewLayout {
+class Carousel3DLayout implements RiffLayout {
   private _cache = nativeMod.layoutCache;
   readonly type = 'carousel3D';
   readonly horizontal = true;
@@ -186,6 +186,6 @@ class Carousel3DLayout implements CollectionViewLayout {
   }
 }
 
-export type Carousel3DFactory = (opts?: Carousel3DOptions) => CollectionViewLayout;
+export type Carousel3DFactory = (opts?: Carousel3DOptions) => RiffLayout;
 
 export const carousel3D: Carousel3DFactory = (opts = {}) => new Carousel3DLayout(opts);

@@ -28,7 +28,7 @@ import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { flow } from '@riff/layouts/flow';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 
 // ── Item type ────────────────────────────────────────────────────────────────
 
@@ -311,13 +311,13 @@ export function CompositionalLab() {
 
   // ── Sections ───────────────────────────────────────────────────────────────
 
-  const sections = useMemo<SectionConfig<LabItem>[]>(() => {
-    const result: SectionConfig<LabItem>[] = [];
+  const sections = useMemo<RiffSection<LabItem>[]>(() => {
+    const result: RiffSection<LabItem>[] = [];
     const count = Math.min(sectionDatas.length, sectionMetas.length);
     for (let i = 0; i < count; i++) {
       const meta = sectionMetas[i]!;
       const data = sectionDatas[i]!;
-      const sec: SectionConfig<LabItem> = {
+      const sec: RiffSection<LabItem> = {
         key: meta.key,
         data,
         insets: { top: 8, bottom: 8, left: 10, right: 10 },
@@ -432,7 +432,7 @@ export function CompositionalLab() {
 
       {/* ── Collection View ───────────────────────────────────────────── */}
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={layout}
         keyExtractor={keyExtractor}

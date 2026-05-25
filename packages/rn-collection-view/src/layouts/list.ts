@@ -1,7 +1,7 @@
 /**
  * List Layout — single-column vertical layout factory.
  *
- * Creates a CollectionViewLayout backed by the C++ ListLayout engine.
+ * Creates a RiffLayout backed by the C++ ListLayout engine.
  * Supports fixed height, estimated height with measurement, and per-item height callback.
  *
  * C++ layout writes to the shared LayoutCache. Spatial queries via getAttributesInRect.
@@ -21,10 +21,10 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
-  ListLayoutDelegate,
-  InvalidationScope,
+  RiffListConfig,
+  RiffInvalidationScope,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -79,10 +79,10 @@ const listMvcTrace = (msg: string) => {
   console.log(`[MVC-TRACE] ${msg}`);
 };
 
-class ListLayout implements CollectionViewLayout {
+class ListLayout implements RiffLayout {
   readonly type = 'list';
   readonly horizontal: boolean;
-  readonly delegate: ListLayoutDelegate;
+  readonly delegate: RiffListConfig;
   private lastContext: LayoutContext | null = null;
   private _lastFingerprint: string = '';
   private lastSectionKeys: (readonly string[])[] = [];
@@ -90,7 +90,7 @@ class ListLayout implements CollectionViewLayout {
   private _cache = nativeMod.layoutCache;
   private _listEngine = nativeMod.listLayout;
 
-  constructor(delegate: ListLayoutDelegate) {
+  constructor(delegate: RiffListConfig) {
     this.delegate = delegate;
     this.horizontal = delegate.horizontal ?? false;
   }
@@ -285,7 +285,7 @@ class ListLayout implements CollectionViewLayout {
       : Math.abs(oldBounds.width  - newBounds.width)  > 0.5;
   }
 
-  invalidationScope(_oldBounds: Rect, _newBounds: Rect): InvalidationScope {
+  invalidationScope(_oldBounds: Rect, _newBounds: Rect): RiffInvalidationScope {
     return { type: 'full' };
   }
 
@@ -322,6 +322,6 @@ class ListLayout implements CollectionViewLayout {
  * layout={list({ heightForItem: (i, s) => heights[i], itemSpacing: 8 })}
  * ```
  */
-export function list(delegate: ListLayoutDelegate): CollectionViewLayout {
+export function list(delegate: RiffListConfig): RiffLayout {
   return new ListLayout(delegate);
 }

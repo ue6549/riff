@@ -20,7 +20,7 @@
  *   Flash: outer vertical FlashList + nested horizontal FlashLists + manual Views for grid/masonry
  */
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Riff } from '../components/CollectionView';
 import { compositional } from '@riff/layouts/compositional';
@@ -28,7 +28,7 @@ import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { flow } from '@riff/layouts/flow';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 import { PerfHood } from '../components/PerfHood';
 
 // ── Data model — pure content, no layout dimensions ──────────────────────────
@@ -313,13 +313,25 @@ function TrackedProductCard({ item }: { item: ProductItem }) {
 // Riff implementation — single CollectionView, compositional layout
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// H sections that need a fixed card width: S0 (List H), S2 (Grid H), S4 (List H), S5 (Flow V), S6 (Grid H)
+const H_WIDTH_SECTIONS = new Set([0, 2, 4, 5, 6]);
+// Section insets left+right = 10+10 = 20, itemSpacing = 8 between items.
+// For 2.25 visible cards: availWidth = 2.25 * cardWidth + 2 * spacing
+//   => cardWidth = (vpWidth - 20 - 16) / 2.25 = (vpWidth - 36) / 2.25
+function calcHCardWidth(windowWidth: number): number {
+  return Math.round((windowWidth - 36) / 2.25);
+}
+
 function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
+  const { width: windowWidth } = useWindowDimensions();
+  const hCardWidth = calcHCardWidth(windowWidth);
+
   // Alternating section backgrounds for visual grouping
   const SECTION_BG_COLORS = ['#f0f2f5', '#f5f2f0', '#f0f2f5', '#f5f2f0', '#f0f2f5', '#f5f2f0', '#f0f2f5', '#f5f2f0'];
 
   const layout = useMemo(() => compositional([
     // S0: Flash Deals — single-row H carousel
-    { range: 0, layout: list({ estimatedItemHeight: 180, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 8, sectionBackground: true, sectionSpacing: 12 }), horizontal: true },
+    { range: 0, layout: list({ estimatedItemHeight: hCardWidth, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 8, sectionBackground: true, sectionSpacing: 12 }), horizontal: true },
     // S1: Top Picks — 2-col V grid
     { range: 1, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }) },
     // S2: Trending Now — 2-row H carousel
@@ -327,14 +339,14 @@ function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
     // S3: Staff Picks — full-width V list
     { range: 3, layout: list({ estimatedItemHeight: 140, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 10, sectionBackground: true, sectionSpacing: 12 }) },
     // S4: Weekend Deals — single-row H carousel
-    { range: 4, layout: list({ estimatedItemHeight: 180, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 8, sectionBackground: true, sectionSpacing: 12 }), horizontal: true },
-    // S5: New Arrivals — V flow (variable-width cards)
-    { range: 5, layout: flow({ sizeForItem: () => ({ width: 160, height: 180 }), itemSpacing: 8, lineSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }) },
+    { range: 4, layout: list({ estimatedItemHeight: hCardWidth, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 8, sectionBackground: true, sectionSpacing: 12 }), horizontal: true },
+    // S5: New Arrivals — V flow; card width matches H sections for visual consistency
+    { range: 5, layout: flow({ sizeForItem: () => ({ width: hCardWidth, height: 180 }), itemSpacing: 8, lineSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }) },
     // S6: Popular — 2-row H carousel
     { range: 6, layout: grid({ columns: 2, rowHeight: 160, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }), horizontal: true },
     // S7: Recommended — 2-col V masonry (impossible to nest in FlashList)
     { range: 7, layout: masonry({ columns: 2, heightForItem: () => 180, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }) },
-  ]), []);
+  ]), [hCardWidth]);
 
   const SECTION_META = [
     { subtitle: 'list H — single-row carousel' },
@@ -347,7 +359,7 @@ function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
     { subtitle: 'masonry V — 2 columns' },
   ];
 
-  const sections = useMemo<SectionConfig<ProductItem>[]>(() =>
+  const sections = useMemo<RiffSection<ProductItem>[]>(() =>
     ALL_SECTIONS.map((sec, i) => ({
       key: sec.key,
       data: sec.data,
@@ -365,7 +377,12 @@ function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
 
   const keyExtractor = useCallback((item: ProductItem) => item.id, []);
   const getItemType = useCallback(() => 'product' as const, []);
-  const renderItem = useCallback(({ item }: { item: ProductItem }) => <TrackedProductCard item={item} />, []);
+  const renderItem = useCallback(({ item, sectionIndex }: any) => {
+    const card = <TrackedProductCard item={item} />;
+    return H_WIDTH_SECTIONS.has(sectionIndex)
+      ? <View style={{ width: hCardWidth }}>{card}</View>
+      : card;
+  }, [hCardWidth]);
 
   const decorationRenderers = useMemo(() => ({
     sectionBackground: (sectionIndex: number, frame: { x: number; y: number; width: number; height: number }) => (
@@ -375,7 +392,7 @@ function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
 
   return (
     <Riff
-      handle={listRef}
+      ref={listRef}
       sections={sections}
       layout={layout}
       keyExtractor={keyExtractor}
