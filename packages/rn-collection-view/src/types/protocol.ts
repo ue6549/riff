@@ -612,17 +612,17 @@ export interface RiffSection<T> {
   key: string;
   /** Data items for this section. */
   data: T[];
-  /** Section-level insets. */
-  insets?: Insets;
+  /** Section-level insets. All sides optional — unspecified sides default to 0. */
+  insets?: Partial<Insets>;
 
   // ── Tier 1: Simple header/footer shorthand ──
   header?: {
-    render: () => React.ReactElement;
+    render: () => React.ReactElement | null;
     height: number;
     sticky?: boolean;
   };
   footer?: {
-    render: () => React.ReactElement;
+    render: () => React.ReactElement | null;
     height: number;
     sticky?: boolean;
   };
@@ -631,7 +631,7 @@ export interface RiffSection<T> {
   supplementaryItems?: RiffSupplementary[];
 
   // ── Decoration ──
-  background?: (sectionIndex: number) => React.ReactElement;
+  background?: (sectionIndex: number) => React.ReactElement | null;
 
   // ── Per-section windowing overrides (F3.8 / H-3.5) ──
   //

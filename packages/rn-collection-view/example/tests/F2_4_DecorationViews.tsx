@@ -18,7 +18,8 @@
  */
 import React, { useCallback } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Riff, RiffSection } from '@riff/components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
+import type { RiffSection } from '@riff/types/protocol';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 

@@ -70,7 +70,7 @@ import type { HSectionMeta } from '@riff/layouts/compositional';
 import { RiffSnapshot } from './CollectionSnapshot';
 import { SlotManager } from './SlotManager';
 import type { SlotInfo } from './SlotManager';
-import type { RiffLayout, LayoutContext, RiffRenderItemInfo, RiffScrollOptions, RiffScrollOffsetOptions } from '@riff/types/protocol';
+import type { RiffLayout, RiffSection, LayoutContext, RiffRenderItemInfo, RiffScrollOptions, RiffScrollOffsetOptions } from '@riff/types/protocol';
 import type { LayoutAttributes } from '@riff/types/layout';
 import { list as listLayout } from '@riff/layouts/list';
 
@@ -211,39 +211,14 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 };
 const nativeWindowController = nativeMod.windowController;
 
-// ─── Public types ─────────────────────────────────────────────────────────────
+// ── Internal render info types ─────────────────────────────────────────────────
 
-export interface RenderItemInfo<T> {
+interface RenderItemInfo<T> {
   item: T;
   index: number;
 }
 
-// ── Section model ──────────────────────────────────────────────────────────────
-
-export interface RiffSection<T> {
-  key: string;
-  data: T[];
-  header?: {
-    render: () => React.ReactElement | null;
-    height: number;
-    sticky?: boolean;
-  };
-  footer?: {
-    render: () => React.ReactElement | null;
-    height: number;
-    sticky?: boolean;
-  };
-  insets?: { top?: number; bottom?: number; left?: number; right?: number };
-
-  // H-3.5: Per-section windowing overrides.
-  // Precedence for H sections: section.renderMultiplier ?? hRenderMultiplier ?? renderMultiplier ?? 0.5
-  // Precedence for V sections: section.renderMultiplier ?? renderMultiplier ?? 0.5
-  renderMultiplier?: number;
-  mountedWindowSize?: number;
-  measureAhead?: number;
-}
-
-export interface SectionedRenderItemInfo<T> {
+interface SectionedRenderItemInfo<T> {
   item: T;
   sectionIndex: number;
   itemIndex: number;
@@ -1503,7 +1478,7 @@ function RiffBase<T = unknown>({
       sections: propSections
         ? propSections.map(s => ({
             itemCount: s.data.length,
-            insets: s.insets,
+            insets: s.insets ? { top: s.insets.top ?? 0, bottom: s.insets.bottom ?? 0, left: s.insets.left ?? 0, right: s.insets.right ?? 0 } : undefined,
             itemKeys: propKeyExtractor
               ? s.data.map((item, ii) => `${s.key}:${propKeyExtractor!(item, ii)}`)
               : undefined,
