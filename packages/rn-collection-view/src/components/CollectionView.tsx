@@ -27,7 +27,6 @@
  *     UI thread via UIScrollViewDelegate (M2.2b), one frame before JS sees it.
  *
  * Scroll container: native RNCollectionViewContainer (ShadowNode-managed).
- * ScrollViewComponent / renderScrollView are legacy — warn if provided.
  */
 import React, {
   useCallback,
@@ -41,7 +40,6 @@ import React, {
 import {
   Dimensions,
   LayoutAnimation,
-  ScrollView,
   ScrollViewProps,
   StyleProp,
   StyleSheet,
@@ -343,14 +341,21 @@ export interface RiffProps<T = unknown> {
   /** Like FlatList's extraData — pass any value here to force re-renders when it changes. */
   extraData?: unknown;
 
-  /** Fixed item height. Use this when all cells have the same known height. */
+  /**
+   * Initial height estimate for uniform-height items. Yoga is always the authority
+   * for final cell dimensions — this value seeds the layout before measurement.
+   * When provided, the onLayout measurement pass is skipped (no per-cell height updates).
+   * Use when cells are visually uniform and you want zero measurement overhead.
+   * Mutually exclusive with estimatedItemHeight.
+   */
   itemHeight?: number;
   /**
-   * M4.1 — Estimated height for variable-height mode.
-   * Cells will measure themselves via onLayout and report actual heights.
-   * The layout is updated incrementally and scroll position is corrected so
-   * the viewport content does not jump when an item above it changes size.
-   * Exactly one of itemHeight / estimatedItemHeight must be provided.
+   * Initial height estimate for variable-height items. Yoga is always the authority
+   * for final cell dimensions — this seeds the layout before measurement.
+   * Enables the onLayout measurement pass: cells report their measured height,
+   * LayoutCache is updated incrementally, and scroll position is corrected so
+   * visible content does not jump when an item above it changes size.
+   * Mutually exclusive with itemHeight.
    */
   estimatedItemHeight?: number;
   itemSpacing?: number;
@@ -464,15 +469,6 @@ export interface RiffProps<T = unknown> {
   onDataChange?: (data: T[]) => void;
 
   /**
-   * Called whenever item Y-positions are recomputed in variable-height mode.
-   * `positions[i]` = top-Y of item i in scroll-content space.
-   * Used internally to position sticky headers and decoration
-   * views at the true measured positions rather than analytical estimates.
-   * Only fires in variable-height mode (estimatedItemHeight prop).
-   */
-  onItemPositionsChange?: (positions: number[]) => void;
-
-  /**
    * F1.3 — Prefetch callback. Fires when items enter the prefetch window
    * (~prefetchAhead × viewport ahead of the render range). Use this to start
    * loading images or data before cells mount.
@@ -536,10 +532,6 @@ export interface RiffProps<T = unknown> {
   };
 
   scrollViewProps?: ScrollViewProps;
-  ScrollViewComponent?: React.ComponentType<ScrollViewProps>;
-  renderScrollView?: (
-    props: ScrollViewProps & { children: React.ReactNode },
-  ) => React.ReactElement;
 
   style?: StyleProp<ViewStyle>;
 
@@ -650,6 +642,11 @@ interface FlattenResult<T> {
 }
 
 const RNCV_DEBUG_LOGS = false;
+// Consumer-facing debug/instrumentation callbacks:
+// showHUD, onRenderCountChange, onDecorationCountChange, onBlankArea.
+// Controlled at build time (not at runtime via __DEV__).
+// Set to false for clean perf baseline builds; true for development.
+const RNCV_DEBUG_CALLBACKS = true;
 // Set to true to enable verbose MVC lifecycle tracing across the JS layer.
 // Covers: snapshotAnchor, fingerprint change + stash, computeSections heights,
 // measuredHeightForItem lookups, processScroll ranges, onScroll events.
@@ -1008,7 +1005,6 @@ function RiffBase<T = unknown>({
   onRenderCountChange,
   onBlankArea,
   onDataChange,
-  onItemPositionsChange,
   onPrefetch,
   onEvict,
   prefetchAhead = 12,
@@ -1019,9 +1015,7 @@ function RiffBase<T = unknown>({
   renderSectionBackground,
   decorationRenderers,
   onDecorationCountChange,
-  ScrollViewComponent,
   scrollViewProps,
-  renderScrollView: propRenderScrollView,
   style,
   showHUD = false,
   onContainerSizeChange,
@@ -1795,7 +1789,7 @@ function RiffBase<T = unknown>({
 
   // P5.1 — start CADisplayLink when HUD is active, stop on unmount or HUD off.
   useEffect(() => {
-    if (!showHUD) return;
+    if (!RNCV_DEBUG_CALLBACKS || !showHUD) return;
     nativeMod.metrics.startFrameTimer();
     return () => { nativeMod.metrics.stopFrameTimer(); };
   }, [showHUD]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1943,17 +1937,16 @@ function RiffBase<T = unknown>({
   // ── Debug callbacks ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (onRenderCountChange) {
-      const count = renderRange === null
-        ? itemCount
-        : Math.max(0, renderRange.last - renderRange.first + 1);
-      onRenderCountChange(count, itemCount);
-    }
+    if (!RNCV_DEBUG_CALLBACKS || !onRenderCountChange) return;
+    const count = renderRange === null
+      ? itemCount
+      : Math.max(0, renderRange.last - renderRange.first + 1);
+    onRenderCountChange(count, itemCount);
   }, [renderRange, itemCount, onRenderCountChange]);
 
   // Report mounted decoration count after every render.
   useLayoutEffect(() => {
-    onDecorationCountChange?.(decorationCountRef.current);
+    if (RNCV_DEBUG_CALLBACKS) onDecorationCountChange?.(decorationCountRef.current);
   });  // no deps — runs after every render
 
   // ── Layout helpers ───────────────────────────────────────────────────────────
@@ -2120,8 +2113,8 @@ function RiffBase<T = unknown>({
       }
 
       // P5.3 / onBlankArea — blank px computed inside processScroll (C++), zero marginal cost.
-      // JS work (ref write + callback) only runs when consumer provides onBlankArea.
-      if (onBlankArea && budgetedR.last >= budgetedR.first) {
+      // JS work (ref write + callback) only runs when RNCV_DEBUG_CALLBACKS is enabled.
+      if (RNCV_DEBUG_CALLBACKS && onBlankArea && budgetedR.last >= budgetedR.first) {
         const offsetStart = scrollResult.blankBefore ?? 0;
         const offsetEnd   = scrollResult.blankAfter  ?? 0;
         lastBlankAreaRef.current = { offsetStart, offsetEnd };
@@ -3310,78 +3303,11 @@ function RiffBase<T = unknown>({
   // (stickyConfigMap moved above renderCell — it must be defined before the
   //  scrollContent IIFE that calls renderCell)
 
-  // ── Section heights + decoration backgrounds ────────────────────────────────
-
-  const sectionHeights = useMemo(() => {
-    if (!propSections || !flattenResult) return [];
-    const startIndices = flattenResult.sectionStartFlatIndices;
-    return propSections.map((_, i) => {
-      const startAttr = effectiveLayout.attributesForItem(startIndices[i]!, 0);
-      const startY = startAttr ? startAttr.frame.y : 0;
-      let endY: number;
-      if (i + 1 < propSections.length) {
-        const endAttr = effectiveLayout.attributesForItem(startIndices[i + 1]!, 0);
-        endY = endAttr ? endAttr.frame.y : startY;
-      } else {
-        endY = Math.max(contentHeight, startY);
-      }
-      return Math.max(0, endY - startY);
-    });
-  }, [propSections, flattenResult, contentHeight, effectiveLayout,
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      layoutCacheVersion]);
-
-  // Inject decoration backgrounds into scroll content via renderScrollView.
-  const renderScrollView = useMemo(() => {
-    if (!renderSectionBackground || !propSections || !flattenResult) return propRenderScrollView;
-    const startIndices = flattenResult.sectionStartFlatIndices;
-    return (props: any) => {
-      const { children: cvContent, ...scrollProps } = props;
-      const decorations = propSections.map((s, i) => {
-        const bg = renderSectionBackground(i);
-        if (!bg) return null;
-        const startAttr = effectiveLayout.attributesForItem(startIndices[i]!, 0);
-        return (
-          <View
-            key={s.key + '_bg'}
-            pointerEvents="none"
-            style={{
-              position: 'absolute',
-              top:    startAttr ? startAttr.frame.y : 0,
-              left:   0,
-              right:  0,
-              height: sectionHeights[i] ?? 0,
-            }}
-          >
-            {bg}
-          </View>
-        );
-      });
-      if (propRenderScrollView) {
-        return propRenderScrollView({ ...props, children: <>{decorations}{cvContent}</> });
-      }
-      return (
-        <ScrollView {...scrollProps}>
-          {decorations}
-          {cvContent}
-        </ScrollView>
-      );
-    };
-  }, [renderSectionBackground, propSections, flattenResult, sectionHeights, propRenderScrollView]);
-
   // ── Render ───────────────────────────────────────────────────────────────────
 
-  const hud = showHUD
+  const hud = (RNCV_DEBUG_CALLBACKS && showHUD)
     ? <CollectionViewHUD snapshotRef={hudSnapshotRef} nativeMod={nativeMod} />
     : null;
-
-
-  if (__DEV__ && (renderScrollView || ScrollViewComponent)) {
-    console.warn(
-      'CollectionView: ScrollViewComponent and renderScrollView are not supported ' +
-      'in ShadowNode mode. The native RNCollectionViewContainer owns the scroll view.',
-    );
-  }
 
   const renderRangeStart = effFirst;
   const renderRangeEnd   = effLast;
