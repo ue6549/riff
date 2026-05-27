@@ -2101,12 +2101,21 @@ function RiffBase<T = unknown>({
   // content update — not just on scroll events.
   const prevItemMapRef = useRef<Map<string, T>>(new Map());
   useEffect(() => {
+    // In sections mode, data[] contains FlatItem wrappers. Unwrap to get the raw T.
+    const unwrap = (raw: T): T | null => {
+      if (!isSectioned) return raw;
+      const fi = raw as unknown as FlatItem<T>;
+      return fi._kind === 'item' ? fi.item : null;
+    };
+
     if (!isVariableHeight || !remeasureOnItemChange) {
       // Still keep the map current so it's accurate if the prop is toggled on later.
       if (data.length > 0 && keyExtractor) {
         for (let i = 0; i < data.length; i++) {
-          const item = data[i]!;
-          const key = keyExtractor(item, i);
+          const raw = data[i]!;
+          const item = unwrap(raw);
+          if (item == null) continue;
+          const key = keyExtractor(raw, i);
           prevItemMapRef.current.set(key, item);
         }
       }
@@ -2121,9 +2130,11 @@ function RiffBase<T = unknown>({
 
     const keysToInvalidate: string[] = [];
     for (let i = scanFirst; i <= scanLast; i++) {
-      const item = data[i];
-      if (!item) continue;
-      const key = keyExtractor ? keyExtractor(item, i) : String(i);
+      const raw = data[i];
+      if (!raw) continue;
+      const item = unwrap(raw);
+      if (item == null) continue;
+      const key = keyExtractor ? keyExtractor(raw, i) : String(i);
       const prev = prevItemMapRef.current.get(key);
       if (prev !== undefined && prev !== item && remeasureOnItemChange(prev, item)) {
         keysToInvalidate.push(key);

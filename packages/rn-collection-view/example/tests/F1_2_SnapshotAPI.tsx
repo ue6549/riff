@@ -3,17 +3,19 @@
  *
  * Demonstrates the NSDiffableDataSourceSnapshot-style mutation API:
  *   snap = ref.current.snapshot()
- *   snap.appendItems(...)
- *   ref.current.apply(snap)     // diff + LayoutAnimation + startTransition
+ *   snap.insertItemsAt(newItems, index)    // index-based insert
+ *   snap.deleteItemsAt([0, 1, 2])          // index-based delete
+ *   snap.moveItemFromTo(0, 10)             // index-based move
+ *   ref.current.apply(snap, setData)       // diff + LayoutAnimation + startTransition
  *
- * All mutations are identity-based (keys, not indices).
- * Move is singular (one per call) — matches Apple's API design.
+ * Content changes (same key, new data) are handled automatically via
+ * remeasureOnItemChange — no explicit invalidateKeys needed.
  *
  * What to observe:
- *   - Append/delete/move produce correct counts (green badges)
- *   - Position shifts animate via LayoutAnimation on apply()
- *   - Scroll remains smooth during mutations (startTransition)
- *   - Reload evicts cached heights — cells re-measure
+ *   - Insert/delete/move produce correct counts and animate
+ *   - Reload changes content + re-measures automatically (no manual invalidation)
+ *   - scrollToIndex jumps to a specific position
+ *   - Batch chains multiple ops in one apply()
  */
 import React, { useCallback, useRef, useState, startTransition } from 'react';
 import {
@@ -40,6 +42,9 @@ const INITIAL_COUNT = 100;
 const initialData = makeItems(0, INITIAL_COUNT);
 const keyExtractor = (item: Item) => item.id;
 
+// remeasureOnItemChange predicate — re-measure only when line count changes
+const shouldRemeasure = (prev: Item, next: Item) => prev.lines !== next.lines;
+
 // ─── Log entry ───────────────────────────────────────────────────────────────
 
 type LogEntry = { op: string; pass: boolean; detail: string };
@@ -49,146 +54,129 @@ type LogEntry = { op: string; pass: boolean; detail: string };
 export default function F1_2_SnapshotAPI() {
   const [data, setData] = useState<Item[]>(initialData);
   const [log,  setLog]  = useState<LogEntry[]>([]);
-  const listRef    = useRef<RiffHandle<Item>>(null);
-  const nextIdRef  = useRef(INITIAL_COUNT);
+  const listRef   = useRef<RiffHandle<Item>>(null);
+  const nextIdRef = useRef(INITIAL_COUNT);
 
   const addLog = useCallback((entry: LogEntry) => {
     setLog(prev => [entry, ...prev].slice(0, 20));
   }, []);
 
-  // ── Insert 3 at top (visible shift — cells push down) ────────────────────
+  // ── Insert 3 at index 0 (prepend — cells push down) ──────────────────────
 
   const handleInsertTop = useCallback(() => {
     const h = listRef.current;
     if (!h) return;
-
-    const snap = h.snapshot();
-    snap.insertItems(makeItems(nextIdRef.current, 3), null); // afterKey=null → prepend
+    const newItems = makeItems(nextIdRef.current, 3);
     nextIdRef.current += 3;
-    h.apply(snap);
+    const snap = h.snapshot();
+    snap.insertItemsAt(newItems, 0);          // index 0 = prepend
+    h.apply(snap, setData);
 
     addLog({
-      op: 'insertItems(3, top)',
+      op: 'insertItemsAt(3, index:0)',
       pass: true,
       detail: `count ${data.length}→${data.length + 3} — watch cells shift down`,
     });
   }, [data.length, addLog]);
 
-  // ── Insert 3 after item 5 (mid-list insert) ───────────────────────────────
+  // ── Insert 3 at index 6 (after position 5) ───────────────────────────────
 
   const handleInsertMid = useCallback(() => {
     const h = listRef.current;
     if (!h || data.length < 6) return;
-
-    const afterKey = data[5]?.id;
-    if (!afterKey) return;
-
-    const snap = h.snapshot();
-    snap.insertItems(makeItems(nextIdRef.current, 3), afterKey);
+    const newItems = makeItems(nextIdRef.current, 3);
     nextIdRef.current += 3;
-    h.apply(snap);
+    const snap = h.snapshot();
+    snap.insertItemsAt(newItems, 6);          // ends up at indices 6,7,8
+    h.apply(snap, setData);
 
     addLog({
-      op: `insertItems(3, after ${afterKey})`,
+      op: 'insertItemsAt(3, index:6)',
       pass: true,
       detail: `inserted after position 5 — items 6+ shift down`,
     });
-  }, [data, addLog]);
+  }, [data.length, addLog]);
 
-  // ── Delete the first 3 items (visible at top — easy to watch) ───────────
+  // ── Delete indices 0,1,2 (top 3) ─────────────────────────────────────────
 
   const handleDelete = useCallback(() => {
     const h = listRef.current;
     if (!h || data.length < 3) return;
-
-    // Safe: filter undefined in case of stale closure during rapid taps
-    const targets = data.slice(0, 3)
-      .filter((item): item is Item => item !== undefined)
-      .map(i => i.id);
-    if (targets.length === 0) return;
-
     const snap = h.snapshot();
-    snap.deleteItems(targets);
-    h.apply(snap);
+    snap.deleteItemsAt([0, 1, 2]);
+    h.apply(snap, setData);
 
     addLog({
-      op: `deleteItems(${targets.join(',')})`,
+      op: 'deleteItemsAt([0,1,2])',
       pass: true,
-      detail: `removed top 3 → count ${data.length - targets.length}`,
+      detail: `removed top 3 → count ${data.length - 3}`,
     });
-  }, [data, addLog]);
+  }, [data.length, addLog]);
 
-  // ── Move first item after 10th (obvious jump down the list) ─────────────
+  // ── Move index 0 to index 10 (obvious jump) ───────────────────────────────
 
   const handleMove = useCallback(() => {
     const h = listRef.current;
     if (!h || data.length < 11) return;
-
-    const key      = data[0]?.id;
-    const afterKey = data[10]?.id;
-    if (!key || !afterKey) return;
-
     const snap = h.snapshot();
-    snap.moveItem(key, afterKey);
-    h.apply(snap);
+    snap.moveItemFromTo(0, 10);
+    h.apply(snap, setData);
 
     addLog({
-      op: `moveItem(${key} → after ${afterKey})`,
+      op: 'moveItemFromTo(0 → 10)',
       pass: true,
       detail: `item 0 jumped to position 10`,
     });
-  }, [data, addLog]);
+  }, [data.length, addLog]);
 
-  // ── Reload first 3 items (change content behind same keys) ────────────────
+  // ── Reload first 3 items — content change, auto re-measure ───────────────
+  //
+  // No explicit invalidateKeys needed: remeasureOnItemChange detects that
+  // lines changed and evicts the cache automatically on the next render.
 
   const handleReload = useCallback(() => {
-    const h = listRef.current;
-    if (!h || data.length < 3) return;
-
-    const ids = data.slice(0, 3).map(i => i.id);
-
-    // First, update the actual item content
-    const updated = data.map(item =>
-      ids.includes(item.id)
-        ? { ...item, title: `Reloaded ${item.id}`, lines: 2 }
+    if (data.length < 3) return;
+    const ids = new Set([data[0]!.id, data[1]!.id, data[2]!.id]);
+    setData(prev => prev.map(item =>
+      ids.has(item.id)
+        ? { ...item, title: `Reloaded ${item.id}`, lines: item.lines === 1 ? 3 : 1 }
         : item,
-    );
-    setData(updated);
-
-    // Then invalidate cached heights so cells re-measure
-    h.invalidateKeys(ids);
+    ));
 
     addLog({
-      op: `reloadItems(${ids.join(',')})`,
+      op: 'reload(top 3) — via remeasureOnItemChange',
       pass: true,
-      detail: `invalidated ${ids.length} keys`,
+      detail: `toggled lines 1↔3 — auto-invalidates height cache`,
     });
-  }, [data, addLog]);
+  }, [data]);
 
-  // ── Chained batch ─────────────────────────────────────────────────────────
+  // ── Scroll to index 50 ────────────────────────────────────────────────────
+
+  const handleScrollTo = useCallback(() => {
+    listRef.current?.scrollToIndex(50, { position: 'top', animated: true });
+    addLog({ op: 'scrollToIndex(50)', pass: true, detail: 'scroll to index 50' });
+  }, [addLog]);
+
+  // ── Chained batch: deleteAt(0) + append(5) + moveFromTo(5→0) ─────────────
 
   const handleBatch = useCallback(() => {
     const h = listRef.current;
     if (!h || data.length < 10) return;
-
-    const first = data[0]?.id;
-    const sixth = data[5]?.id;
-    if (!first || !sixth) return;
-
+    const newItems = makeItems(nextIdRef.current, 5);
+    nextIdRef.current += 5;
     const snap = h.snapshot();
     snap
-      .deleteItems([first])
-      .appendItems(makeItems(nextIdRef.current, 5))
-      .moveItem(sixth, null); // move to front
-    nextIdRef.current += 5;
-    h.apply(snap);
+      .deleteItemsAt([0])
+      .appendItems(newItems)
+      .moveItemFromTo(5, 0);              // move original index-5 item to front
+    h.apply(snap, setData);
 
     addLog({
-      op: 'batch(del+append+move)',
+      op: 'batch(delAt(0)+append(5)+moveFromTo(5→0))',
       pass: true,
       detail: `count ${data.length}→${data.length - 1 + 5}`,
     });
-  }, [data, addLog]);
+  }, [data.length, addLog]);
 
   // ── Reset ─────────────────────────────────────────────────────────────────
 
@@ -215,13 +203,14 @@ export default function F1_2_SnapshotAPI() {
     <View style={S.root}>
       {/* ── Buttons ── */}
       <View style={S.toolbar}>
-        <Btn label="Insert top"   onPress={handleInsertTop} />
-        <Btn label="Insert mid"   onPress={handleInsertMid} />
-        <Btn label="Delete top 3" onPress={handleDelete} color="#dc2626" />
-        <Btn label="Move →10"     onPress={handleMove} color="#d97706" />
-        <Btn label="Reload 3"     onPress={handleReload} color="#059669" />
-        <Btn label="Batch"        onPress={handleBatch} color="#7c3aed" />
-        <Btn label="Reset"        onPress={handleReset} color="#555" />
+        <Btn label="Insert top"     onPress={handleInsertTop} />
+        <Btn label="Insert mid"     onPress={handleInsertMid} />
+        <Btn label="Delete top 3"   onPress={handleDelete}   color="#dc2626" />
+        <Btn label="Move 0→10"      onPress={handleMove}     color="#d97706" />
+        <Btn label="Reload 3"       onPress={handleReload}   color="#059669" />
+        <Btn label="Scroll→50"      onPress={handleScrollTo} color="#0891b2" />
+        <Btn label="Batch"          onPress={handleBatch}    color="#7c3aed" />
+        <Btn label="Reset"          onPress={handleReset}    color="#555" />
       </View>
 
       {/* ── Status bar ── */}
@@ -253,8 +242,8 @@ export default function F1_2_SnapshotAPI() {
           renderItem={renderItem}
           keyExtractor={keyExtractor}
           estimatedItemHeight={44}
+          remeasureOnItemChange={shouldRemeasure}
           ref={listRef}
-          onDataChange={setData}
         />
       </View>
     </View>
