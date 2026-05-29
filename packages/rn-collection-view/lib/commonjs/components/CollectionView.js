@@ -2961,7 +2961,7 @@ function RiffBase({
       },
       layoutCacheId: layoutCacheId,
       layoutCacheVersion: layoutCacheVersion,
-      layoutType: effectiveLayout.type,
+      layoutType: isJsLayout ? 'list' : effectiveLayout.type,
       estimatedItemHeight: effectiveItemHeight,
       renderRangeStart: renderRangeStart,
       renderRangeEnd: renderRangeEnd,
