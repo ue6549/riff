@@ -60,6 +60,7 @@ class RadialLayout {
     this.itemKeys = sec.itemKeys ? Array.from(sec.itemKeys) : Array.from({
       length: sec.itemCount
     }, (_, i) => `radial-${i}`);
+    console.log('[RADIAL-PREPARE] cacheId=' + context.cacheId + ' itemKeys[0..2]=' + JSON.stringify(this.itemKeys.slice(0, 3)) + ' containerW=' + context.containerWidth);
     this._writeForOffset(0);
   }
   processScroll(offset, _ctx, _opts) {
@@ -111,6 +112,8 @@ class RadialLayout {
       };
     }
     this._cache.setAttributesBatch(batch);
+    const first = batch[0];
+    console.log('[RADIAL-WRITE] n=' + n + ' key0=' + first?.key + ' frame0=' + JSON.stringify(first?.frame));
   }
   attributesForElements(_inRect) {
     // Mount all items — a radial typically holds a small N (≤ 30).

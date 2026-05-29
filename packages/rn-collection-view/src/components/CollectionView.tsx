@@ -771,6 +771,7 @@ interface FlattenResult<T> {
 }
 
 const RNCV_DEBUG_LOGS = false;
+const RNCV_JS_LAYOUT_DEBUG = true; // temporary: trace JS layout key/frame chain
 // Consumer-facing debug/instrumentation callbacks:
 // showHUD, onRenderCountChange, onDecorationCountChange, onBlankArea.
 // Controlled at build time (not at runtime via __DEV__).
@@ -1714,6 +1715,20 @@ function RiffBase<T = unknown>({
       };
       prevRenderRef.current = budgeted;
       setRenderRange(budgeted);
+      if (__DEV__ && RNCV_JS_LAYOUT_DEBUG) {
+        const keys0 = layoutContext.sections[0]?.itemKeys;
+        console.log('[JSLAYOUT-PREPARE] type=' + (effectiveLayout as any).type
+          + ' cacheId=' + layoutContext.cacheId
+          + ' itemKeys[0..2]=' + JSON.stringify(keys0?.slice(0, 3))
+          + ' renderRange=' + JSON.stringify(budgeted)
+          + ' cacheVersion=' + nativeLayoutCache.version());
+        // Verify first key is in cache
+        const k0 = keys0?.[0];
+        if (k0) {
+          const attr = nativeLayoutCache.getAttributes(k0);
+          console.log('[JSLAYOUT-PREPARE] cache.getAttributes(' + k0 + ')=' + JSON.stringify(attr?.frame));
+        }
+      }
     }
     // NOTE: computeCorrection() is NOT called here. It runs in native updateState:
     // AFTER Yoga has measured new items via applyMeasurements. Calling it here
@@ -3084,9 +3099,13 @@ function RiffBase<T = unknown>({
       return effectiveLayout.cacheKeyForSupplementary?.('footer', sk)
         ?? `${effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type}-${sk}-footer`;
     }
-    return effectiveLayout.cacheKeyForItem?.(ik, sk)
+    const ck = effectiveLayout.cacheKeyForItem?.(ik, sk)
       ?? (layoutContext?.sections[sk]?.itemKeys?.[ik]
         ?? `${effectiveLayout.keyPrefixForSection?.(sk) ?? (effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type)}-${sk}-${ik}`);
+    if (__DEV__ && RNCV_JS_LAYOUT_DEBUG && isJsLayout && ik < 3) {
+      console.log('[JSLAYOUT-KEY] index=' + index + ' sk=' + sk + ' ik=' + ik + ' cacheKey=' + ck);
+    }
+    return ck;
   };
 
   let effFirst = 0;

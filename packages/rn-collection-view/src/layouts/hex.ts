@@ -110,12 +110,13 @@ class HexLayout implements RiffLayout {
       maxBottom = Math.max(maxBottom, y + sz);
 
       batch[i] = {
-        key:     this.itemKeys[i],
-        section: 0,
-        index:   i,
-        frame:   { x, y, width: sz, height: sz },
-        zIndex:  0,
-        alpha:   1,
+        key:         this.itemKeys[i],
+        section:     0,
+        index:       i,
+        frame:       { x, y, width: sz, height: sz },
+        sizingState: 'measured',
+        zIndex:      0,
+        alpha:       1,
       };
     }
 

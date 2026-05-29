@@ -125,6 +125,10 @@ using namespace facebook::react;
   [super prepareForRecycle];
   _shadowNodePositioned = NO;
   _lastFiredSize = CGSizeZero;
+  _cacheKey = nil;
+  self.alpha = 1.0;
+  self.layer.zPosition = 0;
+  self.layer.transform = CATransform3DIdentity;
 #if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
   _lastPaintedType = nil;
   // Reset to "unknown / rogue" orange so a recycled view that never gets a
@@ -227,14 +231,8 @@ using namespace facebook::react;
   }
 }
 
-#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
-
-// ── Visual diagnostics (DEBUG only) ────────────────────────────────────────
-// updateProps fires every time React commits new props for this view. Read
-// the `type` prop and repaint the type-coloured tint + the on-cell debug
-// label so a rogue rectangle in the H list area immediately reveals
-// whether it's a real visible cell that leaked (V) or a measure-only
-// cell parked in the wrong place (M).
+// ── Props update ───────────────────────────────────────────────────────────────
+// Always store cacheKey so applyPositionsFromState: can look up visual attributes.
 
 - (void)updateProps:(const facebook::react::Props::Shared &)props
            oldProps:(const facebook::react::Props::Shared &)oldProps
@@ -242,11 +240,11 @@ using namespace facebook::react;
   [super updateProps:props oldProps:oldProps];
   const auto cellProps = std::static_pointer_cast<const RNMeasuredCellProps>(props);
   if (!cellProps) return;
+
+  _cacheKey = [NSString stringWithUTF8String:cellProps->cacheKey.c_str()];
+
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
   // ── Visual diagnostics (DEBUG only) ─────────────────────────────────
-  // Repaint type-coloured tint and refresh the on-cell debug label so a
-  // rogue green block in the H list area immediately reveals whether
-  // it's a real visible cell that leaked (V) or a pooled measure-only
-  // cell parked at Yoga-default position (M).
   NSString *typeStr = [NSString stringWithUTF8String:cellProps->type.c_str()];
   if (typeStr.length == 0) typeStr = @"(empty)";
   const int  idx         = (int)cellProps->index;
@@ -260,7 +258,6 @@ using namespace facebook::react;
   if (labelChanged) {
     _lastIndex       = idx;
     _lastMeasureOnly = measureOnly;
-    // Type letter: c=cell, d=decoration, s=supp, ?=other.
     char typeLetter =
         [typeStr isEqualToString:@"cell"]          ? 'c' :
         [typeStr isEqualToString:@"decoration"]    ? 'd' :
@@ -269,13 +266,14 @@ using namespace facebook::react;
                         typeLetter, idx, measureOnly ? @"M" : @"V", (long)self.tag];
     [_debugLabel sizeToFit];
     [self setNeedsLayout];
-    // accessibilityLabel surfaces the same info in the Xcode View
-    // Hierarchy inspector right next to the class name.
     self.accessibilityLabel = [NSString stringWithFormat:@"RNCell[type=%@ idx=%d %@ ck=%s tag=%ld]",
                                typeStr, idx, measureOnly ? @"M" : @"V",
                                cellProps->cacheKey.c_str(), (long)self.tag];
   }
+#endif
 }
+
+#if DEBUG && RNCV_DEBUG_COLLECTION_VISUALS
 
 // type → color mapping. See header block at top of file for legend.
 - (void)_rncvApplyVisualForType:(NSString *)type

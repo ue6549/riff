@@ -152,12 +152,13 @@ class Carousel3DLayout implements RiffLayout {
       const zIndex = Math.round(front * 100);
 
       batch[i] = {
-        key:     this.itemKeys[i],
-        section: 0,
-        index:   i,
-        frame:   { x, y, width: sz, height: sz },
+        key:         this.itemKeys[i],
+        section:     0,
+        index:       i,
+        frame:       { x, y, width: sz, height: sz },
+        sizingState: 'measured',
         zIndex,
-        alpha:   0.45 + 0.55 * front,
+        alpha:       0.45 + 0.55 * front,
         transform3D: buildRotationMatrix(angleRad, this.opts.perspective),
       };
     }

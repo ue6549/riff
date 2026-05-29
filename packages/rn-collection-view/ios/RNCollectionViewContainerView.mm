@@ -9,11 +9,11 @@
 #import "CollectionViewContainerShadowNode.h"
 #import "RNScrollCoordinatedViewView.h"
 
-// Forward-declare registry helpers to avoid pulling in CollectionViewModule's heavy deps.
+// LayoutCache: full include for LayoutAttributes (alpha, transform3D, zIndex).
+#include "LayoutCache.h"
 #include <memory>
 #include <cstdint>
 #include <functional>
-namespace rncv { class LayoutCache; }
 namespace facebook::react {
   std::shared_ptr<rncv::LayoutCache> layoutCacheForId(int32_t cacheId);
   using ScrollHandler = std::function<void(double x, double y, bool animated)>;
@@ -34,7 +34,7 @@ using namespace facebook::react;
 
 // Cross-platform logging — active only in DEBUG builds; no-op in release.
 #ifndef RNCV_ENABLE_NATIVE_LOGS
-#define RNCV_ENABLE_NATIVE_LOGS 0
+#define RNCV_ENABLE_NATIVE_LOGS 1
 #endif
 
 // Set RNCV_ENABLE_MVC_TRACE=1 to enable verbose MVC lifecycle tracing.
@@ -83,6 +83,9 @@ using namespace facebook::react;
 
   // LayoutCache registry ID — cached from props for scroll offset wiring.
   int32_t _layoutCacheId;
+
+  // YES when layoutType == 'js' — enables visual attribute application per cell.
+  BOOL _isJsLayout;
 
   // Scroll axis — when YES, UIScrollView scrolls horizontally.
   BOOL _horizontal;
@@ -226,7 +229,8 @@ using namespace facebook::react;
       *std::static_pointer_cast<const RNCollectionViewContainerProps>(props);
 
   // Forward scroll-related props to internal UIScrollView.
-  _horizontal = newProps.horizontal;
+  _horizontal  = newProps.horizontal;
+  _isJsLayout  = (newProps.layoutType == RNCollectionViewContainerLayoutType::Js);
   _scrollView.scrollEnabled = newProps.scrollEnabled;
   _scrollView.bounces = newProps.bounces;
   _scrollView.showsVerticalScrollIndicator = newProps.showsVerticalScrollIndicator && !newProps.horizontal;
@@ -628,6 +632,40 @@ using namespace facebook::react;
                i, (long)child.tag,
                child.frame.origin.x, child.frame.origin.y,
                child.frame.size.width, child.frame.size.height);
+    }
+
+    // Apply visual attributes (alpha, transform3D, zIndex) from LayoutCache.
+    // Only meaningful for JS layouts which write these via setAttributesBatch.
+    // Skipped for C++ layouts where attrs are always identity/default.
+    if (_isJsLayout && [child isKindOfClass:[RNMeasuredCellView class]]) {
+      NSString *ck = ((RNMeasuredCellView *)child).cacheKey;
+      if (ck.length > 0) {
+        auto cache = facebook::react::layoutCacheForId(_layoutCacheId);
+        if (cache) {
+          auto attrs = cache->getAttributes(ck.UTF8String);
+          if (attrs) {
+            // Alpha
+            child.alpha = (CGFloat)attrs->alpha;
+
+            // zPosition (zIndex → CALayer depth)
+            child.layer.zPosition = (CGFloat)attrs->zIndex;
+
+            // Transform3D: column-major array → CATransform3D
+            // t[col*4+row] → m(row+1)(col+1) in CATransform3D
+            const auto& t = attrs->transform3D;
+            if (t != rncv::kIdentityTransform3D) {
+              CATransform3D ct;
+              ct.m11 = t[0];  ct.m21 = t[1];  ct.m31 = t[2];  ct.m41 = t[3];
+              ct.m12 = t[4];  ct.m22 = t[5];  ct.m32 = t[6];  ct.m42 = t[7];
+              ct.m13 = t[8];  ct.m23 = t[9];  ct.m33 = t[10]; ct.m43 = t[11];
+              ct.m14 = t[12]; ct.m24 = t[13]; ct.m34 = t[14]; ct.m44 = t[15];
+              child.layer.transform = ct;
+            } else {
+              child.layer.transform = CATransform3DIdentity;
+            }
+          }
+        }
+      }
     }
   }
 }

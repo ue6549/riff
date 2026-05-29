@@ -111,6 +111,9 @@ class RadialLayout implements RiffLayout {
     this.itemKeys = sec.itemKeys
       ? Array.from(sec.itemKeys)
       : Array.from({ length: sec.itemCount }, (_, i) => `radial-${i}`);
+    console.log('[RADIAL-PREPARE] cacheId=' + context.cacheId
+      + ' itemKeys[0..2]=' + JSON.stringify(this.itemKeys.slice(0, 3))
+      + ' containerW=' + context.containerWidth);
     this._writeForOffset(0);
   }
 
@@ -152,16 +155,19 @@ class RadialLayout implements RiffLayout {
       const y = cy + r * Math.sin(angle) - sz / 2 + scrollY;
 
       batch[i] = {
-        key:     this.itemKeys[i],
-        section: 0,
-        index:   i,
-        frame:   { x, y, width: sz, height: sz },
+        key:        this.itemKeys[i],
+        section:    0,
+        index:      i,
+        frame:      { x, y, width: sz, height: sz },
+        sizingState: 'measured',
         zIndex,
-        alpha:   opacity,
+        alpha:      opacity,
         transform3D: scaleMatrix(scale),
       };
     }
     this._cache.setAttributesBatch(batch);
+    const first = batch[0] as any;
+    console.log('[RADIAL-WRITE] n=' + n + ' key0=' + first?.key + ' frame0=' + JSON.stringify(first?.frame));
   }
 
   attributesForElements(_inRect: Rect): LayoutAttributes[] {

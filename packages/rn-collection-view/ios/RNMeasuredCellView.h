@@ -29,6 +29,13 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @property (nonatomic) BOOL shadowNodePositioned;
 
+/**
+ * Cache key from props — used by applyPositionsFromState: to look up visual
+ * attributes (alpha, transform3D, zIndex) from the LayoutCache and apply them
+ * to this view's layer after the frame is set.
+ */
+@property (nonatomic, copy, nullable) NSString *cacheKey;
+
 @end
 
 NS_ASSUME_NONNULL_END
