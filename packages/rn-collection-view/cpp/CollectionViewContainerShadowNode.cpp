@@ -141,13 +141,14 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
 
   // Determine layout type string from the enum prop.
-  // codegen generates: 0=list, 1=grid, 2=masonry, 3=flow, 4=compositional
+  // codegen generates: 0=list, 1=grid, 2=masonry, 3=flow, 4=compositional, 5=js
   std::string layoutType = "list";
   switch (props.layoutType) {
     case RNCollectionViewContainerLayoutType::Grid:          layoutType = "grid";          break;
     case RNCollectionViewContainerLayoutType::Masonry:       layoutType = "masonry";       break;
     case RNCollectionViewContainerLayoutType::Flow:          layoutType = "flow";          break;
     case RNCollectionViewContainerLayoutType::Compositional: layoutType = "compositional"; break;
+    case RNCollectionViewContainerLayoutType::Js:            layoutType = "js";            break;
     default: break;
   }
 
