@@ -1,4 +1,5 @@
 #import "RNCollectionViewContainerView.h"
+#import "RNCVContentView.h"
 #import "RNMeasuredCellView.h"
 #import "RNOrthogonalSectionView.h"
 #import "RNCollectionSubContainerView.h"
@@ -60,7 +61,7 @@ using namespace facebook::react;
 
 @implementation RNCollectionViewContainerView {
   UIScrollView *_scrollView;
-  UIView *_contentView;
+  RNCVContentView *_contentView;
 
   // State from ShadowNode.
   std::shared_ptr<const CollectionViewContainerShadowNode::ConcreteState> _state;
@@ -124,7 +125,7 @@ using namespace facebook::react;
     _scrollView.delegate = self;
 
     // Content view holds all children.
-    _contentView = [[UIView alloc] initWithFrame:CGRectZero];
+    _contentView = [[RNCVContentView alloc] initWithFrame:CGRectZero];
     [_scrollView addSubview:_contentView];
     [self addSubview:_scrollView];
 
