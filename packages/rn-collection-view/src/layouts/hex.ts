@@ -19,7 +19,7 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
@@ -49,7 +49,7 @@ export interface HexOptions {
   gap?: number;
 }
 
-class HexLayout implements CollectionViewLayout {
+class HexLayout implements RiffLayout {
   readonly type = 'hex';
   readonly horizontal = false;
   readonly needsSpatialQuery = false;
@@ -150,6 +150,6 @@ class HexLayout implements CollectionViewLayout {
   }
 }
 
-export type HexFactory = (opts?: HexOptions) => CollectionViewLayout;
+export type HexFactory = (opts?: HexOptions) => RiffLayout;
 
 export const hex: HexFactory = (opts = {}) => new HexLayout(opts);

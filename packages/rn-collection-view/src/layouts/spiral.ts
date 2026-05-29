@@ -16,7 +16,7 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
@@ -69,7 +69,7 @@ function scaleMatrix(s: number): readonly number[] {
   ];
 }
 
-class SpiralLayout implements CollectionViewLayout {
+class SpiralLayout implements RiffLayout {
   readonly type = 'spiral';
   readonly horizontal = false;
   private _cache = nativeMod.layoutCache;
@@ -183,6 +183,6 @@ class SpiralLayout implements CollectionViewLayout {
   }
 }
 
-export type SpiralFactory = (opts?: SpiralOptions) => CollectionViewLayout;
+export type SpiralFactory = (opts?: SpiralOptions) => RiffLayout;
 
 export const spiral: SpiralFactory = (opts = {}) => new SpiralLayout(opts);

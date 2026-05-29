@@ -18,12 +18,12 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { Riff } from '../components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
 import { compositional } from '@riff/layouts/compositional';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 import { PerfHood } from '../components/PerfHood';
 import {
   ProductItem, BannerItem, CategoryItem,
@@ -89,17 +89,17 @@ function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
     // S1: Banner carousel — H list (280px wide banners, ~180px tall)
     { range: 1, layout: list({ estimatedItemHeight: 280, headerHeight: HEADER_H, footerHeight: FOOTER_H, itemSpacing: 8, sectionSpacing: 12, estimatedCrossAxisHeight: 180 }), horizontal: true },
     // S2: Deals of the Day — 2-col V grid, section bg
-    { range: 2, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }) },
+    { range: 2, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: true, sectionSpacing: 12 }) },
     // S3: Recently Viewed — H list (180px wide product cards, ~350px tall)
     { range: 3, layout: list({ estimatedItemHeight: 180, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 12, estimatedCrossAxisHeight: 350 }), horizontal: true },
     // S4: Shop by Category — 3-col V grid
-    { range: 4, layout: grid({ columns: 3, rowHeight: 90, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, sectionSpacing: 12 }) },
+    { range: 4, layout: grid({ columns: 3, estimatedItemHeight: 90, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, sectionSpacing: 12 }) },
     // S5: Trending Now — H list (180px wide product cards, ~350px tall)
     { range: 5, layout: list({ estimatedItemHeight: 180, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 12, estimatedCrossAxisHeight: 350 }), horizontal: true },
     // S6: Featured Brands — H list of banners (280px wide, ~180px tall)
     { range: 6, layout: list({ estimatedItemHeight: 280, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 12, estimatedCrossAxisHeight: 180 }), horizontal: true },
     // S7: Recommended — 2-col masonry, section bg
-    { range: 7, layout: masonry({ columns: 2, heightForItem: () => 180, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionBackground: true, sectionSpacing: 12 }) },
+    { range: 7, layout: masonry({ columns: 2, estimatedItemHeight: 180, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionBackground: true, sectionSpacing: 12 }) },
   ]), []);
 
   const SECTION_META = [
@@ -113,7 +113,7 @@ function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
     { subtitle: 'masonry V — 2 columns' },
   ];
 
-  const sections = useMemo<SectionConfig<any>[]>(() =>
+  const sections = useMemo<RiffSection<any>[]>(() =>
     ALL_SECTIONS.map((sec, i) => {
       const base: any = {
         key: sec.key,
@@ -166,7 +166,7 @@ function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
 
   return (
     <Riff
-      handle={listRef}
+      ref={listRef}
       sections={sections}
       layout={layout}
       keyExtractor={keyExtractor}

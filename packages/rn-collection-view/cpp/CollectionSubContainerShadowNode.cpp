@@ -70,11 +70,28 @@ const char CollectionSubContainerComponentName[] = "RNCollectionSubContainer";
 bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
   const auto& props =
       *std::static_pointer_cast<const RNCollectionSubContainerProps>(getProps());
+
+  const int curLCV = props.layoutCacheVersion;
+  if (curLCV != lastLayoutCacheVersion_) {
+    lastLayoutCacheVersion_ = curLCV;
+    return false;
+  }
+
   auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
   if (!cache) return false;
 
   uint64_t cv = cache->version();
   if (cv != lastCacheVersion_) return false;
+
+  // H sub-containers also invalidate on H-only cache writes. These are batched
+  // via endHBatch() — they bump _hMvcVersion but NOT _version, so the check
+  // above passes. Without this, an H sub-container that just wrote its own
+  // measurement deltas would silently skip re-reading the updated positions.
+  // V containers (main container) intentionally don't check _hMvcVersion —
+  // they have no interest in H item position changes.
+  const bool isH =
+      (props.scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
+  if (isH && cache->hMvcVersion() != lastHMvcVersion_) return false;
 
   auto children = getLayoutableChildNodes();
   size_t N = children.size();
@@ -123,6 +140,10 @@ bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
     return false;
   }
 
+  RNCV_HSUB_LOG("SKIP-DECISION sIdx=%d SKIP cv=%llu N=%zu",
+                props.sectionIndex,
+                (unsigned long long)cache->version(),
+                N);
   return true;
 }
 
@@ -137,6 +158,7 @@ void CollectionSubContainerShadowNode::layout(LayoutContext layoutContext) {
   // already correct — no need to re-read cache, compute deltas, or diff state.
   if (shouldSkipCorrection()) {
     RNCV_SUB_LOG("layout() SKIP — children + cache unchanged");
+    RNCV_HSUB_LOG("LAYOUT-SKIP (H-4b confirmed)");
     return;
   }
 
@@ -162,6 +184,7 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   correctedBoundingRect_ = Rect{};
 
   auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
+  const bool isH = (props.scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
 
   // ── Read section size from cache (H-2.1 round-trip cut) ──────────────────
   //
@@ -347,11 +370,19 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     const auto& childMetrics = children[i]->getLayoutMetrics();
     const auto yogaWidth  = childMetrics.frame.size.width;
     const auto yogaHeight = childMetrics.frame.size.height;
+    // Activity=hidden collapses the cell's Yoga height to 0. The Activity
+    // ancestor receives display:none but its OWN displayType stays Inline on
+    // the cell's LayoutMetrics — only the parent Activity node is None, so
+    // displayType is not a reliable signal here. yogaHeight == 0 is the
+    // practical proxy: H-list cells always have cross-axis height > 0 when
+    // rendered; only Activity=hidden produces exactly 0.
+    const bool cellIsHidden = (yogaHeight == 0.0f);
 
     static constexpr Float kCellMVCThresholdPt = 0.5f;
 
     if ((contentDim == rncv::ContentDimension::Height ||
          contentDim == rncv::ContentDimension::Both) &&
+        !cellIsHidden &&
         yogaHeight > 0 &&
         std::abs(yogaHeight - cv.h) > kCellMVCThresholdPt &&
         !keys[i].empty()) {
@@ -365,8 +396,12 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
       cv.h = yogaHeight;
     }
 
+    // Skip when Activity=hidden: Yoga resets width to the estimated value,
+    // oscillating the H-list content size on every bounce. The cache retains
+    // the last real measurement so content size stays stable off-screen.
     if ((contentDim == rncv::ContentDimension::Width ||
          contentDim == rncv::ContentDimension::Both) &&
+        !cellIsHidden &&
         yogaWidth > 0 &&
         std::abs(yogaWidth - cv.w) > kCellMVCThresholdPt &&
         !keys[i].empty()) {
@@ -399,12 +434,23 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   RNCV_HSUB_LOG("PHASE4 sIdx=%d deltas=%zu engine=%s cache=%s",
                 props.sectionIndex, deltas.size(),
                 engine ? "YES" : "NO", cache ? "YES" : "NO");
+#if RNCV_ENABLE_HSUB_LOGS
+  for (const auto& d : deltas) {
+    RNCV_HSUB_LOG("DELTA sIdx=%d key='%s' axis=%s old=%.2f new=%.2f diff=%.2f",
+                  props.sectionIndex, d.key.c_str(),
+                  d.axis == rncv::MeasurementAxis::Width ? "W" : "H",
+                  d.oldValue, d.newValue, d.newValue - d.oldValue);
+  }
+#endif
   if (!deltas.empty() && engine && cache) {
     cache->snapshotAnchorIfNeeded();
     // Batch mode: coalesce all position writes into a single version bump.
+    // H sub-containers use endHBatch() so their writes bump _hMvcVersion
+    // instead of _version — V sub-containers won't see H writes as version
+    // changes and won't re-run shouldSkipCorrection unnecessarily.
     cache->beginBatch();
     bool handled = engine->applyMeasurements(deltas, *cache);
-    cache->endBatch();
+    if (isH) cache->endHBatch(); else cache->endBatch();
     RNCV_SUB_LOG("applyMeasurements deltas=%zu handled=%s",
                  deltas.size(), handled ? "YES" : "NO");
 
@@ -428,6 +474,9 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
     // when _sectionInfos hasn't converged yet. The helper scans cached item
     // frames and updates only frame.height — no reflow, no cascade overhead.
     // Phase 4.5 below then re-reads the updated value into cacheSectionSize.
+    // NOTE: always endBatch() — wrapper height is V-space metadata (consumed by
+    // the main V container's shouldSkipCorrection). Using endHBatch() here would
+    // prevent the main container from seeing the updated wrapper height.
     cache->beginBatch();
     rncv::CompositionalLayout::refreshHSectionWrapperHeight(*cache, props.sectionIndex);
     cache->endBatch();
@@ -549,6 +598,7 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
   }
   if (cache) {
     lastCacheVersion_ = cache->version();
+    lastHMvcVersion_  = cache->hMvcVersion();
   }
 }
 

@@ -317,6 +317,12 @@ public:
 
   uint64_t version() const;
 
+  // H-MVC version — bumped by endHBatch() instead of endBatch().
+  // V sub-containers only track version(); H sub-containers only track
+  // hMvcVersion(). This prevents H scroll applyMeasurements writes from
+  // causing shouldSkipCorrection() misses in unrelated V sub-containers.
+  uint64_t hMvcVersion() const;
+
   // ── Batch mode ─────────────────────────────────────────────────────────────
   // Coalesce multiple setAttributes writes into a single version bump.
   // Without batching, applyMeasurements cascading one Yoga delta through N
@@ -327,6 +333,9 @@ public:
   // outermost endBatch if any entry's frame changed during the batch.
   void beginBatch();
   void endBatch();
+  // Like endBatch() but bumps hMvcVersion instead of version.
+  // Use for H sub-container applyMeasurements writes.
+  void endHBatch();
 
   // ── JSI bindings ──────────────────────────────────────────────────────────
 
@@ -363,8 +372,10 @@ private:
   mutable bool                                      _sortedDirty = true;
   mutable bool                                      _sortedHorizontal = false;
   uint64_t                                          _version = 0;
+  uint64_t                                          _hMvcVersion = 0;
   int                                               _batchDepth = 0;
   bool                                              _batchDirty = false;
+  bool                                              _batchIsHMvc = false;
   mutable std::mutex                                _mutex;
   SpatialIndex                                      _index;   // M1.4
 

@@ -81,6 +81,8 @@ class CollectionSubContainerShadowNode final
   /// Fabric clones ShadowNodes via copy ctor, so these fields carry forward.
   bool shouldSkipCorrection();
   uint64_t lastCacheVersion_{0};
+  uint64_t lastHMvcVersion_{0};
+  int      lastLayoutCacheVersion_{-1};
   size_t   lastChildCount_{0};
   size_t   lastChildTagsHash_{0};
   /// Hash of per-child Yoga heights — catches content changes (Resize,

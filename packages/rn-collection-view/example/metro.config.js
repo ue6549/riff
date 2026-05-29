@@ -7,27 +7,20 @@ const libraryRoot = path.resolve(__dirname, '../');
  * Metro configuration for the example app.
  *
  * watchFolders: includes the library root so Metro sees changes to src/ files
- * imported via the @riff/* alias.
+ * imported via the @riff/* alias. Required because the example is a workspace
+ * member inside the library root — Metro only watches the example directory by
+ * default, but library source files live one level up.
  *
- * extraNodeModules:
- *   react / react-native — forced to example's single copy so that library
- *   source files (reached via @riff/*) never pick up the library's own
- *   node_modules/react-native and cause a dual-registry instance.
- *   @riff — maps the path alias to the library's src/ directory. Mirrors the
- *   tsconfig paths entry so Metro and TypeScript agree on resolution.
+ * resolveRequest: maps @riff/<subpath> → <libraryRoot>/src/<subpath> so Metro
+ * and TypeScript agree on module resolution. No react/react-native override
+ * needed — Yarn workspace hoisting ensures a single copy of both.
  */
 const config = {
   watchFolders: [libraryRoot],
   resolver: {
-    extraNodeModules: {
-      react:            path.resolve(__dirname, 'node_modules/react'),
-      'react-native':   path.resolve(__dirname, 'node_modules/react-native'),
-      '@babel/runtime': path.resolve(__dirname, 'node_modules/@babel/runtime'),
-    },
     resolveRequest: (context, moduleName, platform) => {
       if (moduleName.startsWith('@riff/')) {
         // Map @riff/<subpath> → <libraryRoot>/src/<subpath>
-        // Metro applies its normal extension + index resolution from there.
         const subpath = moduleName.slice('@riff/'.length);
         return context.resolveRequest(
           context,

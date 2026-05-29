@@ -17,7 +17,7 @@
  */
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, Animated, Easing } from 'react-native';
-import { Riff as CollectionView, type RiffHandle } from '../../components/CollectionView';
+import { Riff as CollectionView, type RiffHandle } from '@riff/components/CollectionView';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { masonry } from '@riff/layouts/masonry';
@@ -31,7 +31,7 @@ const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d'
 
 // ── List data ────────────────────────────────────────────────────────────────
 
-type ListItem = { id: string; color: string; num: number; subtitle: string; animated?: boolean };
+type ListItem = { id: string; color: string; num: number; subtitle: string; animated?: boolean; resized?: boolean };
 
 // S0 — Sticky Identity: variable heights, mutation target
 const S0_DATA: ListItem[] = Array.from({ length: 25 }, (_, i) => {
@@ -68,7 +68,7 @@ const S2_DATA: ListItem[] = Array.from({ length: 20 }, (_, i) => {
 
 // ── Grid data ────────────────────────────────────────────────────────────────
 
-type GridCell = { id: string; color: string; num: number; height?: number };
+type GridCell = { id: string; color: string; num: number; height?: number; resized?: boolean };
 
 // S2 uses varying heights to demonstrate uneven rows (row height = tallest item)
 const GS2_HEIGHTS = [60, 110, 80, 130, 70, 100, 90, 120, 65, 95, 115, 75];
@@ -87,7 +87,7 @@ const GS2_DATA: GridCell[] = Array.from({ length: 24 }, (_, i) => ({
 
 // ── Masonry data ─────────────────────────────────────────────────────────────
 
-type MasonryItem = { id: string; height: number; color: string; num: number; section: number };
+type MasonryItem = { id: string; height: number; color: string; num: number; section: number; resized?: boolean };
 
 function makeMasonrySection(prefix: string, sectionIdx: number, count: number): MasonryItem[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -128,7 +128,7 @@ function MasonrySectionFooter({ color, count }: { color: string; count: number }
 // containerWidth so fractional widths are computed at layout time.
 // Widths subtract a 0.1px epsilon to absorb IEEE-754 rounding in (avail-16)/3.
 
-type FlowCard = { id: string; kind: 'banner' | 'half' | 'third'; icon: string; label: string; color: string };
+type FlowCard = { id: string; kind: 'banner' | 'half' | 'third'; icon: string; label: string; color: string; resized?: boolean; tall?: boolean };
 
 // Pattern: banner, half, half, third, third, third — repeating
 const FC_PATTERN: Array<'banner' | 'half' | 'third'> = [
@@ -428,14 +428,16 @@ function AnimatedSectionBg({ sectionIndex, frame }: { sectionIndex: number; fram
 }
 
 export function ListDemo() {
-  // S0 data is mutable — insert / delete / resize act on it
+  // S0/S1/S2 data — all stateful so resize can embed flag in item data
   const [s0Items, setS0Items] = useState<ListItem[]>(S0_DATA);
-  const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());
+  const [s1Items, setS1Items] = useState<ListItem[]>(S1_DATA);
+  const [s2Items, setS2Items] = useState<ListItem[]>(S2_DATA);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
   const insertCounter = useRef(S0_DATA.length);
-  const cvRef = useRef<RiffHandle>(null);
+  const cvRef = useRef<RiffHandle<ListItem>>(null);
+  const [resizeVersion, setResizeVersion] = useState(0);
 
   const listLayout = useMemo(() => list({
     estimatedItemHeight: 56,
@@ -467,20 +469,23 @@ export function ListDemo() {
     setS0Items(prev => prev.length >= 3 ? prev.slice(3) : prev);
   }, []);
 
-  const toggleResize = useCallback((id: string) => {
-    setResizedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const resizeS0First = useCallback(() => {
+    setS0Items(prev => prev.map((item, i) =>
+      i === 0 ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
   }, []);
 
-  const resizeS0First = useCallback(() => {
-    if (s0Items.length > 0) toggleResize(s0Items[0]!.id);
-  }, [s0Items, toggleResize]);
+  const resizeS1First = useCallback(() => {
+    setS1Items(prev => prev.map((item, i) =>
+      i === 0 ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
+  }, []);
 
-  const resizeS1First = useCallback(() => toggleResize('s1-0'), [toggleResize]);
-  const resizeS2Last  = useCallback(() => toggleResize('s2-19'), [toggleResize]);
+  const resizeS2Last = useCallback(() => {
+    setS2Items(prev => prev.map((item, i) =>
+      i === prev.length - 1 ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
+  }, []);
 
   // ── Sections ───────────────────────────────────────────────────────────────
 
@@ -502,7 +507,7 @@ export function ListDemo() {
     },
     {
       key: 'cell-animation',
-      data: S1_DATA,
+      data: s1Items,
       header: {
         render: () => <SectionTimerHeader label="S1 — Cell Animation Identity" color="#2a9d8f" />,
         height: 50,
@@ -517,7 +522,7 @@ export function ListDemo() {
     },
     {
       key: 'insets-spacing',
-      data: S2_DATA,
+      data: s2Items,
       header: {
         render: () => <SectionTimerHeader label="S2 — Insets + Spacing" color="#6a4c93" />,
         height: 50,
@@ -530,7 +535,7 @@ export function ListDemo() {
       },
       insets: { top: 8, bottom: 8, left: 16, right: 16 },
     },
-  ], [s0Items]);
+  ], [s0Items, s1Items, s2Items]);
 
   // ── renderItem ─────────────────────────────────────────────────────────────
 
@@ -539,7 +544,7 @@ export function ListDemo() {
   const RESIZE_SUBTITLE = 'Resized to tall.\nLine 2 — height change triggers layout invalidation.\nLine 3 — ShadowNode corrects downstream positions in same commit.\nLine 4 — no scroll jump.';
 
   const renderItem = useCallback(({ item, sectionIndex }: { item: ListItem; sectionIndex: number; itemIndex: number }) => {
-    const isResized = resizedIds.has(item.id);
+    const isResized = !!item.resized;
     const subtitle = isResized ? RESIZE_SUBTITLE : item.subtitle;
 
     if (sectionIndex === 1 && item.animated && !isResized) {
@@ -553,7 +558,7 @@ export function ListDemo() {
         <Text style={{ color: textColor, fontSize: 13, marginTop: 4 }}>{subtitle}</Text>
       </View>
     );
-  }, [resizedIds]);
+  }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -574,9 +579,9 @@ export function ListDemo() {
         <CtrlBtn label="+Insert" onPress={handleInsert} />
         <CtrlBtn label="×Delete" onPress={handleDelete} />
         <View style={S.ctrlDivider} />
-        <CtrlBtn label="↕S0[0]" onPress={resizeS0First} active={s0Items.length > 0 && resizedIds.has(s0Items[0]!.id)} />
-        <CtrlBtn label="↕S1[0]" onPress={resizeS1First} active={resizedIds.has('s1-0')} />
-        <CtrlBtn label="↕S2[-1]" onPress={resizeS2Last} active={resizedIds.has('s2-19')} />
+        <CtrlBtn label="↕S0[0]" onPress={resizeS0First} active={!!s0Items[0]?.resized} />
+        <CtrlBtn label="↕S1[0]" onPress={resizeS1First} active={!!s1Items[0]?.resized} />
+        <CtrlBtn label="↕S2[-1]" onPress={resizeS2Last} active={!!s2Items[s2Items.length - 1]?.resized} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
         <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
@@ -586,18 +591,18 @@ export function ListDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={listLayout}
         stickyMode="push"
         estimatedItemHeight={56}
-        extraData={resizedIds}
         scrollViewProps={{ style: { backgroundColor: '#2a2a3e' }, indicatorStyle: 'white' }}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         maintainVisibleContentPosition={mvcEnabled}
         decorationRenderers={decorationRenderers}
         onDecorationCountChange={setDecoCount}
+        extraData={resizeVersion}
       />
     </View>
   );
@@ -626,26 +631,22 @@ function GridSectionFooter({ color, count }: { color: string; count: number }) {
 }
 
 export function GridDemo() {
-  const cvRef = useRef<any>(null);
+  const cvRef = useRef<RiffHandle<GridCell>>(null);
   const [gs0Items, setGs0Items] = useState<GridCell[]>(GS0_DATA);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizedIds, setResizedIds] = useState(() => new Set<string>());
+  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(GS0_DATA.length);
-  // Ref mirrors resizedIds so heightForItem closure always reads current value.
-  const resizedIdsRef = useRef(resizedIds);
-  resizedIdsRef.current = resizedIds;
 
-  // Always use heightForItem — S2 has varying heights, S0/S1 use GRID_ROW_H (or 2× when resized).
-  // Row height = max of items in that row, demonstrating uneven items in a row.
+  // estimatedHeightForItem reads resize state from item data — no ref closures needed.
   const gridLayout = useMemo(() => grid({
     columns: (w: number) => w > 280 ? 3 : w > 180 ? 2 : 1,
-    heightForItem: (i: number, s: number) => {
+    estimatedHeightForItem: (s: number, i: number) => {
       const allSections = [gs0Items, GS1_DATA, GS2_DATA];
       const item = allSections[s]?.[i];
       if (!item) return GRID_ROW_H;
-      if (resizedIdsRef.current.has(item.id)) return GRID_ROW_H * 2;
+      if (item.resized) return GRID_ROW_H * 2;
       return item.height ?? GRID_ROW_H;
     },
     columnSpacing: 6,
@@ -653,7 +654,7 @@ export function GridDemo() {
     sectionSpacing: 16,
     sectionBackground: true,
     separator: sepEnabled ? { color: '#ff3b30', height: 0.5 } : undefined,
-  }), [sepEnabled, resizedIds, gs0Items]);
+  }), [sepEnabled, gs0Items]);
 
   const keyExtractor = useCallback((item: GridCell) => item.id, []);
 
@@ -678,12 +679,10 @@ export function GridDemo() {
     setGs0Items(prev => prev.length >= 1 ? prev.slice(1) : prev);
   }, []);
 
-  const toggleResize = useCallback((id: string) => {
-    setResizedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggleResize = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
+    setGs0Items(prev => prev.map(item =>
+      item.id === id ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
   }, []);
 
   const sections = useMemo(() => [
@@ -740,13 +739,13 @@ export function GridDemo() {
     ),
   }), []);
 
-  const renderItem = useCallback(({ item }: { item: GridCell }) => {
-    const isResized = resizedIds.has(item.id);
+  const renderItem = useCallback(({ item, sectionIndex, itemIndex }: { item: GridCell; sectionIndex: number; itemIndex: number }) => {
+    const isResized = !!item.resized;
     const cellHeight = isResized ? GRID_ROW_H * 2 : (item.height ?? GRID_ROW_H);
     return (
       <Pressable
         style={[S.gridCell, { borderColor: item.color, height: cellHeight }]}
-        onPress={() => toggleResize(item.id)}
+        onPress={() => toggleResize(item.id, sectionIndex, itemIndex)}
       >
         <Text style={[S.gridCellText, { color: item.color }]}>{item.num}</Text>
         {item.height && !isResized && (
@@ -755,7 +754,7 @@ export function GridDemo() {
         {isResized && <Text style={{ color: item.color, fontSize: 9, opacity: 0.7 }}>↕ tall</Text>}
       </Pressable>
     );
-  }, [resizedIds, toggleResize]);
+  }, [toggleResize]);
 
   return (
     <View style={S.flex}>
@@ -768,7 +767,7 @@ export function GridDemo() {
         <CtrlBtn label="−1" onPress={handleDelete1} />
         <CtrlBtn label="+3" onPress={handleInsert} />
         <CtrlBtn label="−3" onPress={handleDelete} />
-        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = gs0Items[0]?.id; if (id) toggleResize(id); }} />
+        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = gs0Items[0]?.id; if (id) toggleResize(id, 0, 0); }} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
         <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
@@ -778,17 +777,17 @@ export function GridDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={gridLayout}
         stickyMode="push"
         estimatedItemHeight={GRID_ROW_H}
-        extraData={resizedIds}
         maintainVisibleContentPosition={mvcEnabled}
         decorationRenderers={decorationRenderers}
         onDecorationCountChange={setDecoCount}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
+        extraData={resizeVersion}
       />
     </View>
   );
@@ -797,19 +796,15 @@ export function GridDemo() {
 // ── Masonry layout config ───────────────────────────────────────────────────
 
 export function MasonryDemo() {
-  const cvRef = useRef<any>(null);
+  const cvRef = useRef<RiffHandle<MasonryItem>>(null);
   const [ms0Items, setMs0Items] = useState<MasonryItem[]>(MS0_INIT);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizedIds, setResizedIds] = useState(() => new Set<string>());
+  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(MS0_INIT.length);
-  const resizedIdsRef = useRef(resizedIds);
-  resizedIdsRef.current = resizedIds;
 
-  const allSectionsRef = useRef<MasonryItem[][]>([ms0Items, MS1_DATA, MS2_DATA]);
-  allSectionsRef.current = [ms0Items, MS1_DATA, MS2_DATA];
-
+  // estimatedHeightForItem reads resize state from item data — no ref closures needed.
   const masonryLayout = useMemo(() => masonry({
     columns: (w: number) => w > 200 ? 2 : 1,
     columnSpacing: 8,
@@ -817,12 +812,13 @@ export function MasonryDemo() {
     sectionSpacing: 16,
     sectionBackground: true,
     separator: sepEnabled ? { color: '#334', height: 0.5 } : undefined,
-    heightForItem: (i: number, s: number) => {
-      const item = allSectionsRef.current[s]?.[i];
+    estimatedHeightForItem: (s: number, i: number) => {
+      const sections = [ms0Items, MS1_DATA, MS2_DATA];
+      const item = sections[s]?.[i];
       if (!item) return 100;
-      return resizedIdsRef.current.has(item.id) ? item.height * 1.5 : item.height;
+      return item.resized ? Math.round(item.height * 1.5) : item.height;
     },
-  }), [sepEnabled, resizedIds, ms0Items]);
+  }), [sepEnabled, ms0Items]);
 
   const keyExtractor = useCallback((item: MasonryItem) => item.id, []);
 
@@ -838,12 +834,10 @@ export function MasonryDemo() {
     setMs0Items(prev => prev.length >= 1 ? prev.slice(1) : prev);
   }, []);
 
-  const toggleResize = useCallback((id: string) => {
-    setResizedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggleResize = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
+    setMs0Items(prev => prev.map(item =>
+      item.id === id ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
   }, []);
 
   const sections = useMemo(() => [
@@ -873,16 +867,16 @@ export function MasonryDemo() {
     ),
   }), []);
 
-  const renderItem = useCallback(({ item }: { item: MasonryItem }) => {
-    const isResized = resizedIds.has(item.id);
+  const renderItem = useCallback(({ item, sectionIndex, itemIndex }: { item: MasonryItem; sectionIndex: number; itemIndex: number }) => {
+    const isResized = !!item.resized;
     const h = isResized ? Math.round(item.height * 1.5) : item.height;
     return (
-      <Pressable style={[S.masonryCell, { backgroundColor: item.color, height: h }]} onPress={() => toggleResize(item.id)}>
+      <Pressable style={[S.masonryCell, { backgroundColor: item.color, height: h }]} onPress={() => toggleResize(item.id, sectionIndex, itemIndex)}>
         <Text style={S.masonryCellText}>{item.num}</Text>
         <Text style={S.masonryCellSub}>{h}px{isResized ? ' ↕' : ''}</Text>
       </Pressable>
     );
-  }, [resizedIds, toggleResize]);
+  }, [toggleResize]);
 
   return (
     <View style={S.flex}>
@@ -893,7 +887,7 @@ export function MasonryDemo() {
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
-        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = ms0Items[0]?.id; if (id) toggleResize(id); }} />
+        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = ms0Items[0]?.id; if (id) toggleResize(id, 0, 0); }} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
         <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
@@ -903,17 +897,17 @@ export function MasonryDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={masonryLayout}
         stickyMode="push"
         estimatedItemHeight={120}
-        extraData={resizedIds}
         maintainVisibleContentPosition={mvcEnabled}
         decorationRenderers={decorationRenderers}
         onDecorationCountChange={setDecoCount}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
+        extraData={resizeVersion}
       />
     </View>
   );
@@ -953,8 +947,6 @@ export function HMasonryDemo() {
     rowSpacing: 8,
     sectionSpacing: 16,
     sectionBackground: true,
-    // heightForItem unused in H-mode (Yoga measures; heights are uniform across all items)
-    heightForItem: () => 0,
   }), []);
 
   const handleInsert = useCallback(() => {
@@ -1047,7 +1039,7 @@ export function HMasonryDemo() {
 
       <View style={[HMS.listBg, { height: containerH }]}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={sections}
           layout={hmLayout}
           renderItem={renderItem}
@@ -1120,23 +1112,16 @@ function flowCardHeight(kind: FlowCard['kind'], tall: boolean): number {
 }
 
 export function FlowDemo() {
-  const cvRef = useRef<any>(null);
+  const cvRef = useRef<RiffHandle<FlowCard>>(null);
   const [s0Cards, setS0Cards] = useState<FlowCard[]>(FC_S0_INIT);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizedIds, setResizedIds] = useState(() => new Set<string>());
-  const [tallIds, setTallIds] = useState(() => new Set<string>());
+  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(FC_S0_INIT.length);
 
-  // Refs so sizeForItem never captures stale closures.
-  const s0CardsRef = useRef(s0Cards);
-  s0CardsRef.current = s0Cards;
-  const resizedIdsRef = useRef(resizedIds);
-  resizedIdsRef.current = resizedIds;
-  const tallIdsRef = useRef(tallIds);
-  tallIdsRef.current = tallIds;
   // Track the largest observed container width; when current width drops below
   // this baseline, treat it as a viewport-shrink resize mode.
+  // Geometry state — not item state — so a ref closure is correct here.
   const flowBaseWidthRef = useRef(0);
 
   const flowLayout = useMemo(() => flow({
@@ -1144,20 +1129,21 @@ export function FlowDemo() {
     lineSpacing: 8,
     sectionSpacing: 16,
     sectionBackground: true,
-    sizeForItem: (i: number, s: number, containerWidth: number) => {
+    estimatedSizeForItem: (s: number, i: number) => {
       // Both sections use FlowCard with the same fractional-width sizes.
-      const cards = s === 0 ? s0CardsRef.current : FC_S1_INIT;
+      // Container width is not available here; use the last observed width from the ref.
+      const cards = s === 0 ? s0Cards : FC_S1_INIT;
       const card = cards[i];
       if (!card) return { width: 80, height: 80 };
-      if (containerWidth > flowBaseWidthRef.current) flowBaseWidthRef.current = containerWidth;
+      const containerWidth = flowBaseWidthRef.current || 390;
       const viewportShrunk =
         flowBaseWidthRef.current > 0 && containerWidth < flowBaseWidthRef.current - 1;
-      const shrunk = viewportShrunk || resizedIdsRef.current.has(card.id);
+      const shrunk = viewportShrunk || (card.resized ?? false);
       const w = flowCardWidth(card.kind, containerWidth, shrunk);
-      const h = flowCardHeight(card.kind, tallIdsRef.current.has(card.id));
+      const h = flowCardHeight(card.kind, card.tall ?? false);
       return { width: w, height: h };
     },
-  }), [resizedIds, tallIds, s0Cards]);
+  }), [s0Cards]);
 
   const keyExtractor = useCallback((item: FlowCard) => item.id, []);
 
@@ -1177,20 +1163,18 @@ export function FlowDemo() {
     setS0Cards(prev => prev.length >= 1 ? prev.slice(1) : prev);
   }, []);
 
-  const toggleResize = useCallback((id: string) => {
-    setResizedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggleResize = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
+    if (sectionIndex !== 0) return; // S1 items are static constants
+    setS0Cards(prev => prev.map(item =>
+      item.id === id ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
   }, []);
 
-  const toggleTall = useCallback((id: string) => {
-    setTallIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggleTall = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
+    if (sectionIndex !== 0) return; // S1 items are static constants
+    setS0Cards(prev => prev.map(item =>
+      item.id === id ? { ...item, tall: !item.tall } : item));
+    setResizeVersion(v => v + 1);
   }, []);
 
   const sections = useMemo(() => [
@@ -1214,19 +1198,18 @@ export function FlowDemo() {
     ),
   }), []);
 
-  const renderItem = useCallback(({ item }: { item: FlowCard }) => {
-    const isShrunk = resizedIds.has(item.id);
-    const isTall = tallIds.has(item.id);
+  const renderItem = useCallback(({ item, sectionIndex, itemIndex }: { item: FlowCard; sectionIndex: number; itemIndex: number }) => {
+    const isShrunk = item.resized ?? false;
+    const isTall = item.tall ?? false;
     const isBanner = item.kind === 'banner';
     const isHalf = item.kind === 'half';
-    // Explicit height must match sizeForItem — this is what Yoga measures to size
-    // the cell wrapper. The cell wrapper has no explicit height; it relies on the
-    // content height (same pattern as MasonryDemo's explicit `height: h`).
     const h = flowCardHeight(item.kind, isTall);
+    // Explicit width so Yoga measures exactly the flow-engine estimate → no applyMeasurements delta.
+    const w = flowCardWidth(item.kind, flowBaseWidthRef.current || 390, isShrunk);
     return (
       <Pressable
-        style={{ height: h, backgroundColor: item.color, borderRadius: isBanner ? 8 : 12 }}
-        onPress={() => toggleResize(item.id)}
+        style={{ height: h, width: w, backgroundColor: item.color, borderRadius: isBanner ? 8 : 12 }}
+        onPress={() => toggleResize(item.id, sectionIndex, itemIndex)}
       >
         {isBanner ? (
           // Banner: horizontal layout — icon + label + chevron
@@ -1253,9 +1236,7 @@ export function FlowDemo() {
         )}
       </Pressable>
     );
-  }, [resizedIds, tallIds, toggleResize]);
-
-  const flowExtraData = useMemo(() => ({ resizedIds, tallIds }), [resizedIds, tallIds]);
+  }, [toggleResize]);
 
   return (
     <View style={S.flex}>
@@ -1266,8 +1247,8 @@ export function FlowDemo() {
         <View style={S.ctrlDivider} />
         <CtrlBtn label="+1" onPress={handleInsert} />
         <CtrlBtn label="−1" onPress={handleDelete} />
-        <CtrlBtn label="↔ S0[0]" onPress={() => { const id = s0Cards[0]?.id; if (id) toggleResize(id); }} />
-        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = s0Cards[0]?.id; if (id) toggleTall(id); }} />
+        <CtrlBtn label="↔ S0[3]" onPress={() => { const id = s0Cards[3]?.id; if (id) toggleResize(id, 0, 3); }} />
+        <CtrlBtn label="↕ S0[0]" onPress={() => { const id = s0Cards[0]?.id; if (id) toggleTall(id, 0, 0); }} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
         <View style={{ paddingHorizontal: 6, justifyContent: 'center' }}>
@@ -1276,17 +1257,18 @@ export function FlowDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={flowLayout}
         stickyMode="push"
         estimatedItemHeight={100}
-        extraData={flowExtraData}
         maintainVisibleContentPosition={mvcEnabled}
         decorationRenderers={decorationRenderers}
         onDecorationCountChange={setDecoCount}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
+        onContainerSizeChange={(w: number) => { if (w > flowBaseWidthRef.current) flowBaseWidthRef.current = w; }}
+        extraData={resizeVersion}
       />
     </View>
   );
@@ -1324,9 +1306,9 @@ export function HFlowDemo() {
     lineSpacing: 16,
     sectionSpacing: 12,
     sectionBackground: true,
-    // H-flow: sizeForItem returns width (primary) and height (cross).
+    // H-flow: estimatedSizeForItem returns width (primary) and height (cross).
     // Tags with multiLine=true are taller → affect column packing.
-    sizeForItem: (i: number, s: number) => {
+    estimatedSizeForItem: (s: number, i: number) => {
       const sections: HFlowTag[][] = [s0Items, HF_S1_DATA];
       const item = sections[s]?.[i];
       return { width: 80, height: item?.multiLine ? 52 : 34 };
@@ -1423,7 +1405,7 @@ export function HFlowDemo() {
 
       <View style={[HFS.listBg, { height: HF_CONTAINER_H }]}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={sections}
           layout={hfLayout}
           renderItem={renderItem}
@@ -1705,6 +1687,7 @@ type HCard = {
   label: string;
   description: string;   // variable length — drives height variance
   tags: string[];        // 0-3 tags — additional height variance
+  resized?: boolean;
 };
 
 const H_COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d', '#6a4c93', '#1982c4', '#06d6a0', '#ef476f'];
@@ -1769,11 +1752,11 @@ export function HorizontalListDemo() {
   // Section 0 (nature) is mutable — insert / delete / resize act on it
   const staticSections = useMemo(() => makeHSections(), []);
   const [s0Items, setS0Items] = useState<HCard[]>(staticSections[0]!.items);
-  const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
+  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(staticSections[0]!.items.length);
-  const cvRef = useRef<RiffHandle>(null);
+  const cvRef = useRef<RiffHandle<HCard>>(null);
 
   // ── Mutation handlers ──────────────────────────────────────────────────────
 
@@ -1796,17 +1779,11 @@ export function HorizontalListDemo() {
     setS0Items(prev => prev.length >= 3 ? prev.slice(3) : prev);
   }, []);
 
-  const toggleResize = useCallback((id: string) => {
-    setResizedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }, []);
-
   const resizeFirst = useCallback(() => {
-    if (s0Items.length > 0) toggleResize(s0Items[0]!.id);
-  }, [s0Items, toggleResize]);
+    setS0Items(prev => prev.map((item, i) =>
+      i === 0 ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
+  }, []);
 
   // ── Sections ───────────────────────────────────────────────────────────────
 
@@ -1850,7 +1827,7 @@ export function HorizontalListDemo() {
 
   const hLayout = useMemo(() => list({
     horizontal: true,
-    itemHeight: 130,
+    estimatedItemHeight: 130,
     estimatedCrossAxisHeight: 140,
     itemSpacing: 10,
     sectionSpacing: 4,
@@ -1868,7 +1845,7 @@ export function HorizontalListDemo() {
   // ── renderItem ─────────────────────────────────────────────────────────────
 
   const renderCard = useCallback(({ item }: { item: HCard }) => {
-    const isResized = resizedIds.has(item.id);
+    const isResized = !!item.resized;
     const description = isResized ? H_RESIZE_DESC : item.description;
     const tags = isResized ? ['resized', 'wider', ...item.tags] : item.tags;
     return (
@@ -1891,7 +1868,7 @@ export function HorizontalListDemo() {
         )}
       </View>
     );
-  }, [resizedIds]);
+  }, []);
 
   const keyExtractor = useCallback((item: HCard) => item.id, []);
 
@@ -1912,7 +1889,7 @@ export function HorizontalListDemo() {
         <CtrlBtn label="+Insert" onPress={handleInsert} />
         <CtrlBtn label="×Delete" onPress={handleDelete} />
         <View style={S.ctrlDivider} />
-        <CtrlBtn label="↔S0[0]" onPress={resizeFirst} active={s0Items.length > 0 && resizedIds.has(s0Items[0]!.id)} />
+        <CtrlBtn label="↔S0[0]" onPress={resizeFirst} active={!!s0Items[0]?.resized} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
         <View style={{ paddingHorizontal: 6, justifyContent: 'center' }}>
@@ -1923,17 +1900,17 @@ export function HorizontalListDemo() {
       {/* Horizontal mode now auto-sizes cross-axis height internally. */}
       <View style={HS.listBackground}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={riffSections}
           layout={hLayout}
           renderItem={renderCard}
           keyExtractor={keyExtractor}
           estimatedItemHeight={140}
-          extraData={resizedIds}
           maintainVisibleContentPosition={mvcEnabled}
           decorationRenderers={decorationRenderers}
           onDecorationCountChange={setDecoCount}
           scrollViewProps={{ style: { backgroundColor: 'transparent' }, indicatorStyle: 'white' }}
+          extraData={resizeVersion}
         />
       </View>
     </View>
@@ -2020,7 +1997,7 @@ const makeHGSections = () => [
   },
 ];
 
-type HGCard = { id: string; color: string; num: number; label: string; tags: string[] };
+type HGCard = { id: string; color: string; num: number; label: string; tags: string[]; resized?: boolean };
 
 // Cross-axis layout constants — shared between layout params and container sizing.
 // containerH = itemCrossH * cols + columnSpacing*(cols-1) + insetTop + insetBottom
@@ -2036,13 +2013,13 @@ const HG_TAG_POOLS: string[][] = [[], ['new'], ['sale', 'hot'], ['featured']];
 export function HorizontalGridDemo() {
   const staticSections = useMemo(() => makeHGSections(), []);
   const [s0Items, setS0Items] = useState<HGCard[]>(staticSections[0]!.items);
-  const [resizedIds, setResizedIds] = useState<Set<string>>(() => new Set());
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
+  const [resizeVersion, setResizeVersion] = useState(0);
   const [containerH, setContainerH] = useState(HG_CONTAINER_H);
   const insertCounter = useRef(staticSections[0]!.items.length);
-  const cvRef = useRef<RiffHandle>(null);
+  const cvRef = useRef<RiffHandle<HGCard>>(null);
 
   const handleInsert1 = useCallback(() => {
     const idx = insertCounter.current++;
@@ -2074,17 +2051,11 @@ export function HorizontalGridDemo() {
     setS0Items(prev => prev.length >= 4 ? prev.slice(4) : prev);
   }, []);
 
-  const toggleResize = useCallback((id: string) => {
-    setResizedIds(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }, []);
-
   const resizeFirst = useCallback(() => {
-    if (s0Items.length > 0) toggleResize(s0Items[0]!.id);
-  }, [s0Items, toggleResize]);
+    setS0Items(prev => prev.map((item, i) =>
+      i === 0 ? { ...item, resized: !item.resized } : item));
+    setResizeVersion(v => v + 1);
+  }, []);
 
   const riffSections = useMemo(() => {
     const allSections = [
@@ -2125,7 +2096,7 @@ export function HorizontalGridDemo() {
   const hgLayout = useMemo(() => grid({
     horizontal: true,
     columns: HG_COLS,
-    rowHeight: 110,           // estimated item width (primary axis); Yoga measures actual
+    estimatedItemHeight: 110,
     estimatedCrossAxisHeight: 110,
     columnSpacing: HG_COL_SPACING,
     rowSpacing: 4,
@@ -2141,7 +2112,7 @@ export function HorizontalGridDemo() {
   }), []);
 
   const renderCard = useCallback(({ item }: { item: HGCard }) => {
-    const isResized = resizedIds.has(item.id);
+    const isResized = !!item.resized;
     const tags = isResized ? ['resized', 'wider', ...item.tags] : item.tags;
     return (
       <View style={[HGS.card, { backgroundColor: item.color + 'cc' }]}>
@@ -2160,7 +2131,7 @@ export function HorizontalGridDemo() {
         )}
       </View>
     );
-  }, [resizedIds]);
+  }, []);
 
   const keyExtractor = useCallback((item: HGCard) => item.id, []);
 
@@ -2181,7 +2152,7 @@ export function HorizontalGridDemo() {
         <CtrlBtn label="+4" onPress={handleInsert4} />
         <CtrlBtn label="×4" onPress={handleDelete} />
         <View style={S.ctrlDivider} />
-        <CtrlBtn label="↔S0[0]" onPress={resizeFirst} active={s0Items.length > 0 && resizedIds.has(s0Items[0]!.id)} />
+        <CtrlBtn label="↔S0[0]" onPress={resizeFirst} active={!!s0Items[0]?.resized} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={sepEnabled ? 'Sep: ON' : 'Sep: OFF'} onPress={() => setSepEnabled(v => !v)} active={sepEnabled} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
@@ -2192,13 +2163,12 @@ export function HorizontalGridDemo() {
 
       <View style={[HGS.listBackground, { height: containerH }]}>
         <CollectionView
-          handle={cvRef}
+          ref={cvRef}
           sections={riffSections}
           layout={hgLayout}
           renderItem={renderCard}
           keyExtractor={keyExtractor}
           estimatedItemHeight={HG_ITEM_CROSS_H}
-          extraData={resizedIds}
           maintainVisibleContentPosition={mvcEnabled}
           decorationRenderers={decorationRenderers}
           onDecorationCountChange={setDecoCount}
@@ -2209,6 +2179,7 @@ export function HorizontalGridDemo() {
               if (h > 0) setContainerH(prev => Math.abs(prev - h) > 2 ? h : prev);
             },
           }}
+          extraData={resizeVersion}
         />
       </View>
     </View>
@@ -2322,8 +2293,6 @@ function AdaptiveHGridDemo() {
   const [s2Items] = useState<AHGCard[]>(staticAHGSections[2]!.items);
   const [containerH, setContainerH] = useState(AHG_ESTIMATED_H);
   const [mvcEnabled, setMvcEnabled] = useState(false);
-  const [decoCount, setDecoCount] = useState(0);
-
   // Counter for unique inserted item IDs
   const insertCounter = useRef(100);
 
@@ -2421,16 +2390,12 @@ function AdaptiveHGridDemo() {
         <CtrlBtn label="×4" onPress={handleDelete} />
         <View style={S.ctrlDivider} />
         <CtrlBtn label={mvcEnabled ? 'MVC: ON' : 'MVC: OFF'} onPress={() => setMvcEnabled(v => !v)} active={mvcEnabled} />
-        <View style={{ paddingHorizontal: 6, justifyContent: 'center' }}>
-          <Text style={{ color: '#888', fontSize: 10, fontWeight: '600' }}>Deco:{decoCount}</Text>
-        </View>
       </ScrollView>
 
       {/* Container auto-sized from contentSize reported after first layout pass */}
       <View style={[AHGS.listBackground, { height: containerH }]}>
         <CollectionView
           ref={cvRef}
-          horizontal
           sections={sections}
           layout={layoutRef.current}
           keyExtractor={keyExtractor}
@@ -2438,16 +2403,13 @@ function AdaptiveHGridDemo() {
           renderSectionHeader={renderHeader}
           renderSectionFooter={renderFooter}
           decorationRenderers={{
-            sectionBackground: {
-              render: (si, frame) => (
-                <View style={{
-                  ...StyleSheet.absoluteFillObject,
-                  backgroundColor: Object.values(META)[si % 3]?.color + '33',
-                  borderRadius: 8,
-                }} />
-              ),
-              onCountChange: setDecoCount,
-            },
+            sectionBackground: (si, _frame) => (
+              <View style={{
+                ...StyleSheet.absoluteFillObject,
+                backgroundColor: Object.values(META)[si % 3]?.color + '33',
+                borderRadius: 8,
+              }} />
+            ),
           }}
           stickyHeaderIndices={[]}
           scrollEventThrottle={16}

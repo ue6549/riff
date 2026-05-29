@@ -13,6 +13,8 @@
  *   Tier 3: Full supplementary item API + custom layout delegate
  */
 
+import type React from 'react';
+import type { StyleProp, ViewStyle, ScrollViewProps } from 'react-native';
 import type { Rect, Size, Insets } from './geometry';
 import type { LayoutAttributes } from './layout';
 
@@ -27,7 +29,7 @@ import type { LayoutAttributes } from './layout';
  * `prepare()` does upfront work, then spatial queries are cheap.
  * `shouldInvalidate()` lets the layout decide if a bounds change requires recomputation.
  */
-export interface CollectionViewLayout {
+export interface RiffLayout {
   /** Human-readable type identifier. */
   readonly type: string;
 
@@ -96,7 +98,7 @@ export interface CollectionViewLayout {
   invalidationScope?(
     oldBounds: Rect,
     newBounds: Rect,
-  ): InvalidationScope;
+  ): RiffInvalidationScope;
 
   /**
    * Incremental invalidation from a specific item.
@@ -201,15 +203,15 @@ export interface SectionInfo {
 export interface SupplementaryInfo {
   readonly kind: string;
   readonly size: Readonly<{ width: number; height: number }>;
-  readonly alignment: SupplementaryAlignment;
+  readonly alignment: RiffSupplementaryAlignment;
   readonly pinToVisibleBounds: boolean;
-  readonly pinBehavior: PinBehavior;
+  readonly pinBehavior: RiffPinBehavior;
 }
 
-export type SupplementaryAlignment = 'top' | 'bottom' | 'leading' | 'trailing';
-export type PinBehavior = 'push' | 'overlay';
+export type RiffSupplementaryAlignment = 'top' | 'bottom' | 'leading' | 'trailing';
+export type RiffPinBehavior = 'push' | 'overlay';
 
-export interface InvalidationScope {
+export interface RiffInvalidationScope {
   readonly type: 'full' | 'fromIndex';
   readonly fromSection?: number;
   readonly fromIndex?: number;
@@ -222,17 +224,17 @@ export interface InvalidationScope {
 /**
  * List layout — single column vertical layout.
  *
- * Sizing: provide EITHER `itemHeight` (fixed) OR `heightForItem` (variable).
- * If both provided, `heightForItem` takes precedence.
- * If neither, `estimatedItemHeight` is used with measurement.
+ * Sizing: provide `estimatedHeightForItem` (per-item estimate) or `estimatedItemHeight`
+ * (scalar fallback). Yoga is always the authority for final dimensions.
  *
- * Header/footer sizing follows the same pattern as item sizing.
+ * Horizontal mode: provide `estimatedSizeForItem` for per-item size estimates;
+ * Yoga measures both width (primary axis) and height (cross axis) after render.
  */
-export interface ListLayoutDelegate {
+export interface RiffListConfig {
   /**
    * When true, items flow horizontally (primary axis = X).
-   * `itemHeight` is the estimated item width (primary axis). Yoga measures final width.
-   * `estimatedCrossAxisHeight` is the estimated item height (cross axis). Yoga measures final height.
+   * `estimatedSizeForItem` (or `estimatedItemHeight` as fallback) seeds primary-axis width.
+   * `estimatedCrossAxisHeight` seeds the cross-axis height before the first measurement.
    * The list's cross-axis height = max(all measured item heights) + vertical insets.
    */
   horizontal?: boolean;
@@ -245,15 +247,25 @@ export interface ListLayoutDelegate {
    */
   estimatedCrossAxisHeight?: number;
 
-  // ── Item sizing (one of these) ──
-  /** Fixed height for all items, or a function of container width. Fast path — no measurement needed.
-   *  In horizontal mode: item size along the scroll axis (X). */
-  itemHeight?: number | ((containerWidth: number) => number);
-  /** Estimated height for variable-height items. Items will be measured after render. */
+  // ── Item sizing ──
+  /**
+   * Estimated item height for vertical lists, or primary-axis width for horizontal lists.
+   * Scalar fallback used when `estimatedHeightForItem` / `estimatedSizeForItem` is absent.
+   * Yoga measures the actual size after render. Default: 44.
+   */
   estimatedItemHeight?: number;
-  /** Per-item height callback. Called only for items in the windowed range.
-   *  `containerWidth` lets the consumer compute aspect-ratio or breakpoint-based heights. */
-  heightForItem?: (index: number, section: number, containerWidth: number) => number;
+  /**
+   * Per-item height estimate for vertical lists. Section-first param order.
+   * Called for items in the windowed range. Yoga measures actual heights.
+   * Falls back to `estimatedItemHeight ?? 44` when absent.
+   */
+  estimatedHeightForItem?: (section: number, index: number) => number;
+  /**
+   * Per-item size estimate for horizontal lists. Section-first param order.
+   * Returns `{ width, height }` — Yoga measures actual dimensions.
+   * Falls back to `{ width: estimatedItemHeight ?? 44, height: estimatedCrossAxisHeight ?? 200 }`.
+   */
+  estimatedSizeForItem?: (section: number, index: number) => Readonly<{ width: number; height: number }>;
 
   // ── Header sizing ──
   headerHeight?: number;
@@ -269,7 +281,7 @@ export interface ListLayoutDelegate {
   itemSpacing?: number;
 
   // ── Sticky behavior (layout knows how to pin in linear coordinates) ──
-  stickyMode?: StickyMode;
+  stickyMode?: RiffStickyMode;
 
   // ── Decoration views ──
   // Separators are a list-layout concern — configured here, not on <Riff>.
@@ -319,18 +331,20 @@ export interface ListLayoutDelegate {
 /**
  * Masonry layout — fixed columns, variable-height items, shortest-column placement.
  *
- * `columns` is mandatory. Provide EITHER `heightForItem` (variable per-item heights)
- * OR `estimatedItemHeight` (uniform estimate, Yoga measures actual heights).
+ * `columns` is mandatory. Provide `estimatedHeightForItem` for per-item height estimates,
+ * or `estimatedItemHeight` as a scalar fallback. Yoga measures actual heights.
  * Width is derived from container width and column count.
  */
-export interface MasonryLayoutDelegate {
+export interface RiffMasonryConfig {
   /** Number of columns, or a function of container width for responsive layouts. Mandatory. */
   columns: number | ((containerWidth: number) => number);
-  /** Per-item height callback. Optional — provide for known heights or aspect-ratio content.
-   *  When omitted, `estimatedItemHeight` is used for initial lane assignment and Yoga
-   *  measures actual heights via applyMeasurements. */
-  heightForItem?: (index: number, section: number, containerWidth: number) => number;
-  /** Fallback height estimate used when `heightForItem` is not provided. Default: 44. */
+  /**
+   * Per-item height estimate. Section-first param order.
+   * Used for initial lane assignment; Yoga measures actual heights.
+   * Falls back to `estimatedItemHeight ?? 44` when absent.
+   */
+  estimatedHeightForItem?: (section: number, index: number) => number;
+  /** Scalar height estimate used when `estimatedHeightForItem` is absent. Default: 44. */
   estimatedItemHeight?: number;
 
   // ── Header/footer sizing ──
@@ -349,7 +363,7 @@ export interface MasonryLayoutDelegate {
    */
   sectionSpacing?: number;
 
-  stickyMode?: StickyMode;
+  stickyMode?: RiffStickyMode;
 
   // ── Decoration views ──
   /** Lane-divider separators between masonry columns (V) or rows (H). */
@@ -369,7 +383,7 @@ export interface MasonryLayoutDelegate {
 
   /**
    * Insets applied to the sectionBackground frame at C++ emission time.
-   * Same semantics as the list layout equivalent — see ListLayoutDelegate.
+   * Same semantics as the list layout equivalent — see RiffListConfig.
    * Requires `sectionBackground: true`.
    */
   sectionBackgroundContentInsets?: {
@@ -399,18 +413,33 @@ export interface MasonryLayoutDelegate {
 /**
  * Grid layout — fixed columns, row-aligned heights.
  *
- * Provide EITHER `rowHeight` (uniform rows) OR `heightForItem` (row height = tallest in row).
+ * Provide `estimatedHeightForItem` for per-item height estimates (row height = tallest in row),
+ * or `estimatedItemHeight` as a scalar fallback. Yoga measures actual heights.
  * Width is derived from container width and column count.
+ * Horizontal mode: `estimatedSizeForItem` provides per-item size estimates.
  */
-export interface GridLayoutDelegate {
+export interface RiffGridConfig {
   /** Number of columns, or a function of container width for responsive layouts. Mandatory. */
   columns: number | ((containerWidth: number) => number);
 
-  /** Fixed row height, or a function of container width (e.g. aspect-ratio cards). All rows same height. */
-  rowHeight?: number | ((containerWidth: number) => number);
-  /** Per-item height for dynamic rows. Row height = max(items in row).
-   *  `containerWidth` lets the consumer compute aspect-ratio heights. */
-  heightForItem?: (index: number, section: number, containerWidth: number) => number;
+  /**
+   * Scalar height estimate used as fallback when `estimatedHeightForItem` / `estimatedSizeForItem`
+   * is absent. For horizontal grids, seeds the primary-axis width estimate.
+   * Yoga measures actual dimensions. Default: 44.
+   */
+  estimatedItemHeight?: number;
+  /**
+   * Per-item height estimate for vertical grids. Row height = max estimate in each row.
+   * Section-first param order. Yoga measures actual heights.
+   * Falls back to `estimatedItemHeight ?? 44` when absent.
+   */
+  estimatedHeightForItem?: (section: number, index: number) => number;
+  /**
+   * Per-item size estimate for horizontal grids. Section-first param order.
+   * Returns `{ width, height }` — Yoga measures actual dimensions.
+   * Falls back to scalar fallbacks when absent.
+   */
+  estimatedSizeForItem?: (section: number, index: number) => Readonly<{ width: number; height: number }>;
 
   // ── Header/footer sizing ──
   headerHeight?: number;
@@ -428,7 +457,7 @@ export interface GridLayoutDelegate {
    */
   sectionSpacing?: number;
 
-  stickyMode?: StickyMode;
+  stickyMode?: RiffStickyMode;
 
   // ── Decoration views ──
   /** Row separators between rows in the grid. */
@@ -444,7 +473,7 @@ export interface GridLayoutDelegate {
 
   /**
    * Insets applied to the sectionBackground frame at C++ emission time.
-   * Same semantics as the list layout equivalent — see ListLayoutDelegate.
+   * Same semantics as the list layout equivalent — see RiffListConfig.
    * Requires `sectionBackground: true`.
    */
   sectionBackgroundContentInsets?: {
@@ -479,15 +508,21 @@ export interface GridLayoutDelegate {
 /**
  * Flow layout — variable-width items, greedy bin-packing, wraps to next line.
  *
- * `sizeForItem` is MANDATORY — flow layout needs both width and height to
- * decide how many items fit per row (V) or column (H).
  * V-mode: items pack left-to-right, wrap when next item doesn't fit row width.
  * H-mode: items pack top-to-bottom, wrap when next item doesn't fit column height.
+ * `estimatedSizeForItem` provides per-item size estimates; Yoga measures actual dimensions.
  */
-export interface FlowLayoutDelegate {
-  /** Per-item size callback. Mandatory. Returns both width and height.
-   *  `containerWidth` lets the consumer derive proportional widths or aspect-ratio heights. */
-  sizeForItem: (index: number, section: number, containerWidth: number) => Readonly<{ width: number; height: number }>;
+export interface RiffFlowConfig {
+  /**
+   * Per-item size estimate. Section-first param order. Returns `{ width, height }`.
+   * Yoga measures actual dimensions. Falls back to `{ width: containerWidth, height: estimatedItemHeight ?? 44 }`.
+   * For H-flow, also used for primary-axis height estimates.
+   */
+  estimatedSizeForItem?: (section: number, index: number) => Readonly<{ width: number; height: number }>;
+  /**
+   * Scalar height estimate used when `estimatedSizeForItem` is absent. Default: 44.
+   */
+  estimatedItemHeight?: number;
 
   // ── Header/footer sizing ──
   headerHeight?: number;
@@ -505,7 +540,7 @@ export interface FlowLayoutDelegate {
    */
   sectionSpacing?: number;
 
-  stickyMode?: StickyMode;
+  stickyMode?: RiffStickyMode;
 
   // ── Decoration views ──
   /** Between-row separators (V) or between-column separators (H). */
@@ -525,7 +560,7 @@ export interface FlowLayoutDelegate {
 
   /**
    * Insets applied to the sectionBackground frame at C++ emission time.
-   * Same semantics as the list layout equivalent — see ListLayoutDelegate.
+   * Same semantics as the list layout equivalent — see RiffListConfig.
    * Requires `sectionBackground: true`.
    */
   sectionBackgroundContentInsets?: {
@@ -550,9 +585,9 @@ export interface FlowLayoutDelegate {
  *
  * The layout calls `attributesForItem` however it wants internally.
  * No stickyMode — custom layouts handle their own pinning via
- * `attributesForSupplementary` on the CollectionViewLayout interface.
+ * `attributesForSupplementary` on the RiffLayout interface.
  */
-export interface CustomLayoutDelegate {
+export interface RiffCustomConfig {
   /** When true, the layout scrolls horizontally. Defaults to false. */
   horizontal?: boolean;
   /**
@@ -566,7 +601,7 @@ export interface CustomLayoutDelegate {
   ) => LayoutAttributes;
 }
 
-export type StickyMode = 'push' | 'overlay' | 'none';
+export type RiffStickyMode = 'push' | 'overlay' | 'none';
 
 // ═══════════════════════════════════════════════════════════════
 // Supplementary Items (Tier 3 power-user API)
@@ -577,7 +612,7 @@ export type StickyMode = 'push' | 'overlay' | 'none';
  * Used in Tier 3 when the consumer needs custom supplementary views
  * beyond standard headers/footers.
  */
-export interface SupplementaryItem {
+export interface RiffSupplementary {
   /** Kind identifier. 'header' and 'footer' are reserved for standard use. */
   kind: string;
   /** Render function for this supplementary view. */
@@ -585,11 +620,11 @@ export interface SupplementaryItem {
   /** Size of the supplementary view. 'full' for width = container width. */
   size: Readonly<{ width: number | 'full'; height: number }>;
   /** Where this view is positioned relative to the section. */
-  alignment: SupplementaryAlignment;
+  alignment: RiffSupplementaryAlignment;
   /** Whether this view pins to visible bounds during scroll. */
   pinToVisibleBounds?: boolean;
   /** How pinned views interact: 'push' = next pushes current, 'overlay' = stack. */
-  pinBehavior?: PinBehavior;
+  pinBehavior?: RiffPinBehavior;
   /** Z-ordering override. */
   zIndex?: number;
 }
@@ -605,31 +640,31 @@ export interface SupplementaryItem {
  * Tier 3: Use `supplementaryItems` for custom supplementary views.
  * Both can coexist — `header`/`footer` are additive, not exclusive.
  */
-export interface SectionConfig<T> {
+export interface RiffSection<T> {
   /** Stable section key. */
   key: string;
   /** Data items for this section. */
   data: T[];
-  /** Section-level insets. */
-  insets?: Insets;
+  /** Section-level insets. All sides optional — unspecified sides default to 0. */
+  insets?: Partial<Insets>;
 
   // ── Tier 1: Simple header/footer shorthand ──
   header?: {
-    render: () => React.ReactElement;
+    render: () => React.ReactElement | null;
     height: number;
     sticky?: boolean;
   };
   footer?: {
-    render: () => React.ReactElement;
+    render: () => React.ReactElement | null;
     height: number;
     sticky?: boolean;
   };
 
   // ── Tier 3: Full supplementary items (additive with header/footer) ──
-  supplementaryItems?: SupplementaryItem[];
+  supplementaryItems?: RiffSupplementary[];
 
   // ── Decoration ──
-  background?: (sectionIndex: number) => React.ReactElement;
+  background?: (sectionIndex: number) => React.ReactElement | null;
 
   // ── Per-section windowing overrides (F3.8 / H-3.5) ──
   //
@@ -647,83 +682,54 @@ export interface SectionConfig<T> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// CollectionView Props (consumer-facing component API)
+// Riff component — imperative API types
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * CollectionView component props.
+ * Info object passed to the `renderItem` callback.
  *
- * Tier 1: Just `data` + `renderItem` + simple props.
- * Tier 2: Add `layout` for non-default layouts.
- * Tier 3: Full `sections` with supplementary items.
+ * All four fields are always present regardless of flat/sectioned mode:
+ *   flat mode:      sectionIndex=0, itemIndex=index
+ *   sectioned mode: index=flat position across all sections
  */
-export interface CollectionViewProps<T> {
-  // ── Data (one of these) ──
-  /** Single-section convenience. Wraps in one section internally. */
-  data?: T[];
-  /** Multi-section data. */
-  sections?: SectionConfig<T>[];
-
-  // ── Layout ──
-  /** Layout engine. Defaults to list layout if omitted. */
-  layout?: CollectionViewLayout;
-
-  // ── Rendering ──
-  renderItem: (info: {
-    item: T;
-    index: number;
-    section: number;
-  }) => React.ReactElement;
-  keyExtractor?: (item: T, index: number) => string;
-
-  /** Section header renderer — called for each section that has a header. */
-  renderSectionHeader?: (info: { sectionIndex: number }) => React.ReactElement;
-  /** Section footer renderer — called for each section that has a footer. */
-  renderSectionFooter?: (info: { sectionIndex: number }) => React.ReactElement;
-
-  // ── Tier 1 shortcuts (when using default list layout) ──
-  /** Fixed item height — fast path, no measurement. */
-  itemHeight?: number;
-  /** Estimated item height — variable height with measurement. */
-  estimatedItemHeight?: number;
-  /** Pin items at these indices to top during scroll (single-section mode). */
-  stickyHeaderIndices?: number[];
-  /** Pin items at these indices to bottom during scroll (single-section mode). */
-  stickyFooterIndices?: number[];
-
-  // ── Prefetch ──
-  onPrefetch?: (keys: string[]) => void;
-  prefetchDistance?: number;
-
-  // ── Memory ──
-  mountedWindowSize?: number;
-
-  // ── H-3.5: Decoupled H windowing ──
-  /**
-   * Render multiplier applied specifically to horizontal sections.
-   * Decouples H window size from V window size so a tight V renderMultiplier
-   * doesn't also starve horizontal carousels of their leading-edge buffer.
-   *
-   * Precedence for H sections: section.renderMultiplier ?? hRenderMultiplier ?? renderMultiplier ?? 0.5
-   * Defaults to renderMultiplier (backward-compatible).
-   */
-  hRenderMultiplier?: number;
-
-  // ── Events ──
-  onScroll?: (event: { contentOffset: { x: number; y: number } }) => void;
-  onRenderCountChange?: (count: number) => void;
-
-  // ── Scroll ──
-  scrollViewProps?: Record<string, unknown>;
+export interface RiffRenderItemInfo<T> {
+  item: T;
+  /** Flat position across all sections (flat mode: position in data array). */
+  index: number;
+  /** 0-based section index. Always 0 in flat-data mode. */
+  sectionIndex: number;
+  /** 0-based item index within the section. Equals index in flat-data mode. */
+  itemIndex: number;
 }
+
+export interface RiffScrollOptions {
+  /** Whether to animate the scroll. Default: true. */
+  animated?: boolean;
+  /**
+   * Where to position the target item relative to the viewport.
+   * 'nearest' is a no-op if the item is already fully visible.
+   * Default: 'top'.
+   */
+  position?: 'top' | 'center' | 'bottom' | 'nearest' | 'start' | 'end';
+}
+
+export interface RiffScrollOffsetOptions {
+  x?: number;
+  y?: number;
+  animated?: boolean;
+}
+
+// NOTE: RiffProps and RiffHandle live in example/components/CollectionView.tsx
+// until the dual-React-instance issue is resolved and the component can move to src/.
+// StyleProp, ViewStyle, ScrollViewProps are imported above for use by that file.
 
 // ═══════════════════════════════════════════════════════════════
 // Layout Factory Types
 // ═══════════════════════════════════════════════════════════════
 
 /** Factory function signatures for built-in layouts. */
-export type ListLayoutFactory = (delegate: ListLayoutDelegate) => CollectionViewLayout;
-export type MasonryLayoutFactory = (delegate: MasonryLayoutDelegate) => CollectionViewLayout;
-export type GridLayoutFactory = (delegate: GridLayoutDelegate) => CollectionViewLayout;
-export type FlowLayoutFactory = (delegate: FlowLayoutDelegate) => CollectionViewLayout;
-export type CustomLayoutFactory = (delegate: CustomLayoutDelegate) => CollectionViewLayout;
+export type ListLayoutFactory = (delegate: RiffListConfig) => RiffLayout;
+export type MasonryLayoutFactory = (delegate: RiffMasonryConfig) => RiffLayout;
+export type GridLayoutFactory = (delegate: RiffGridConfig) => RiffLayout;
+export type FlowLayoutFactory = (delegate: RiffFlowConfig) => RiffLayout;
+export type CustomLayoutFactory = (delegate: RiffCustomConfig) => RiffLayout;

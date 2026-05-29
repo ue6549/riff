@@ -8,7 +8,7 @@
  *   One 500ms setInterval drives all polling — minimal observer effect.
  */
 import { useEffect, useRef, useState } from 'react';
-import NativeCollectionViewModule from '../components/NativeCollectionViewModule';
+import NativeCollectionViewModule from '@riff/specs/NativeCollectionViewModule';
 
 // ── Typed nativeMod accessor (subset needed for metrics) ──────────────────────
 

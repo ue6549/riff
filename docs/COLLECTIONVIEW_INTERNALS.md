@@ -1292,3 +1292,59 @@ Time Profiler on Feed tab fast scroll showed:
 ### Change F — Defer prefetch/evict off scroll hot path (DONE, 2026-04-16)
 
 Prefetch/evict loops now run in a `setImmediate` with coalescing (`pendingPrefetchRef`). The synchronous scroll handler only updates `prevPrefetchRangeRef` eagerly; the actual keyExtractor iteration is deferred off the hot path.
+
+---
+
+## Cell Resize Patterns
+
+### The problem
+
+When a cell changes size — either because item data changed or because internal component state changed — Riff needs to:
+1. Clear the stale measured height from LayoutCache for that key
+2. Bump `layoutCacheVersion` so Fabric clones the container ShadowNode
+3. Let Yoga re-measure the cell at its new natural height
+4. Cascade the position delta to all downstream items
+
+Without step 1+2, the cell stays at its old height until it is scrolled out of the render window and back in.
+
+### Why local `setState` inside a cell is not enough
+
+When a cell calls `setState` internally (e.g. an expand/collapse toggle in `renderItem`), Fabric processes the update within that cell's fiber subtree. `CollectionViewContainerShadowNode` is **not** re-cloned — the container's structural output (its children array) is unchanged. This means `layout()` on the container never fires, `correctChildPositionsIfNeeded()` never runs, and the stale measured height stays in LayoutCache. The cell renders at the new height visually, but the layout engine still sees the old height for scroll offset corrections.
+
+This parallels UIKit: `UICollectionViewLayout` is also decoupled from cell content changes. Apps must call `invalidateLayout()` explicitly. Riff's equivalent is `ref.current.invalidateKeys(keys)`.
+
+### The correct pattern: `invalidateKeys` + data mutation
+
+```tsx
+const cvRef = useRef<RiffHandle<MyItem>>(null);
+
+const toggleExpand = useCallback((id: string) => {
+  // 1. Update item data (triggers estimatedHeightForItem to return new size)
+  setItems(prev => prev.map(item =>
+    item.id === id ? { ...item, expanded: !item.expanded } : item));
+  // 2. Clear LayoutCache entry + bump layoutCacheVersion → forces ShadowNode layout()
+  cvRef.current?.invalidateKeys([id]);
+}, []);
+```
+
+Both state updates are batched by React 19 into one commit. On the next Fabric pass:
+- `layout()` fires on `CollectionViewContainerShadowNode`
+- Yoga re-measures the cell (item data already updated → correct natural height)
+- `correctChildPositionsIfNeeded()` detects the height delta
+- Layout engine cascades the delta to all downstream items
+
+The key passed to `invalidateKeys` must match the value returned by `keyExtractor` for that item — the same key used throughout the LayoutCache.
+
+### `invalidateAt` for index-based invalidation
+
+If you only have an index (not the key), use `ref.current.invalidateAt([index])`. It translates indices to keys via `keyExtractor` and calls the same LayoutCache eviction + version bump.
+
+### Why `extraData` is the nuclear option
+
+Changing `extraData` forces a re-render of ALL visible cells — regardless of what changed. Every cell passes through `MemoizedCellContent`'s memo check; since `extraData` is in props, all cells re-render. `invalidateKeys` is precise: only the named keys are evicted from LayoutCache, and only those cells trigger a Yoga re-measurement.
+
+`extraData` is kept for compatibility but is `@deprecated` in favor of `invalidateKeys`.
+
+### Why `remeasureOnItemChange` is `@unstable`
+
+`remeasureOnItemChange` only bumps `layoutCacheVersion` — it does NOT call `nativeLayoutCache.removeAttributes`. If the LayoutCache still holds a stale measured height for the key, the layout pass sees the cached height and may not re-measure. This makes the resize conditional on LayoutCache state and can silently fail. Use `invalidateKeys` explicitly for reliable resize.

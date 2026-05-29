@@ -19,48 +19,27 @@
 
 ## Import Rules — ENFORCE STRICTLY
 
-### `@riff/*` for library source
+### `@riff/*` for all library source
 
-Use `@riff/*` for all imports of types, layouts, and pure-TS library code from `src/`:
+Use `@riff/*` for all imports from `src/` — components, types, layouts, specs:
 
 ```typescript
-import { list } from '@riff/layouts/list';                    // ✅
-import type { CollectionViewLayout } from '@riff/types/protocol'; // ✅
+import { Riff } from '@riff/components/CollectionView';           // ✅
+import { list } from '@riff/layouts/list';                        // ✅
+import type { RiffLayout } from '@riff/types/protocol';           // ✅
+import NativeCollectionViewModule from '@riff/specs/NativeCollectionViewModule'; // ✅
 ```
 
-`@riff` maps to `packages/rn-collection-view/src/` via tsconfig `paths` and Metro `extraNodeModules`. No symlink, no package dependency.
+`@riff` maps to `packages/rn-collection-view/src/` via tsconfig `paths` and Metro `resolveRequest`.
 
-### Native spec imports MUST use wrappers in `example/components/`
-
-The library has its own `node_modules/react-native`. Importing specs directly from `src/specs/`
-(even via `@riff/specs/...`) runs `codegenNativeComponent`/`TurboModuleRegistry` against the
-library's react-native instance — components register in the wrong registry, silent failure.
-
-Wrappers in `example/components/` re-declare the spec so resolution happens from the correct instance:
-
-```
-example/components/NativeCollectionViewModule.ts
-example/components/RNMeasuredCellNativeComponent.ts
-example/components/RNScrollCoordinatedViewNativeComponent.ts
-example/components/RNCollectionViewContainerNativeComponent.ts
-```
-
-**NEVER write these in example/ code:**
-```typescript
-import NativeCollectionViewModule from '@riff/specs/NativeCollectionViewModule';     // ❌
-import RNMeasuredCell from '../../src/specs/RNMeasuredCellNativeComponent';           // ❌
-```
-
-**Always write:**
-```typescript
-import NativeCollectionViewModule from '../components/NativeCollectionViewModule';    // ✅
-import RNMeasuredCell from './RNMeasuredCellNativeComponent';                         // ✅
-```
+**No wrappers.** The old `example/components/RNMeasuredCellNativeComponent.ts` etc. were
+dual-React-instance workarounds. Yarn workspace hoisting (single copy of react-native) eliminated
+the need. Import specs directly from `@riff/specs/`.
 
 ### When adding a new native spec
 
-Create the spec in `src/specs/` AND a wrapper in `example/components/` in the same change.
-Copy the pattern from `example/components/RNCollectionViewContainerNativeComponent.ts`.
+Create the spec in `src/specs/` only. No wrapper needed.
+Copy the pattern from `src/specs/RNCollectionViewContainerNativeComponent.ts`.
 
 ## After any native change
 
@@ -73,7 +52,7 @@ Metro MUST run on port 8082. The Xcode scheme sets `RCT_METRO_PORT=8082`. Defaul
 ## Debug logging
 
 All logging is silenced in normal operation. To enable:
-- JS: set `RNCV_DEBUG_LOGS = true` / `RNCV_LAYOUT_DEBUG_LOGS = true` in `CollectionView.tsx`
+- JS: set `RNCV_DEBUG_LOGS = true` / `RNCV_LAYOUT_DEBUG_LOGS = true` in `src/components/CollectionView.tsx`
 - Native: set `RNCV_ENABLE_NATIVE_LOGS = 1` / `RNCV_ENABLE_STICKY_TRACE = 1`
 - Re-silence after verification.
 

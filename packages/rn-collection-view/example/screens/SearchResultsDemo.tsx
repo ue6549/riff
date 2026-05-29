@@ -24,11 +24,11 @@
 import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, SafeAreaView, StyleSheet, Text, View } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
-import { Riff } from '../components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
 import { compositional } from '@riff/layouts/compositional';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 import { PerfHood } from '../components/PerfHood';
 import {
   ProductItem,
@@ -71,18 +71,18 @@ const tracker = createMountTracker();
 
 function RiffSearchResults({ listRef }: { listRef: React.RefObject<any> }) {
   const layout = useMemo(() => compositional([
-    { range: 0, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: 80, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
+    { range: 0, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: 80, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
     { range: 1, layout: list({ estimatedItemHeight: 280, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 8, estimatedCrossAxisHeight: 180 }), horizontal: true },
-    { range: 2, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
+    { range: 2, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
     { range: 3, layout: list({ estimatedItemHeight: 180, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 8, estimatedCrossAxisHeight: 350 }), horizontal: true },
-    { range: 4, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
+    { range: 4, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
     { range: 5, layout: list({ estimatedItemHeight: 280, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 8, estimatedCrossAxisHeight: 180 }), horizontal: true },
-    { range: 6, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
+    { range: 6, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
     { range: 7, layout: list({ estimatedItemHeight: 180, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 8, estimatedCrossAxisHeight: 350 }), horizontal: true },
-    { range: 8, layout: grid({ columns: 2, rowHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
+    { range: 8, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
   ]), []);
 
-  const sections = useMemo<SectionConfig<ProductItem | BannerItem>[]>(() => [
+  const sections = useMemo<RiffSection<ProductItem | BannerItem>[]>(() => [
     {
       key: 'search-grid-0',
       data: GRID_0,
@@ -161,7 +161,7 @@ function RiffSearchResults({ listRef }: { listRef: React.RefObject<any> }) {
 
   return (
     <Riff
-      handle={listRef}
+      ref={listRef}
       sections={sections}
       layout={layout}
       keyExtractor={keyExtractor}

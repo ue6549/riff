@@ -8,24 +8,24 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
-  CustomLayoutDelegate,
-  InvalidationScope,
+  RiffCustomConfig,
+  RiffInvalidationScope,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 
-class CustomLayoutEngine implements CollectionViewLayout {
+class CustomLayoutEngine implements RiffLayout {
   readonly type = 'custom';
   readonly horizontal: boolean;
   /** Custom layouts default to spatial query — items may not be contiguously ordered. */
   readonly needsSpatialQuery = true;
-  private readonly delegate: CustomLayoutDelegate;
+  private readonly delegate: RiffCustomConfig;
   private _attrs: LayoutAttributes[] = [];
   private _contentWidth = 0;
   private _contentHeight = 0;
 
-  constructor(delegate: CustomLayoutDelegate) {
+  constructor(delegate: RiffCustomConfig) {
     this.delegate = delegate;
     this.horizontal = delegate.horizontal ?? false;
   }
@@ -82,7 +82,7 @@ class CustomLayoutEngine implements CollectionViewLayout {
     );
   }
 
-  invalidationScope(): InvalidationScope {
+  invalidationScope(): RiffInvalidationScope {
     return { type: 'full' };
   }
 }
@@ -102,6 +102,6 @@ class CustomLayoutEngine implements CollectionViewLayout {
  * })}
  * ```
  */
-export function customLayout(delegate: CustomLayoutDelegate): CollectionViewLayout {
+export function customLayout(delegate: RiffCustomConfig): RiffLayout {
   return new CustomLayoutEngine(delegate);
 }

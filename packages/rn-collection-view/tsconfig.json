@@ -13,7 +13,8 @@
     "declarationDir": "lib/typescript",
     "outDir": "lib",
     "rootDir": "src",
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "noEmitOnError": false
   },
   "include": ["src"],
   "exclude": ["node_modules", "lib", "example"]

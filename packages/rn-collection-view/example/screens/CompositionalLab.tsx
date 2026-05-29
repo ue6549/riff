@@ -22,13 +22,13 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Riff as CollectionView } from '../components/CollectionView';
+import { Riff as CollectionView, type RiffHandle } from '@riff/components/CollectionView';
 import { compositional } from '@riff/layouts/compositional';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { flow } from '@riff/layouts/flow';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 
 // ── Item type ────────────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ function LabCell({ item }: { item: LabItem }) {
 // ── Main component ───────────────────────────────────────────────────────────
 
 export function CompositionalLab() {
-  const cvRef = useRef<any>(null);
+  const cvRef = useRef<RiffHandle<LabItem>>(null);
   const [sectionDatas, setSectionDatas] = useState<LabItem[][]>(
     INITIAL_DATA.map(d => [...d]),
   );
@@ -288,13 +288,13 @@ export function CompositionalLab() {
       // 1: list H — sticky header
       { layout: list({ estimatedItemHeight: 140, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 10, estimatedCrossAxisHeight: 120 }), horizontal: true },
       // 2: grid V 2-col — sticky header + footer + section bg
-      { layout: grid({ columns: gridCols, rowHeight: 100, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10 }) },
+      { layout: grid({ columns: gridCols, estimatedItemHeight: 100, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10 }) },
       // 3: grid H 2-row — sticky header
-      { layout: grid({ columns: 2, rowHeight: 80, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, sectionSpacing: 10, estimatedCrossAxisHeight: 180 }), horizontal: true },
+      { layout: grid({ columns: 2, estimatedItemHeight: 80, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, sectionSpacing: 10, estimatedCrossAxisHeight: 180 }), horizontal: true },
       // 4: masonry V 2-col — sticky header + footer + section bg
       { layout: masonry({ columns: gridCols, estimatedItemHeight: 80, columnSpacing: 8, rowSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionBackground: sectionBgEnabled, sectionSpacing: 10 }) },
       // 5: flow V — sticky header + footer
-      { layout: flow({ sizeForItem: (i: number) => ({ width: flowSizeRef.current[i]?.width ?? 100, height: 34 }), itemSpacing: 6, lineSpacing: 6, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionSpacing: 10 }) },
+      { layout: flow({ estimatedSizeForItem: (_s: number, i: number) => ({ width: flowSizeRef.current[i]?.width ?? 100, height: 34 }), itemSpacing: 6, lineSpacing: 6, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', sectionSpacing: 10 }) },
       // 6: list V — no chrome (control group)
       { layout: list({ estimatedItemHeight: 80, itemSpacing: 8, sectionSpacing: 10 }) },
     ];
@@ -311,13 +311,13 @@ export function CompositionalLab() {
 
   // ── Sections ───────────────────────────────────────────────────────────────
 
-  const sections = useMemo<SectionConfig<LabItem>[]>(() => {
-    const result: SectionConfig<LabItem>[] = [];
+  const sections = useMemo<RiffSection<LabItem>[]>(() => {
+    const result: RiffSection<LabItem>[] = [];
     const count = Math.min(sectionDatas.length, sectionMetas.length);
     for (let i = 0; i < count; i++) {
       const meta = sectionMetas[i]!;
       const data = sectionDatas[i]!;
-      const sec: SectionConfig<LabItem> = {
+      const sec: RiffSection<LabItem> = {
         key: meta.key,
         data,
         insets: { top: 8, bottom: 8, left: 10, right: 10 },
@@ -432,7 +432,7 @@ export function CompositionalLab() {
 
       {/* ── Collection View ───────────────────────────────────────────── */}
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={layout}
         keyExtractor={keyExtractor}

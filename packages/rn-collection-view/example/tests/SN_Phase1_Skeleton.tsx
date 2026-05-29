@@ -11,7 +11,7 @@
  */
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import RNCollectionViewContainer from '../components/RNCollectionViewContainerNativeComponent';
+import RNCollectionViewContainer from '@riff/specs/RNCollectionViewContainerNativeComponent';
 
 const COLORS = ['#e63946', '#2a9d8f', '#e9c46a', '#f4a261', '#264653', '#457b9d'];
 const ITEM_COUNT = 30;

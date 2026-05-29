@@ -31,10 +31,10 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
-  FlowLayoutDelegate,
-  InvalidationScope,
+  RiffFlowConfig,
+  RiffInvalidationScope,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -64,10 +64,10 @@ const nativeMod = NativeCollectionViewModule as unknown as {
   };
 };
 
-class FlowLayoutEngine implements CollectionViewLayout {
+class FlowLayoutEngine implements RiffLayout {
   readonly type = 'flow';
   readonly horizontal: boolean;
-  readonly delegate: FlowLayoutDelegate;
+  readonly delegate: RiffFlowConfig;
   private lastSectionKeys: (readonly string[])[] = [];
   private _cache = nativeMod.layoutCache;
   private _flowEngine = nativeMod.flowLayout;
@@ -76,7 +76,7 @@ class FlowLayoutEngine implements CollectionViewLayout {
   // never split a row at a budget boundary, preventing partial-row pop-in.
   private _maxItemsPerRow = 1;
 
-  constructor(delegate: FlowLayoutDelegate) {
+  constructor(delegate: RiffFlowConfig) {
     this.delegate = delegate;
     this.horizontal = delegate.horizontal ?? false;
   }
@@ -107,7 +107,7 @@ class FlowLayoutEngine implements CollectionViewLayout {
       const itemHeights: number[] = new Array(sec.itemCount);
 
       for (let i = 0; i < sec.itemCount; i++) {
-        const size = d.sizeForItem(i, sectionIndex, w);
+        const size = d.estimatedSizeForItem?.(sectionIndex, i) ?? { width: w, height: d.estimatedItemHeight ?? 44 };
         const measuredH = context.measuredHeightForItem?.(i, sectionIndex);
         itemWidths[i]  = size.width;
         itemHeights[i] = measuredH ?? size.height;
@@ -237,7 +237,7 @@ class FlowLayoutEngine implements CollectionViewLayout {
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
-  invalidationScope(): InvalidationScope {
+  invalidationScope(): RiffInvalidationScope {
     return { type: 'full' };
   }
 }
@@ -264,6 +264,6 @@ class FlowLayoutEngine implements CollectionViewLayout {
  * })}
  * ```
  */
-export function flow(delegate: FlowLayoutDelegate): CollectionViewLayout {
+export function flow(delegate: RiffFlowConfig): RiffLayout {
   return new FlowLayoutEngine(delegate);
 }

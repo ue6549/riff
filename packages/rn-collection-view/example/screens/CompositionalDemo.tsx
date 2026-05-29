@@ -18,13 +18,13 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Riff as CollectionView } from '../components/CollectionView';
+import { Riff as CollectionView, type RiffHandle } from '@riff/components/CollectionView';
 import { compositional } from '@riff/layouts/compositional';
 import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { flow } from '@riff/layouts/flow';
 import { masonry } from '@riff/layouts/masonry';
-import type { SectionConfig } from '@riff/types/protocol';
+import type { RiffSection } from '@riff/types/protocol';
 
 // ── Item types — explicit _type discriminant ──────────────────────────────────
 
@@ -242,7 +242,7 @@ let bannerCounter = BANNER_SEED.length;
 let productCounter = PRODUCT_SEED.length;
 
 export function CompositionalDemo() {
-  const cvRef = useRef<any>(null);
+  const cvRef = useRef<RiffHandle<AnyItem>>(null);
   const [banners, setBanners]       = useState<BannerItem[]>(BANNER_SEED);
   const [products, setProducts]     = useState<ProductItem[]>(PRODUCT_SEED);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
@@ -272,23 +272,21 @@ export function CompositionalDemo() {
   const deleteProduct = useCallback(() => setProducts(prev => prev.length > 1 ? prev.slice(1) : prev), []);
 
   const toggleExpandedProduct = useCallback(() => {
-    setExpandedProductId(prev => {
-      const firstId = productsRef.current[0]?.id ?? null;
-      return prev === firstId ? null : firstId;
-    });
+    const firstId = productsRef.current[0]?.id ?? null;
+    setExpandedProductId(prev => prev === firstId ? null : firstId);
   }, []);
 
   // ── Layout (stable — heightForItem reads via refs) ───────────────────────────
 
   const layout = useMemo(() => compositional([
-    { range: 0, layout: list({ itemHeight: 200, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 10 }) },
-    { range: 1, layout: grid({ columns: 2, rowHeight: 90, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push' }) },
-    { range: 2, layout: flow({ sizeForItem: (i) => ({ width: DEAL_TAGS[i]?.width ?? 100, height: 36 }), itemSpacing: 8, lineSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push' }), horizontal: true },
+    { range: 0, layout: list({ estimatedItemHeight: 200, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 10 }) },
+    { range: 1, layout: grid({ columns: 2, estimatedItemHeight: 90, columnSpacing: 10, rowSpacing: 10, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push' }) },
+    { range: 2, layout: flow({ estimatedSizeForItem: (_s, i) => ({ width: DEAL_TAGS[i]?.width ?? 100, height: 36 }), itemSpacing: 8, lineSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push' }), horizontal: true },
     { range: 3, layout: list({ estimatedItemHeight: 130, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push', itemSpacing: 10 }) },
-    { range: 4, layout: flow({ sizeForItem: (i) => ({ width: TRENDING_TAGS[i]?.width ?? 100, height: 36 }), itemSpacing: 8, lineSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push' }) },
+    { range: 4, layout: flow({ estimatedSizeForItem: (_s, i) => ({ width: TRENDING_TAGS[i]?.width ?? 100, height: 36 }), itemSpacing: 8, lineSpacing: 8, headerHeight: HEADER_H, footerHeight: FOOTER_H, stickyMode: 'push' }) },
     { range: 5, layout: masonry({
         columns: 2,
-        heightForItem: () => 130,  // uniform estimate; MVC corrects after Yoga measurement
+        estimatedItemHeight: 130,
         columnSpacing: 10, rowSpacing: 10,
         headerHeight: HEADER_H, footerHeight: FOOTER_H,
         stickyMode: 'push',
@@ -298,7 +296,7 @@ export function CompositionalDemo() {
 
   // ── Sections (rebuilt on data changes) ───────────────────────────────────────
 
-  const sections = useMemo<SectionConfig<AnyItem>[]>(() => [
+  const sections = useMemo<RiffSection<AnyItem>[]>(() => [
     {
       key: 'banners', data: banners as AnyItem[],
       header: { render: () => <SectionHeader title={`Featured (${banners.length})`} subtitle="list · type: banner" />, height: HEADER_H, sticky: true },
@@ -372,7 +370,7 @@ export function CompositionalDemo() {
       </ScrollView>
 
       <CollectionView
-        handle={cvRef}
+        ref={cvRef}
         sections={sections}
         layout={layout}
         keyExtractor={keyExtractor}

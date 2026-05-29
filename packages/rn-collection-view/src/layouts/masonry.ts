@@ -28,10 +28,10 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
-  MasonryLayoutDelegate,
-  InvalidationScope,
+  RiffMasonryConfig,
+  RiffInvalidationScope,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -61,15 +61,15 @@ const nativeMod = NativeCollectionViewModule as unknown as {
   };
 };
 
-class MasonryLayoutEngine implements CollectionViewLayout {
+class MasonryLayoutEngine implements RiffLayout {
   readonly type = 'masonry';
   readonly horizontal: boolean;
-  readonly delegate: MasonryLayoutDelegate;
+  readonly delegate: RiffMasonryConfig;
   private lastSectionKeys: (readonly string[])[] = [];
   private _cache = nativeMod.layoutCache;
   private _masonryEngine = nativeMod.masonryLayout;
 
-  constructor(delegate: MasonryLayoutDelegate) {
+  constructor(delegate: RiffMasonryConfig) {
     this.delegate = delegate;
     this.horizontal = delegate.horizontal ?? false;
   }
@@ -101,7 +101,7 @@ class MasonryLayoutEngine implements CollectionViewLayout {
         itemHeights = new Array(sec.itemCount);
         for (let i = 0; i < sec.itemCount; i++) {
           const measured = context.measuredHeightForItem?.(i, sectionIndex);
-          itemHeights[i] = measured ?? (d.heightForItem ? d.heightForItem(i, sectionIndex, w) : (d.estimatedItemHeight ?? 44));
+          itemHeights[i] = measured ?? (d.estimatedHeightForItem?.(sectionIndex, i) ?? (d.estimatedItemHeight ?? 44));
         }
       }
 
@@ -193,7 +193,7 @@ class MasonryLayoutEngine implements CollectionViewLayout {
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
-  invalidationScope(): InvalidationScope {
+  invalidationScope(): RiffInvalidationScope {
     return { type: 'full' };
   }
 }
@@ -221,6 +221,6 @@ class MasonryLayoutEngine implements CollectionViewLayout {
  * })}
  * ```
  */
-export function masonry(delegate: MasonryLayoutDelegate): CollectionViewLayout {
+export function masonry(delegate: RiffMasonryConfig): RiffLayout {
   return new MasonryLayoutEngine(delegate);
 }

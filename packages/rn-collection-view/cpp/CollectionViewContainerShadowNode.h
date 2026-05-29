@@ -54,17 +54,9 @@ class CollectionViewContainerShadowNode final
 #pragma mark - LayoutableShadowNode
 
   /**
-   * B1.1: Override layoutTree to inject explicit Yoga dims for Measured cells
-   * BEFORE YGNodeCalculateLayout runs. Prevents sub-pixel intrinsic-measurement
-   * drift from oscillating above the 0.5pt MVC threshold each commit.
-   */
-  void layoutTree(LayoutContext layoutContext,
-                  LayoutConstraints layoutConstraints) override;
-
-  /**
    * Called after Yoga has computed layout for all children.
    *
-   * 1. Calls parent layout() — Yoga computes child dimensions.
+   * 1. Calls parent layout() — reads Yoga-computed child dimensions.
    * 2. Reads cache positions, diffs Yoga measurements, asks layout engine
    *    to cascade deltas, re-reads cache for final positions.
    * 3. Updates state (contentSize, positions, offset correction).
@@ -72,14 +64,6 @@ class CollectionViewContainerShadowNode final
   void layout(LayoutContext layoutContext) override;
 
  private:
-  /**
-   * B1.1: Pre-inject measured cell sizes as explicit Yoga style dimensions.
-   * Called from layoutTree before YGNodeCalculateLayout so Yoga uses exact
-   * cached values instead of re-calling intrinsic measure functions.
-   * Covers V-section cells (Height only) and H-section grandchildren (Both).
-   */
-  void injectMeasuredDimensionsIfNeeded();
-
   /**
    * B4.1: Skip correction + state update when children + cache are unchanged.
    * Caches {cacheVersion, childCount, childTagsHash, yogaFrameHash} and returns
@@ -114,10 +98,11 @@ class CollectionViewContainerShadowNode final
   Rect correctedBoundingRect_{};
 
   // B4.1: short-circuit tracking state (copied on Fabric clone → persists across commits).
-  uint64_t lastCacheVersion_   = 0;
-  size_t   lastChildCount_     = 0;
-  size_t   lastChildTagsHash_  = 0;
-  size_t   lastYogaHeightHash_ = 0;
+  uint64_t lastCacheVersion_      = 0;
+  size_t   lastChildCount_        = 0;
+  size_t   lastChildTagsHash_     = 0;
+  size_t   lastYogaHeightHash_    = 0;
+  int      lastLayoutCacheVersion_ = -1;
 };
 
 } // namespace facebook::react

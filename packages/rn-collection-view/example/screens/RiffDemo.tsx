@@ -25,7 +25,7 @@ import { CircularList } from '../components/CircularList';
 import { Carousel3D } from '../components/Carousel3D';
 import { CompositionalDemo } from './CompositionalDemo';
 import { CompositionalLab } from './CompositionalLab';
-import { CollectionSubContainer } from '../components/CollectionSubContainer';
+import { CollectionSubContainer } from '@riff/components/CollectionSubContainer';
 import { radial } from '@riff/layouts/radial';
 import { carousel3D as carousel3DLayout } from '@riff/layouts/carousel3D';
 import { spiral } from '@riff/layouts/spiral';

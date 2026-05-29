@@ -17,7 +17,7 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
@@ -76,7 +76,7 @@ function scaleMatrix(s: number): readonly number[] {
   ];
 }
 
-class RadialLayout implements CollectionViewLayout {
+class RadialLayout implements RiffLayout {
   private _cache = nativeMod.layoutCache;
   readonly type = 'radial';
   readonly horizontal = false;
@@ -189,6 +189,6 @@ class RadialLayout implements CollectionViewLayout {
   }
 }
 
-export type RadialLayoutFactory = (opts?: RadialOptions) => CollectionViewLayout;
+export type RadialLayoutFactory = (opts?: RadialOptions) => RiffLayout;
 
 export const radial: RadialLayoutFactory = (opts = {}) => new RadialLayout(opts);

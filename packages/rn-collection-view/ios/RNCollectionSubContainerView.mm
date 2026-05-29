@@ -662,11 +662,26 @@ static NSString *_hScrollKey(int32_t cacheId, int32_t sectionIdx) {
     if (cs.width > 0 && cs.height > 0) {
       const CGFloat widthDelta  = std::abs(cs.width  - prevSVCS.width);
       const CGFloat heightDelta = std::abs(cs.height - prevSVCS.height);
+      const BOOL isHScroll =
+          (_scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
 
       // _contentView.frame: update on EITHER axis change (fixes cross-axis
       // height not filling the scrollview for H sections).
       if (widthDelta > 0.5f || heightDelta > 0.5f) {
         _contentView.frame = CGRectMake(0, 0, cs.width, cs.height);
+      }
+
+      // H scroll: frame.height must track contentSize.height to eliminate
+      // vertical scroll headroom. alwaysBounceVertical=NO only suppresses
+      // bounce when contentSize.height <= frame.height; if contentSize grows
+      // before the parent Fabric commit updates self.frame, UIKit will
+      // temporarily allow vertical scroll → cross-axis bounce.
+      // Changing the cross-axis frame does not affect the active horizontal
+      // pan recognizer, so no gesture guard is needed.
+      if (isHScroll && heightDelta > 0.5f) {
+        CGRect svFrame = _scrollView.frame;
+        svFrame.size.height = cs.height;
+        _scrollView.frame = svFrame;
       }
 
       // _scrollView.contentSize: ONLY update when the SCROLL-AXIS changes.
@@ -676,8 +691,6 @@ static NSString *_hScrollKey(int32_t cacheId, int32_t sectionIdx) {
       // bounce, truncating it visibly. The cross-axis dimension of contentSize
       // doesn't affect scroll bounds for single-axis scrollviews, so it's
       // safe to defer.
-      const BOOL isHScroll =
-          (_scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
       const CGFloat scrollAxisDelta = isHScroll ? widthDelta : heightDelta;
       if (scrollAxisDelta > 0.5f) {
         _scrollView.contentSize = cs;
@@ -787,11 +800,21 @@ static NSString *_hScrollKey(int32_t cacheId, int32_t sectionIdx) {
 
 // Apply self.bounds to _scrollView.frame.
 // B1.1: no busy-guard needed — H-section wrapper heights are stable during gestures.
+// H sections: clamp frame.height to max(bounds.height, contentSize.height) so a
+// Fabric commit that hasn't propagated the updated wrapper height yet can't shrink
+// the scroll view below its contentSize and re-open vertical scroll headroom.
 - (void)_applyOrDeferScrollViewFrame
 {
   RNHGEST_TRACE_ENTER("_applyOrDeferScrollViewFrame");
-  if (_scrollView && !CGRectEqualToRect(_scrollView.frame, self.bounds)) {
-    _scrollView.frame = self.bounds;
+  if (_scrollView) {
+    CGRect targetFrame = self.bounds;
+    if (_scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal) {
+      const CGFloat csH = _scrollView.contentSize.height;
+      if (csH > targetFrame.size.height) targetFrame.size.height = csH;
+    }
+    if (!CGRectEqualToRect(_scrollView.frame, targetFrame)) {
+      _scrollView.frame = targetFrame;
+    }
   }
   RNHGEST_TRACE_EXIT("_applyOrDeferScrollViewFrame");
 }

@@ -1,7 +1,7 @@
 /**
  * List Layout — single-column vertical layout factory.
  *
- * Creates a CollectionViewLayout backed by the C++ ListLayout engine.
+ * Creates a RiffLayout backed by the C++ ListLayout engine.
  * Supports fixed height, estimated height with measurement, and per-item height callback.
  *
  * C++ layout writes to the shared LayoutCache. Spatial queries via getAttributesInRect.
@@ -21,10 +21,10 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
-  ListLayoutDelegate,
-  InvalidationScope,
+  RiffListConfig,
+  RiffInvalidationScope,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -79,10 +79,10 @@ const listMvcTrace = (msg: string) => {
   console.log(`[MVC-TRACE] ${msg}`);
 };
 
-class ListLayout implements CollectionViewLayout {
+class ListLayout implements RiffLayout {
   readonly type = 'list';
   readonly horizontal: boolean;
-  readonly delegate: ListLayoutDelegate;
+  readonly delegate: RiffListConfig;
   private lastContext: LayoutContext | null = null;
   private _lastFingerprint: string = '';
   private lastSectionKeys: (readonly string[])[] = [];
@@ -90,7 +90,7 @@ class ListLayout implements CollectionViewLayout {
   private _cache = nativeMod.layoutCache;
   private _listEngine = nativeMod.listLayout;
 
-  constructor(delegate: ListLayoutDelegate) {
+  constructor(delegate: RiffListConfig) {
     this.delegate = delegate;
     this.horizontal = delegate.horizontal ?? false;
   }
@@ -116,19 +116,19 @@ class ListLayout implements CollectionViewLayout {
       runningFlatBase += (hasHeader ? 1 : 0) + sec.itemCount + (hasFooter ? 1 : 0);
 
       // Determine item heights for this section.
-      // Priority: measured (actual) → delegate heightForItem (estimate) → itemHeight → estimatedItemHeight.
+      // Priority: measured (actual) → estimatedHeightForItem (estimate) → estimatedItemHeight.
       const w = context.containerWidth;
       let itemHeights: number[] | undefined;
-      if (d.heightForItem || context.measuredHeightForItem) {
+      if (d.estimatedHeightForItem || context.measuredHeightForItem) {
         itemHeights = [];
         for (let i = 0; i < sec.itemCount; i++) {
           const measured = context.measuredHeightForItem?.(i, sIdx);
           if (measured !== undefined) {
             itemHeights.push(measured);
-          } else if (d.heightForItem) {
-            itemHeights.push(d.heightForItem(i, sIdx, w));
+          } else if (d.estimatedHeightForItem) {
+            itemHeights.push(d.estimatedHeightForItem(sIdx, i));
           } else {
-            itemHeights.push((typeof d.itemHeight === 'function' ? d.itemHeight(w) : d.itemHeight) ?? d.estimatedItemHeight ?? 44);
+            itemHeights.push(d.estimatedItemHeight ?? 44);
           }
         }
       }
@@ -165,7 +165,7 @@ class ListLayout implements CollectionViewLayout {
         headerFlatIndex: hasHeader ? sectionFlatBase : -1,
         footerFlatIndex: hasFooter ? sectionFlatBase + (hasHeader ? 1 : 0) + sec.itemCount : -1,
         itemCount: sec.itemCount,
-        itemHeight: (typeof d.itemHeight === 'function' ? d.itemHeight(context.containerWidth) : d.itemHeight) ?? d.estimatedItemHeight ?? 44,
+        itemHeight: d.estimatedItemHeight ?? 44,
         viewportWidth: context.containerWidth,
         viewportHeight: context.containerHeight,
         horizontal: H,
@@ -285,7 +285,7 @@ class ListLayout implements CollectionViewLayout {
       : Math.abs(oldBounds.width  - newBounds.width)  > 0.5;
   }
 
-  invalidationScope(_oldBounds: Rect, _newBounds: Rect): InvalidationScope {
+  invalidationScope(_oldBounds: Rect, _newBounds: Rect): RiffInvalidationScope {
     return { type: 'full' };
   }
 
@@ -295,7 +295,7 @@ class ListLayout implements CollectionViewLayout {
     const sectionParams = context.sections.map((sec, sIdx) => {
       const params: Record<string, unknown> = {
         itemCount: sec.itemCount,
-        itemHeight: (typeof this.delegate.itemHeight === 'function' ? this.delegate.itemHeight(context.containerWidth) : this.delegate.itemHeight) ?? this.delegate.estimatedItemHeight ?? 44,
+        itemHeight: this.delegate.estimatedItemHeight ?? 44,
         viewportWidth: context.containerWidth,
         itemSpacing: this.delegate.itemSpacing ?? 0,
         section: sIdx,
@@ -322,6 +322,6 @@ class ListLayout implements CollectionViewLayout {
  * layout={list({ heightForItem: (i, s) => heights[i], itemSpacing: 8 })}
  * ```
  */
-export function list(delegate: ListLayoutDelegate): CollectionViewLayout {
+export function list(delegate: RiffListConfig): RiffLayout {
   return new ListLayout(delegate);
 }

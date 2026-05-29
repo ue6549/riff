@@ -6,7 +6,6 @@
 #include <cmath>
 #include <limits>
 #include <yoga/YGNode.h>
-#include <yoga/YGNodeStyle.h>
 #include <react/debug/react_native_assert.h>
 
 // Cross-platform logging for ShadowNode (runs on background thread).
@@ -18,26 +17,6 @@
 // Set RNCV_ENABLE_MVC_TRACE=1 to enable verbose MVC lifecycle tracing.
 #ifndef RNCV_ENABLE_MVC_TRACE
 #define RNCV_ENABLE_MVC_TRACE 0
-#endif
-
-// Mirrors RNCV_ENABLE_HSUB_LOGS from CollectionSubContainerShadowNode.cpp.
-// Set to 1 alongside that flag to see B1.1 injection diagnostics:
-//   [RNCV-HSUB-CPP-INJECT]  hChildren/hYogaNodes sizes per H-sub-container,
-//                            isMeasured + injected value per H-cell.
-#ifndef RNCV_ENABLE_HSUB_LOGS
-#define RNCV_ENABLE_HSUB_LOGS 0
-#endif
-
-#if RNCV_ENABLE_HSUB_LOGS
-  #ifdef __APPLE__
-    #include <cstdio>
-    #define RNCV_SN_HSUB_LOG(fmt, ...) do { fprintf(stderr, "[RNCV-HSUB-CPP-INJECT] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-  #else
-    #include <android/log.h>
-    #define RNCV_SN_HSUB_LOG(fmt, ...) __android_log_print(ANDROID_LOG_INFO, "RNCV-HSUB-CPP-INJECT", fmt, ##__VA_ARGS__)
-  #endif
-#else
-  #define RNCV_SN_HSUB_LOG(fmt, ...) ((void)0)
 #endif
 
 #if DEBUG && RNCV_ENABLE_NATIVE_LOGS
@@ -69,130 +48,20 @@ namespace facebook::react {
 // Must match the string used in codegenNativeComponent('RNCollectionViewContainer').
 const char CollectionViewContainerComponentName[] = "RNCollectionViewContainer";
 
-// ── B1.1 helpers ─────────────────────────────────────────────────────────────
-// Inject explicit Yoga height (and optionally width) for a cell whose sizing
-// state is Measured, so Yoga returns the exact cached value on this layout pass
-// instead of re-calling the intrinsic measure function (which drifts sub-pixel).
-// Resets to auto for Placeholder cells so intrinsic measurement runs normally.
-namespace {
-void injectYogaDim(
-    yoga::Node* yogaNode,
-    const std::string& key,
-    const rncv::LayoutCache& cache,
-    rncv::ContentDimension contentDim) {
-
-  auto attrs = cache.getAttributes(key);
-  const bool isMeasured = attrs && attrs->sizingState == rncv::SizingState::Measured;
-
-  if (contentDim == rncv::ContentDimension::Height ||
-      contentDim == rncv::ContentDimension::Both) {
-    if (isMeasured && attrs->frame.height > 0) {
-      YGNodeStyleSetHeight(yogaNode, static_cast<float>(attrs->frame.height));
-    } else {
-      YGNodeStyleSetHeightAuto(yogaNode);
-    }
-  }
-  if (contentDim == rncv::ContentDimension::Width ||
-      contentDim == rncv::ContentDimension::Both) {
-    if (isMeasured && attrs->frame.width > 0) {
-      YGNodeStyleSetWidth(yogaNode, static_cast<float>(attrs->frame.width));
-    } else {
-      YGNodeStyleSetWidthAuto(yogaNode);
-    }
-  }
-}
-} // anonymous namespace
-
-void CollectionViewContainerShadowNode::layoutTree(
-    LayoutContext layoutContext, LayoutConstraints layoutConstraints) {
-  // B1.1: inject measured dims before YGNodeCalculateLayout runs.
-  injectMeasuredDimensionsIfNeeded();
-  ConcreteViewShadowNode::layoutTree(layoutContext, layoutConstraints);
-}
-
-void CollectionViewContainerShadowNode::injectMeasuredDimensionsIfNeeded() {
-  const auto& props =
-      *std::static_pointer_cast<const RNCollectionViewContainerProps>(getProps());
-  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
-  if (!cache) return;
-
-  // Determine which Yoga dimension(s) are content-determined for this layout.
-  std::string layoutType = "list";
-  switch (props.layoutType) {
-    case RNCollectionViewContainerLayoutType::Grid:          layoutType = "grid";          break;
-    case RNCollectionViewContainerLayoutType::Masonry:       layoutType = "masonry";       break;
-    case RNCollectionViewContainerLayoutType::Flow:          layoutType = "flow";          break;
-    case RNCollectionViewContainerLayoutType::Compositional: layoutType = "compositional"; break;
-    default: break;
-  }
-  auto engine = CollectionViewModule::getLayoutEngineForId(
-      props.layoutCacheId, layoutType);
-  const auto contentDim = engine
-      ? engine->contentDeterminedDimension()
-      : rncv::ContentDimension::Height;
-
-  const auto children       = getLayoutableChildNodes();
-  const auto& childYogaNodes = yogaNode_.getChildren();
-  const size_t N = std::min(children.size(), childYogaNodes.size());
-
-  for (size_t i = 0; i < N; ++i) {
-    auto* yogaChild = childYogaNodes[i];
-    const auto& childNodeProps = children[i]->getProps();
-
-    // H-sub-container (RNCollectionSubContainer or legacy RNOrthogonalSectionView):
-    // inject for each H-cell grandchild — both axes (compositional = ContentDimension::Both).
-    if (auto subProps = std::dynamic_pointer_cast<const RNCollectionSubContainerProps>(childNodeProps)) {
-      const auto hChildren    = children[i]->getLayoutableChildNodes();
-      const auto& hYogaNodes  = yogaChild->getChildren();
-      const size_t M = std::min(hChildren.size(), hYogaNodes.size());
-      // Diagnostic: if hYogaNodes is empty while hChildren is not, injection is
-      // a no-op — H-cells won't get B1.1 protection this commit → yoga returns 0.
-      RNCV_SN_HSUB_LOG("sIdx=%d hChildren=%zu hYogaNodes=%zu M=%zu",
-                       subProps->sectionIndex, hChildren.size(), hYogaNodes.size(), M);
-      for (size_t j = 0; j < M; ++j) {
-        auto gcProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(
-            hChildren[j]->getProps());
-        if (!gcProps || gcProps->cacheKey.empty()) continue;
-        auto attrs = cache->getAttributes(gcProps->cacheKey);
-        const bool isMeasured = attrs && attrs->sizingState == rncv::SizingState::Measured;
-        RNCV_SN_HSUB_LOG("  cell[%zu] key='%s' isMeasured=%d cachedH=%.1f cachedW=%.1f",
-                         j, gcProps->cacheKey.c_str(), isMeasured ? 1 : 0,
-                         attrs ? (float)attrs->frame.height : 0.0f,
-                         attrs ? (float)attrs->frame.width  : 0.0f);
-        injectYogaDim(hYogaNodes[j], gcProps->cacheKey, *cache,
-                      rncv::ContentDimension::Both);
-      }
-      continue;
-    }
-    if (std::dynamic_pointer_cast<const RNOrthogonalSectionViewProps>(childNodeProps)) {
-      const auto hChildren    = children[i]->getLayoutableChildNodes();
-      const auto& hYogaNodes  = yogaChild->getChildren();
-      const size_t M = std::min(hChildren.size(), hYogaNodes.size());
-      for (size_t j = 0; j < M; ++j) {
-        auto gcProps = std::dynamic_pointer_cast<const RNMeasuredCellProps>(
-            hChildren[j]->getProps());
-        if (!gcProps || gcProps->cacheKey.empty()) continue;
-        injectYogaDim(hYogaNodes[j], gcProps->cacheKey, *cache,
-                      rncv::ContentDimension::Both);
-      }
-      continue;
-    }
-
-    // V-section cell: inject the content-determined axis for this layout type.
-    std::string key;
-    if (auto p = std::dynamic_pointer_cast<const RNMeasuredCellProps>(childNodeProps)) {
-      key = p->cacheKey;
-    } else if (auto p = std::dynamic_pointer_cast<const RNScrollCoordinatedViewProps>(childNodeProps)) {
-      key = p->cacheKey;
-    }
-    if (key.empty()) continue;
-    injectYogaDim(yogaChild, key, *cache, contentDim);
-  }
-}
-
 bool CollectionViewContainerShadowNode::shouldSkipCorrection() {
   const auto& props =
       *std::static_pointer_cast<const RNCollectionViewContainerProps>(getProps());
+
+  // Explicit JS-side invalidation signal (invalidateItem / invalidateKeys / invalidateAt).
+  // Must check before the cache-version short-circuit: clearing a Placeholder entry and
+  // re-writing the same estimated height does NOT bump _cache->version(), so without this
+  // check the correction pass would be skipped even though JS asked for a re-measure.
+  const int curLCV = props.layoutCacheVersion;
+  if (curLCV != lastLayoutCacheVersion_) {
+    lastLayoutCacheVersion_ = curLCV;
+    return false;
+  }
+
   auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
   if (!cache) return false;
 
@@ -230,7 +99,9 @@ bool CollectionViewContainerShadowNode::shouldSkipCorrection() {
 void CollectionViewContainerShadowNode::layout(LayoutContext layoutContext) {
   RNCV_SN_LOG("layout() BEGIN");
 
-  // Step 1: Call parent layout — Yoga computes child dimensions.
+  // Step 1: Call parent layout — reads Yoga-computed child dimensions.
+  // B1.1 injection already ran in completeClone(), so dirty cells have
+  // height:auto and Yoga measured them freely before arriving here.
   ConcreteViewShadowNode::layout(layoutContext);
 
   // B4.1: Skip correction + state update when children + cache are unchanged.

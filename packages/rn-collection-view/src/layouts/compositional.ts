@@ -30,14 +30,14 @@
  */
 
 import type {
-  CollectionViewLayout,
+  RiffLayout,
   LayoutContext,
   SectionInfo,
-  InvalidationScope,
-  ListLayoutDelegate,
-  GridLayoutDelegate,
-  FlowLayoutDelegate,
-  MasonryLayoutDelegate,
+  RiffInvalidationScope,
+  RiffListConfig,
+  RiffGridConfig,
+  RiffFlowConfig,
+  RiffMasonryConfig,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -79,7 +79,7 @@ export type SectionRange = number | [number, number];
 /** Maps a section range to a layout engine. */
 export interface CompositionalEntry {
   range: SectionRange;
-  layout: CollectionViewLayout;
+  layout: RiffLayout;
   /**
    * Phase 2: set `horizontal: true` to make this section scroll horizontally.
    * The section is rendered inside `RNOrthogonalSectionView` (a UIScrollView)
@@ -155,7 +155,7 @@ function extractSupplementaryHeights(
 }
 
 function buildListSectionParams(
-  d: ListLayoutDelegate,
+  d: RiffListConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -165,19 +165,17 @@ function buildListSectionParams(
   hasFooter: boolean,
   measuredHeightForItem: MeasuredHeightFn,
 ): Record<string, unknown> {
-  const itemHeightVal =
-    (typeof d.itemHeight === 'function' ? d.itemHeight(w) : d.itemHeight) ??
-    d.estimatedItemHeight ?? 44;
+  const itemHeightVal = d.estimatedItemHeight ?? 44;
 
   let itemHeights: number[] | undefined;
-  if (d.heightForItem || measuredHeightForItem) {
+  if (d.estimatedHeightForItem || measuredHeightForItem) {
     itemHeights = [];
     for (let i = 0; i < sec.itemCount; i++) {
       const measured = measuredHeightForItem?.(i, sectionIndex);
       if (measured !== undefined) {
         itemHeights.push(measured);
-      } else if (d.heightForItem) {
-        itemHeights.push(d.heightForItem(i, sectionIndex, w));
+      } else if (d.estimatedHeightForItem) {
+        itemHeights.push(d.estimatedHeightForItem(sectionIndex, i));
       } else {
         itemHeights.push(itemHeightVal);
       }
@@ -245,7 +243,7 @@ function buildListSectionParams(
 }
 
 function buildGridSectionParams(
-  d: GridLayoutDelegate,
+  d: RiffGridConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -255,15 +253,12 @@ function buildGridSectionParams(
   measuredHeightForItem: MeasuredHeightFn,
 ): Record<string, unknown> {
   const effectiveColumns = typeof d.columns === 'function' ? d.columns(w) : d.columns;
-  const effectiveRowHeight =
-    typeof d.rowHeight === 'function' ? d.rowHeight(w) : (d.rowHeight ?? 0);
-
   let itemHeights: number[] | undefined;
-  if (!effectiveRowHeight && (d.heightForItem || measuredHeightForItem)) {
+  if (d.estimatedHeightForItem || measuredHeightForItem) {
     itemHeights = new Array(sec.itemCount);
     for (let i = 0; i < sec.itemCount; i++) {
       const measured = measuredHeightForItem?.(i, sectionIndex);
-      itemHeights[i] = measured ?? (d.heightForItem ? d.heightForItem(i, sectionIndex, w) : 44);
+      itemHeights[i] = measured ?? (d.estimatedHeightForItem?.(sectionIndex, i) ?? 44);
     }
   }
 
@@ -290,7 +285,7 @@ function buildGridSectionParams(
     columnSpacing: d.columnSpacing ?? 0,
     rowSpacing: d.rowSpacing ?? 0,
     viewportWidth: w,
-    rowHeight: effectiveRowHeight,
+    rowHeight: d.estimatedItemHeight ?? 0,
     sectionInsetTop: sec.insets?.top ?? 0,
     sectionInsetBottom: sec.insets?.bottom ?? 0,
     sectionInsetLeft: sec.insets?.left ?? 0,
@@ -317,7 +312,7 @@ function buildGridSectionParams(
 }
 
 function buildFlowSectionParams(
-  d: FlowLayoutDelegate,
+  d: RiffFlowConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -330,7 +325,7 @@ function buildFlowSectionParams(
   const itemHeights: number[] = new Array(sec.itemCount);
 
   for (let i = 0; i < sec.itemCount; i++) {
-    const size = d.sizeForItem(i, sectionIndex, w);
+    const size = d.estimatedSizeForItem?.(sectionIndex, i) ?? { width: w, height: d.estimatedItemHeight ?? 44 };
     const measuredH = measuredHeightForItem?.(i, sectionIndex);
     itemWidths[i] = size.width;
     itemHeights[i] = measuredH ?? size.height;
@@ -384,7 +379,7 @@ function buildFlowSectionParams(
 }
 
 function buildMasonrySectionParams(
-  d: MasonryLayoutDelegate,
+  d: RiffMasonryConfig,
   sec: SectionInfo,
   sectionIndex: number,
   sectionFlatBase: number,
@@ -398,7 +393,7 @@ function buildMasonrySectionParams(
   const itemHeights: number[] = new Array(sec.itemCount);
   for (let i = 0; i < sec.itemCount; i++) {
     const measured = measuredHeightForItem?.(i, sectionIndex);
-    itemHeights[i] = measured ?? (d.heightForItem ? d.heightForItem(i, sectionIndex, w) : (d.estimatedItemHeight ?? 44));
+    itemHeights[i] = measured ?? (d.estimatedHeightForItem?.(sectionIndex, i) ?? (d.estimatedItemHeight ?? 44));
   }
 
   const keyPrefix = `masonry-${sectionIndex}-`;
@@ -451,7 +446,7 @@ function buildMasonrySectionParams(
 
 // ── Engine ────────────────────────────────────────────────────────────────────
 
-class CompositionalLayoutEngine implements CollectionViewLayout {
+class CompositionalLayoutEngine implements RiffLayout {
   readonly type = 'compositional';
   readonly horizontal = false;
   readonly needsSpatialQuery = false;
@@ -517,7 +512,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     for (const entry of this.entries) {
       const { type } = entry.layout;
       if (type === 'grid' || type === 'masonry') {
-        const d = (entry.layout as unknown as { delegate: GridLayoutDelegate | MasonryLayoutDelegate }).delegate;
+        const d = (entry.layout as unknown as { delegate: RiffGridConfig | RiffMasonryConfig }).delegate;
         const cols = typeof d.columns === 'function' ? d.columns(viewportWidth) : (d.columns ?? 1);
         if (cols > maxCols) maxCols = cols;
       }
@@ -587,22 +582,22 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
 
       if (layoutType === 'grid') {
         params = buildGridSectionParams(
-          d as GridLayoutDelegate, sec, sectionIndex, sectionFlatBase, w,
+          d as RiffGridConfig, sec, sectionIndex, sectionFlatBase, w,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       } else if (layoutType === 'flow') {
         params = buildFlowSectionParams(
-          d as FlowLayoutDelegate, sec, sectionIndex, sectionFlatBase, w,
+          d as RiffFlowConfig, sec, sectionIndex, sectionFlatBase, w,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       } else if (layoutType === 'masonry') {
         params = buildMasonrySectionParams(
-          d as MasonryLayoutDelegate, sec, sectionIndex, sectionFlatBase, w,
+          d as RiffMasonryConfig, sec, sectionIndex, sectionFlatBase, w,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       } else {
         params = buildListSectionParams(
-          d as ListLayoutDelegate, sec, sectionIndex, sectionFlatBase, w, h,
+          d as RiffListConfig, sec, sectionIndex, sectionFlatBase, w, h,
           hasHeader, hasFooter, context.measuredHeightForItem,
         );
       }
@@ -623,8 +618,8 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
         if (layoutType === 'flow') {
           let vh = entry.estimatedSectionHeight;
           if (!vh) {
-            const fd = (layout as unknown as { delegate: FlowLayoutDelegate }).delegate;
-            const itemH = sec.itemCount > 0 ? fd.sizeForItem(0, sectionIndex, w).height : 44;
+            const fd = (layout as unknown as { delegate: RiffFlowConfig }).delegate;
+            const itemH = sec.itemCount > 0 ? (fd.estimatedSizeForItem?.(sectionIndex, 0)?.height ?? fd.estimatedItemHeight ?? 44) : 44;
             const topInset  = (params as any).sectionInsetTop    ?? 0;
             const botInset  = (params as any).sectionInsetBottom ?? 0;
             vh = itemH + topInset + botInset;
@@ -723,7 +718,7 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
     return Math.abs(oldBounds.width - newBounds.width) > 0.5;
   }
 
-  invalidationScope(): InvalidationScope {
+  invalidationScope(): RiffInvalidationScope {
     return { type: 'full' };
   }
 }
@@ -744,6 +739,6 @@ class CompositionalLayoutEngine implements CollectionViewLayout {
  *
  * Last entry repeats for any sections beyond those explicitly listed.
  */
-export function compositional(entries: CompositionalEntry[]): CollectionViewLayout {
+export function compositional(entries: CompositionalEntry[]): RiffLayout {
   return new CompositionalLayoutEngine(entries);
 }

@@ -24,7 +24,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Riff } from '../components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
 
 // ─── Mount counter (shared with M3.3 pattern) ────────────────────────────────
 
@@ -135,7 +135,7 @@ export default function M3_5_CellBudget() {
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={({ item }) => <BudgetCell item={item} />}
-        itemHeight={ITEM_H}
+        estimatedItemHeight={ITEM_H}
         itemSpacing={1}
         sectionInsetTop={8}
         sectionInsetBottom={24}

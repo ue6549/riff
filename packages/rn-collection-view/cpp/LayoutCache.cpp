@@ -88,6 +88,20 @@ void LayoutCache::endBatch() {
   }
 }
 
+void LayoutCache::endHBatch() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (_batchDepth > 0) _batchDepth--;
+  if (_batchDepth == 0 && _batchDirty) {
+    ++_hMvcVersion;
+    _batchDirty = false;
+  }
+}
+
+uint64_t LayoutCache::hMvcVersion() const {
+  std::lock_guard<std::mutex> lock(_mutex);
+  return _hMvcVersion;
+}
+
 void LayoutCache::_setAttributesLocked(const LayoutAttributes& attrs) {
   auto it = _map.find(attrs.key);
   if (it == _map.end()) {

@@ -27,7 +27,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Riff } from '../components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
 
 // ─── Dataset ──────────────────────────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ export default function M3_4_VelocityWindow() {
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={({ item }) => <VelocityCell item={item} />}
-        itemHeight={ITEM_H}
+        estimatedItemHeight={ITEM_H}
         itemSpacing={1}
         renderMultiplier={1.0}
         onRenderCountChange={onRenderCountChange}

@@ -17,7 +17,7 @@
  */
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { Riff } from '../components/CollectionView';
+import { Riff } from '@riff/components/CollectionView';
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ export default function CollectionViewDemo() {
         data={DATA}
         keyExtractor={item => String(item.id)}
         renderItem={({ item }) => <Cell item={item} />}
-        itemHeight={ITEM_H}
+        estimatedItemHeight={ITEM_H}
         itemSpacing={SPACING}
         sectionInsetTop={8}
         sectionInsetBottom={24}
