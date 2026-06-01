@@ -1,14 +1,14 @@
 /**
- * RiffSubContainer — generic JS host for a single section that owns its
+ * CollectionSubContainer — generic JS host for a single section that owns its
  * own layout (orthogonal, radial, spiral, carousel3D, hex, user-defined).
  *
  * Composition model:
- *   <RiffSubContainer
+ *   <CollectionSubContainer
  *     layout={radial({ radius: 150, itemSize: 80 })}
  *     data={items}
  *     renderItem={...}
  *     layoutCacheId={cacheId}     // shared with parent CollectionView
- *     sectionIndex={2}            // slice of the cache this owns (default: 0)
+ *     sectionIndex={2}            // slice of the cache this owns
  *   />
  *
  * What the component does:
@@ -17,8 +17,7 @@
  *     which writes new attributes to the cache via `setAttributesBatch`. The
  *     C++ ShadowNode picks them up on its next layout pass and the iOS view
  *     applies the new frames + transforms + opacity natively (no JS work in
- *     the apply path). The returned render range is ignored — the native
- *     sub-container renders all mounted cells.
+ *     the apply path).
  *   - Mounts each data item inside an RNMeasuredCell. Cells receive NO absolute
  *     positioning — their frames come from the sub-container ShadowNode.
  *
@@ -37,7 +36,6 @@ import type {
   RiffLayout,
   LayoutContext,
   SectionInfo,
-  JsLayoutScrollOptions,
 } from '../types/protocol';
 
 const nativeMod = NativeCollectionViewModule as unknown as {
@@ -51,7 +49,7 @@ const nativeMod = NativeCollectionViewModule as unknown as {
 
 type ScrollDirection = 'vertical' | 'horizontal' | 'none';
 
-export interface RiffSubContainerProps<T> {
+export interface CollectionSubContainerProps<T> {
   /** Layout engine for this section. Must implement RiffLayout. */
   layout: RiffLayout;
 
@@ -67,8 +65,8 @@ export interface RiffSubContainerProps<T> {
   /** Cache ID — must match the parent CollectionView's. Defaults to nativeMod.layoutCacheId. */
   layoutCacheId?: number;
 
-  /** Section index this sub-container owns within the parent cache. Default: 0. */
-  sectionIndex?: number;
+  /** Section index this sub-container owns within the parent cache. */
+  sectionIndex: number;
 
   /**
    * Override scroll direction. Defaults to derive-from-layout:
@@ -92,17 +90,17 @@ export interface RiffSubContainerProps<T> {
  *   2. Yoga measures intrinsic size when the layout is content-determined
  *      (list, grid with variable height, etc.)
  */
-function RiffSubContainerInner<T>({
+function CollectionSubContainerInner<T>({
   layout,
   data,
   renderItem,
   keyExtractor,
   layoutCacheId,
-  sectionIndex = 0,
+  sectionIndex,
   scrollDirection,
   crossAxisSize,
   style,
-}: RiffSubContainerProps<T>) {
+}: CollectionSubContainerProps<T>) {
   const cacheId = layoutCacheId ?? nativeMod.layoutCacheId;
 
   // ── Container width is needed to call layout.prepare() with a real context ──
@@ -139,11 +137,12 @@ function RiffSubContainerInner<T>({
       containerHeight: containerSize.h,
       scrollOffset:    { x: 0, y: 0 },
       sections:        [sectionInfo],
-      cacheId,
     };
-  }, [containerSize.w, containerSize.h, data.length, itemKeys, cacheId]);
+  }, [containerSize.w, containerSize.h, data.length, itemKeys]);
 
   // ── Run prepare() whenever inputs change ──
+  // Layout writes attributes into the cache; the C++ ShadowNode reads them
+  // on its next layout pass and packs them into ChildVisualState entries.
   React.useEffect(() => {
     const ctx = layoutCtxRef.current;
     if (!ctx) return;
@@ -154,25 +153,20 @@ function RiffSubContainerInner<T>({
   // Forward to layout.processScroll if defined. The layout writes new
   // attributes into the cache via setAttributesBatch; the C++ ShadowNode
   // re-reads on its next state update; iOS native view applies frames +
-  // transforms in one shot. The returned render range is ignored because the
-  // native sub-container renders all mounted cells regardless.
+  // transforms in one shot.
   const handleScroll = React.useCallback(
     (e: NativeSyntheticEvent<{ sectionIndex: number; scrollX: number; scrollY: number }>) => {
       if (!layout.processScroll) return;
       const ctx = layoutCtxRef.current;
       if (!ctx) return;
       const { scrollX, scrollY } = e.nativeEvent;
+      // Update ctx with current offset for the layout's reference.
       const updatedCtx: LayoutContext = {
         ...ctx,
         scrollOffset: { x: scrollX, y: scrollY },
       };
       layoutCtxRef.current = updatedCtx;
-      const opts: JsLayoutScrollOptions = {
-        renderMultiplier: 0.5,
-        mountedWindowSize: 10,
-        measureAheadMult: 0,
-      };
-      layout.processScroll({ x: scrollX, y: scrollY }, updatedCtx, opts);
+      layout.processScroll({ x: scrollX, y: scrollY }, updatedCtx);
     },
     [layout],
   );
@@ -182,6 +176,7 @@ function RiffSubContainerInner<T>({
     scrollDirection ?? (layout.horizontal ? 'horizontal' : 'vertical');
 
   // ── Content size for the native ScrollView ──
+  // Read from layout.contentSize() — single source of truth.
   const contentSize = React.useMemo(() => {
     if (containerSize.w <= 0) return { width: 0, height: 0 };
     try {
@@ -218,12 +213,7 @@ function RiffSubContainerInner<T>({
   );
 }
 
-// Generics-friendly export — both old and new name for backward compat during transition.
-export const RiffSubContainer = React.memo(RiffSubContainerInner) as <T>(
-  props: RiffSubContainerProps<T>,
+// Generics-friendly export.
+export const CollectionSubContainer = React.memo(CollectionSubContainerInner) as <T>(
+  props: CollectionSubContainerProps<T>,
 ) => React.ReactElement;
-
-/** @deprecated Use RiffSubContainer */
-export const CollectionSubContainer = RiffSubContainer;
-/** @deprecated Use RiffSubContainerProps */
-export type CollectionSubContainerProps<T> = RiffSubContainerProps<T>;

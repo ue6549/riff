@@ -19,8 +19,6 @@
 import type {
   RiffLayout,
   LayoutContext,
-  JsLayoutScrollOptions,
-  JsLayoutScrollResult,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -111,20 +109,11 @@ class RadialLayout implements RiffLayout {
     this.itemKeys = sec.itemKeys
       ? Array.from(sec.itemKeys)
       : Array.from({ length: sec.itemCount }, (_, i) => `radial-${i}`);
-    console.log('[RADIAL-PREPARE] cacheId=' + context.cacheId
-      + ' itemKeys[0..2]=' + JSON.stringify(this.itemKeys.slice(0, 3))
-      + ' containerW=' + context.containerWidth);
     this._writeForOffset(0);
   }
 
-  processScroll(
-    offset: { x: number; y: number },
-    _ctx: LayoutContext,
-    _opts: JsLayoutScrollOptions,
-  ): JsLayoutScrollResult {
+  processScroll(offset: { x: number; y: number }, _ctx: LayoutContext): void {
     this._writeForOffset(offset.y);
-    const n = this.itemKeys.length;
-    return { renderFirst: 0, renderLast: n - 1, visibleFirst: 0, visibleLast: n - 1 };
   }
 
   private _writeForOffset(scrollY: number): void {
@@ -155,19 +144,16 @@ class RadialLayout implements RiffLayout {
       const y = cy + r * Math.sin(angle) - sz / 2 + scrollY;
 
       batch[i] = {
-        key:        this.itemKeys[i],
-        section:    0,
-        index:      i,
-        frame:      { x, y, width: sz, height: sz },
-        sizingState: 'measured',
+        key:     this.itemKeys[i],
+        section: 0,
+        index:   i,
+        frame:   { x, y, width: sz, height: sz },
         zIndex,
-        alpha:      opacity,
+        alpha:   opacity,
         transform3D: scaleMatrix(scale),
       };
     }
     this._cache.setAttributesBatch(batch);
-    const first = batch[0] as any;
-    console.log('[RADIAL-WRITE] n=' + n + ' key0=' + first?.key + ' frame0=' + JSON.stringify(first?.frame));
   }
 
   attributesForElements(_inRect: Rect): LayoutAttributes[] {

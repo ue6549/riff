@@ -12,10 +12,8 @@
  *   Masonry   — C++ MasonryLayout, shortest-column. FlashList: MasonryFlashList (available).
  *   Flow      — C++ FlowLayout, variable-width wrapping. FlashList: not possible.
  *              Shows the two-pass effect: estimated sizes → Yoga measurement → reflow.
- *   Radial Arc  — TS radial layout via <Riff>. FlashList: not possible.
- *   3D Carousel — TS carousel3D layout via <Riff>. FlashList: not possible.
- *   Spiral      — TS spiral layout via <Riff>. FlashList: not possible.
- *   Hex Grid    — TS hex layout via <Riff>, static. FlashList: not possible.
+ *   Radial Arc — TS custom layout, circular. FlashList: not possible.
+ *   3D Carousel — TS custom layout, perspective. FlashList: not possible.
  */
 import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, Animated, Easing } from 'react-native';
@@ -24,10 +22,8 @@ import { list } from '@riff/layouts/list';
 import { grid } from '@riff/layouts/grid';
 import { masonry } from '@riff/layouts/masonry';
 import { flow } from '@riff/layouts/flow';
-import { radial } from '@riff/layouts/radial';
-import { carousel3D as carousel3DLayout } from '@riff/layouts/carousel3D';
-import { spiral } from '@riff/layouts/spiral';
-import { hex } from '@riff/layouts/hex';
+import { CircularList } from '../../components/CircularList';
+import { Carousel3D } from '../../components/Carousel3D';
 
 // ── Shared colors ────────────────────────────────────────────────────────────
 
@@ -258,20 +254,6 @@ type CarouselItem = { id: number; title: string; color: string };
 const CAROUSEL_DATA: CarouselItem[] = Array.from({ length: CAROUSEL_COUNT }, (_, i) => ({
   id: i,
   title: `Card ${i}`,
-  color: COLORS[i % COLORS.length]!,
-}));
-
-type SpiralItem = { id: number; label: string; color: string };
-const SPIRAL_DATA: SpiralItem[] = Array.from({ length: 24 }, (_, i) => ({
-  id: i,
-  label: `${i + 1}`,
-  color: COLORS[i % COLORS.length]!,
-}));
-
-type HexItem = { id: number; label: string; color: string };
-const HEX_DATA: HexItem[] = Array.from({ length: 28 }, (_, i) => ({
-  id: i,
-  label: `${i + 1}`,
   color: COLORS[i % COLORS.length]!,
 }));
 
@@ -1461,7 +1443,7 @@ const HFS = StyleSheet.create({
   tagSub:         { fontSize: 9, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
 });
 
-type SubTab = 'list' | 'grid' | 'hgrid' | 'ahgrid' | 'masonry' | 'hmasonry' | 'flow' | 'hflow' | 'circular' | 'carousel' | 'spiral' | 'hex';
+type SubTab = 'list' | 'grid' | 'hgrid' | 'ahgrid' | 'masonry' | 'hmasonry' | 'flow' | 'hflow' | 'circular' | 'carousel';
 
 // ── Callout bullets per layout ───────────────────────────────────────────────
 type Bullet = { type: 'green' | 'amber' | 'red' | 'blue'; text: string };
@@ -1517,22 +1499,12 @@ const CALLOUTS: Record<SubTab, Bullet[]> = {
   circular: [
     { type: 'red', text: 'FlashList: Not possible. Radial positioning requires arbitrary (x, y) placement.' },
     { type: 'blue', text: 'Scroll vertically to rotate the arc.' },
-    { type: 'blue', text: 'Engine: TS radial layout via <Riff>. processScroll writes positions per scroll tick via setAttributesBatch.' },
+    { type: 'blue', text: 'Engine: TS custom layout. ContentDimension=None — layout governs everything.' },
   ],
   carousel: [
     { type: 'red', text: 'FlashList: Not possible. Requires per-item perspective transforms and z-ordering.' },
     { type: 'blue', text: 'Scroll horizontally to rotate the carousel.' },
-    { type: 'blue', text: 'Engine: TS carousel3D layout via <Riff>. processScroll computes rotateY matrix per item per tick.' },
-  ],
-  spiral: [
-    { type: 'red', text: 'FlashList: Not possible. Archimedean spiral requires (x, y) + scale per item.' },
-    { type: 'blue', text: 'Scroll vertically to unwind the spiral.' },
-    { type: 'blue', text: 'Engine: TS spiral layout via <Riff>. Angular phase offset applied per scroll tick.' },
-  ],
-  hex: [
-    { type: 'red', text: 'FlashList: Not possible. Honeycomb tiling requires per-item offset positioning.' },
-    { type: 'blue', text: 'Static layout — positions written once in prepare(). No scroll-driven recomputation.' },
-    { type: 'blue', text: 'Engine: TS hex layout via <Riff>. Offset grid with every other row shifted by half a hex width.' },
+    { type: 'blue', text: 'Engine: TS custom layout. ContentDimension=None — layout governs everything.' },
   ],
 };
 
@@ -1549,18 +1521,14 @@ const SUB_TABS: { key: SubTab; label: string }[] = [
   { key: 'hflow', label: 'H-Flow' },
   { key: 'circular', label: 'Radial Arc' },
   { key: 'carousel', label: '3D Carousel' },
-  { key: 'spiral',   label: 'Spiral' },
-  { key: 'hex',      label: 'Hex Grid' },
 ];
 
 export default function LayoutsTab() {
   const [subTab, setSubTab] = useState<SubTab>('list');
   const [calloutsOpen, setCalloutsOpen] = useState(false);
 
-  const circularKey = useCallback((item: CircularItem) => `rc-${item.id}`, []);
-  const carouselKey = useCallback((item: CarouselItem) => `c3d-${item.id}`, []);
-  const spiralKey   = useCallback((item: SpiralItem)   => `sp-${item.id}`, []);
-  const hexKey      = useCallback((item: HexItem)       => `hex-${item.id}`, []);
+  const circularKey = useCallback((item: CircularItem) => String(item.id), []);
+  const carouselKey = useCallback((item: CarouselItem) => String(item.id), []);
 
   const bullets = CALLOUTS[subTab];
 
@@ -1611,11 +1579,10 @@ export default function LayoutsTab() {
         {subTab === 'hflow' && <HFlowDemo />}
 
         {subTab === 'circular' && (
-          <CollectionView
-            layout={radial({ radius: 130, itemSize: 70, scrollPerRevolution: 700 })}
+          <CircularList
             data={CIRCULAR_DATA}
+            itemSize={70}
             keyExtractor={circularKey}
-            style={S.flex}
             renderItem={({ item }) => (
               <View style={[S.circularCell, { backgroundColor: item.color }]}>
                 <Text style={S.circularText}>{item.label}</Text>
@@ -1625,42 +1592,14 @@ export default function LayoutsTab() {
         )}
 
         {subTab === 'carousel' && (
-          <CollectionView
-            layout={carousel3DLayout({ itemSize: 200, gap: 28, perspective: 700, maxRotation: 55 })}
+          <Carousel3D
             data={CAROUSEL_DATA}
+            itemWidth={160}
+            itemHeight={200}
             keyExtractor={carouselKey}
-            style={S.carouselContainer}
             renderItem={({ item }) => (
               <View style={[S.carouselCard, { backgroundColor: item.color }]}>
                 <Text style={S.carouselTitle}>{item.title}</Text>
-              </View>
-            )}
-          />
-        )}
-
-        {subTab === 'spiral' && (
-          <CollectionView
-            layout={spiral({ a: 10, b: 14, angularStep: 0.55, itemSize: 56, scrollPerRevolution: 800 })}
-            data={SPIRAL_DATA}
-            keyExtractor={spiralKey}
-            style={S.flex}
-            renderItem={({ item }) => (
-              <View style={[S.circularCell, { backgroundColor: item.color }]}>
-                <Text style={S.circularText}>{item.label}</Text>
-              </View>
-            )}
-          />
-        )}
-
-        {subTab === 'hex' && (
-          <CollectionView
-            layout={hex({ hexSize: 64, paddingX: 12, paddingY: 12, gap: 6 })}
-            data={HEX_DATA}
-            keyExtractor={hexKey}
-            style={S.flex}
-            renderItem={({ item }) => (
-              <View style={[S.hexCell, { backgroundColor: item.color }]}>
-                <Text style={S.hexText}>{item.label}</Text>
               </View>
             )}
           />
@@ -1728,14 +1667,10 @@ const S = StyleSheet.create({
   circularCell: { flex: 1, borderRadius: 35, alignItems: 'center', justifyContent: 'center' },
   circularText: { fontSize: 20, fontWeight: '700', color: '#fff' },
 
-  carouselContainer: { height: 260, marginTop: 20 },
   carouselCard: { flex: 1, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
                   shadowColor: '#000', shadowOffset: { width: 0, height: 8 },
                   shadowOpacity: 0.4, shadowRadius: 12 },
   carouselTitle: { fontSize: 20, fontWeight: '700', color: '#fff' },
-
-  hexCell: { flex: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  hexText: { fontSize: 14, fontWeight: '700', color: '#fff' },
 });
 
 // ── Horizontal list demo ──────────────────────────────────────────────────────

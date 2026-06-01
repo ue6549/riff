@@ -21,8 +21,6 @@
 import type {
   RiffLayout,
   LayoutContext,
-  JsLayoutScrollOptions,
-  JsLayoutScrollResult,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -110,13 +108,12 @@ class HexLayout implements RiffLayout {
       maxBottom = Math.max(maxBottom, y + sz);
 
       batch[i] = {
-        key:         this.itemKeys[i],
-        section:     0,
-        index:       i,
-        frame:       { x, y, width: sz, height: sz },
-        sizingState: 'measured',
-        zIndex:      0,
-        alpha:       1,
+        key:     this.itemKeys[i],
+        section: 0,
+        index:   i,
+        frame:   { x, y, width: sz, height: sz },
+        zIndex:  0,
+        alpha:   1,
       };
     }
 
@@ -124,15 +121,7 @@ class HexLayout implements RiffLayout {
     this._contentSize = { width: cw, height: maxBottom + this.opts.paddingY };
   }
 
-  processScroll(
-    _offset: { x: number; y: number },
-    _ctx: LayoutContext,
-    _opts: JsLayoutScrollOptions,
-  ): JsLayoutScrollResult {
-    // Hex is static — all positions written in prepare(), nothing to update per scroll.
-    const n = this.itemKeys.length;
-    return { renderFirst: 0, renderLast: n - 1, visibleFirst: 0, visibleLast: n - 1 };
-  }
+  // No processScroll — hex is a static layout.
 
   attributesForElements(_inRect: Rect): LayoutAttributes[] {
     const result: LayoutAttributes[] = [];

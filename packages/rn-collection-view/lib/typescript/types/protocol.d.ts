@@ -15,29 +15,6 @@
 import type React from 'react';
 import type { Rect, Size, Insets } from './geometry';
 import type { LayoutAttributes } from './layout';
-/** Windowing options forwarded to JS layout's processScroll from the Riff framework. */
-export interface JsLayoutScrollOptions {
-    /** Multiplier applied to viewport size to compute the render window. Default: 0.5. */
-    readonly renderMultiplier: number;
-    /** Max items to keep mounted outside the render window. */
-    readonly mountedWindowSize: number;
-    /** Multiplier for pre-measurement lookahead range. 0 = disabled. */
-    readonly measureAheadMult: number;
-}
-/**
- * Render and visibility ranges returned by JS layout's processScroll.
- * Mirrors the output of the C++ nativeWindowController so the Riff framework
- * can treat JS and C++ layouts uniformly.
- */
-export interface JsLayoutScrollResult {
-    readonly renderFirst: number;
-    readonly renderLast: number;
-    readonly visibleFirst: number;
-    readonly visibleLast: number;
-    /** Optional pre-measurement range. Omit or set equal to render range if not used. */
-    readonly measureFirst?: number;
-    readonly measureLast?: number;
-}
 /**
  * The core layout engine interface. All built-in and custom layouts implement this.
  *
@@ -60,29 +37,21 @@ export interface RiffLayout {
      */
     prepare(context: LayoutContext): void;
     /**
-     * JS layout scroll hook. Defined ONLY by TypeScript-implemented layouts.
+     * Optional scroll-driven layout hook for sub-container layouts.
      *
-     * Called by Riff on every scroll event, and once at offset {0,0} immediately
-     * after prepare() to establish the initial render range. The layout must:
-     *   1. Recompute item positions/transforms and write to LayoutCache via setAttributesBatch.
-     *   2. Return the render range, visible range, and optional measure-ahead range.
+     * Scroll-driven layouts (radial, spiral, carousel3D, ...) override this to
+     * recompute positions / transforms / opacity per scroll tick. The recommended
+     * implementation is to compute all visible items' new attributes in one go
+     * and commit them through `setAttributesBatch` (one JSI round-trip for N
+     * items), then return — the sub-container's ShadowNode picks the new values
+     * up from the cache during its next layout pass.
      *
-     * The framework passes windowing opts so the layout can implement its own
-     * virtualization. Simple small-N layouts can ignore opts and return
-     * renderFirst=0 / renderLast=n-1. Large-dataset layouts should use
-     * opts.renderMultiplier to implement a sliding render window.
-     *
-     * C++ layouts (list, grid, masonry, flow) leave this UNDEFINED — the C++
-     * nativeWindowController handles their scroll entirely.
-     *
-     * Codegen path (future): extract the pure-math portion of processScroll into a
-     * C++ LayoutEngine subclass. Wire into computeSections. Remove processScroll.
-     * The consumer API (<Riff layout={myLayout()} />) remains unchanged.
+     * Static layouts (list, grid, masonry, flow) leave this undefined.
      */
     processScroll?(offset: Readonly<{
         x: number;
         y: number;
-    }>, ctx: LayoutContext, opts: JsLayoutScrollOptions): JsLayoutScrollResult;
+    }>, ctx: LayoutContext): void;
     /**
      * Spatial query — return attributes for items intersecting rect.
      * Primary interface for the window controller.

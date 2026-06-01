@@ -128,7 +128,6 @@ function applyBudget(render, visible, mountedWindowSize, vpHeight, stride) {
 /** Discriminated union for flat items in sectioned mode. */
 
 const RNCV_DEBUG_LOGS = false;
-const RNCV_JS_LAYOUT_DEBUG = true; // temporary: trace JS layout key/frame chain
 // Consumer-facing debug/instrumentation callbacks:
 // showHUD, onRenderCountChange, onDecorationCountChange, onBlankArea.
 // Controlled at build time (not at runtime via __DEV__).
@@ -979,10 +978,6 @@ function RiffBase({
   }, [layoutProp, effectiveItemHeight, itemSpacing]);
   const effectiveLayout = layoutProp ?? defaultLayout;
 
-  // True for TypeScript-implemented layouts that define processScroll.
-  // C++ layouts (list, grid, masonry, flow) never define it.
-  const isJsLayout = typeof effectiveLayout.processScroll === 'function';
-
   // Stable callback that resolves measured height for an item by index.
   // Reads from LayoutCache (ShadowNode writes Yoga-measured heights there).
   const measuredHeightForItemRef = (0, _react.useRef)(() => undefined);
@@ -1039,10 +1034,7 @@ function RiffBase({
           bottom: sectionInsetBottom,
           left: sectionInsetLeft,
           right: sectionInsetRight
-        },
-        itemKeys: propKeyExtractor ? data.map((item, i) => propKeyExtractor(item, i)) : Array.from({
-          length: data.length
-        }, (_, i) => `_cv-0-${i}`)
+        }
       }],
       measuredHeightForItem: (index, section) => measuredHeightForItemRef.current(index, section)
     };
@@ -1102,35 +1094,6 @@ function RiffBase({
     if (__DEV__ && RNCV_DEBUG_LOGS) {
       const sz = nativeLayoutCache.getTotalContentSize();
       console.log(`[RNCV-B05] prepare done type=${effectiveLayout.type} contentSize=${sz.width.toFixed(0)}x${sz.height.toFixed(0)}`);
-    }
-    // JS layout: establish initial render range immediately after prepare().
-    // The layout writes positions to LayoutCache and returns the render window.
-    // This replaces the stride-based initial range for JS layouts.
-    if (isJsLayout) {
-      const result = effectiveLayout.processScroll({
-        x: 0,
-        y: 0
-      }, layoutContext, {
-        renderMultiplier,
-        mountedWindowSize: effectiveMountedWindowSize,
-        measureAheadMult: measureAhead
-      });
-      const budgeted = {
-        first: Math.max(0, result.renderFirst),
-        last: Math.min(itemCount - 1, result.renderLast)
-      };
-      prevRenderRef.current = budgeted;
-      setRenderRange(budgeted);
-      if (__DEV__ && RNCV_JS_LAYOUT_DEBUG) {
-        const keys0 = layoutContext.sections[0]?.itemKeys;
-        console.log('[JSLAYOUT-PREPARE] type=' + effectiveLayout.type + ' cacheId=' + layoutContext.cacheId + ' itemKeys[0..2]=' + JSON.stringify(keys0?.slice(0, 3)) + ' renderRange=' + JSON.stringify(budgeted) + ' cacheVersion=' + nativeLayoutCache.version());
-        // Verify first key is in cache
-        const k0 = keys0?.[0];
-        if (k0) {
-          const attr = nativeLayoutCache.getAttributes(k0);
-          console.log('[JSLAYOUT-PREPARE] cache.getAttributes(' + k0 + ')=' + JSON.stringify(attr?.frame));
-        }
-      }
     }
     // NOTE: computeCorrection() is NOT called here. It runs in native updateState:
     // AFTER Yoga has measured new items via applyMeasurements. Calling it here
@@ -1592,9 +1555,8 @@ function RiffBase({
     // using the stride estimate — no layout cache needed. This lets React
     // mount the first screenful of cells in the SAME commit as the viewport
     // measurement, before any frame is painted.
-    if (prevRenderRef.current === null && w > 0 && h > 0 && !isJsLayout) {
+    if (prevRenderRef.current === null && w > 0 && h > 0) {
       // Use stride-based arithmetic for the very first range (before layout cache is seeded).
-      // JS layouts set their initial range in the prepare() effect via processScroll.
       // Multi-column layouts (grid, masonry) pack N items per row, so the effective stride
       // per flat index is rowHeight / N. Without this, Phase A under-counts the visible range.
       const rawCols = effectiveLayout.type === 'grid' || effectiveLayout.type === 'masonry' ? effectiveLayout.delegate?.columns : undefined;
@@ -1660,52 +1622,6 @@ function RiffBase({
       prevScrollYRef.current = scrollY;
       prevScrollXRef.current = scrollX;
       const vpW = layoutMeasurement.width || viewportWidth;
-
-      // ── JS layout scroll path ──────────────────────────────────────────────
-      // JS-implemented layouts own their scroll handling. processScroll writes
-      // updated positions to LayoutCache and returns the render + visible ranges.
-      // The C++ nativeWindowController is bypassed entirely.
-      if (isJsLayout) {
-        const ctx = layoutContextRef.current;
-        if (ctx) {
-          const jsResult = effectiveLayout.processScroll({
-            x: scrollX,
-            y: scrollY
-          }, ctx, {
-            renderMultiplier,
-            mountedWindowSize: effectiveMountedWindowSize,
-            measureAheadMult: measureAhead
-          });
-          const budgetedR = {
-            first: Math.max(0, Math.min(jsResult.renderFirst, jsResult.visibleFirst) - 1),
-            last: Math.min(itemCount - 1, Math.max(jsResult.renderLast, jsResult.visibleLast) + 1)
-          };
-          if (rangeChanged(prevRenderRef.current, budgetedR)) {
-            prevRenderRef.current = budgetedR;
-            setRenderRange(budgetedR);
-          }
-          if (measureAhead > 0 && jsResult.measureFirst !== undefined) {
-            const newMR = {
-              first: jsResult.measureFirst,
-              last: jsResult.measureLast
-            };
-            if (newMR.first !== prevMeasureRef.current.first || newMR.last !== prevMeasureRef.current.last) {
-              prevMeasureRef.current = newMR;
-              setMeasureRange(newMR);
-            }
-          }
-          // Yoga may have measured cells since the last event — check cache version
-          // so ShadowNode-applied height corrections trigger a JS re-render.
-          const lcv = nativeLayoutCache.version();
-          if (lcv !== lastCacheVersionRef.current) {
-            lastCacheVersionRef.current = lcv;
-            setLayoutCacheVersion(v => v + 1);
-          }
-        }
-        nativeMod.signpost.end(0);
-        scrollViewProps?.onScroll?.(e);
-        return;
-      }
 
       // Single C++ call: version check + 2×spatial query + applyBudget + computeMeasureRange.
       // Replaces 4-6 individual JSI calls. LayoutAttributes are never marshalled to JS —
@@ -2477,11 +2393,7 @@ function RiffBase({
     if (fd?._kind === 'footer') {
       return effectiveLayout.cacheKeyForSupplementary?.('footer', sk) ?? `${effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type}-${sk}-footer`;
     }
-    const ck = effectiveLayout.cacheKeyForItem?.(ik, sk) ?? layoutContext?.sections[sk]?.itemKeys?.[ik] ?? `${effectiveLayout.keyPrefixForSection?.(sk) ?? (effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type)}-${sk}-${ik}`;
-    if (__DEV__ && RNCV_JS_LAYOUT_DEBUG && isJsLayout && ik < 3) {
-      console.log('[JSLAYOUT-KEY] index=' + index + ' sk=' + sk + ' ik=' + ik + ' cacheKey=' + ck);
-    }
-    return ck;
+    return effectiveLayout.cacheKeyForItem?.(ik, sk) ?? layoutContext?.sections[sk]?.itemKeys?.[ik] ?? `${effectiveLayout.keyPrefixForSection?.(sk) ?? (effectiveLayout.type === 'list' ? 'item' : effectiveLayout.type)}-${sk}-${ik}`;
   };
   let effFirst = 0;
   let effLast = -1;
@@ -2976,7 +2888,7 @@ function RiffBase({
       },
       layoutCacheId: layoutCacheId,
       layoutCacheVersion: layoutCacheVersion,
-      layoutType: isJsLayout ? 'js' : effectiveLayout.type,
+      layoutType: effectiveLayout.type,
       estimatedItemHeight: effectiveItemHeight,
       renderRangeStart: renderRangeStart,
       renderRangeEnd: renderRangeEnd,

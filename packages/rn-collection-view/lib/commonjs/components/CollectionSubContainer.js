@@ -3,7 +3,7 @@
 Object.defineProperty(exports, "__esModule", {
   value: true
 });
-exports.RiffSubContainer = exports.CollectionSubContainer = void 0;
+exports.CollectionSubContainer = void 0;
 var React = _interopRequireWildcard(require("react"));
 var _reactNative = require("react-native");
 var _RNCollectionSubContainerNativeComponent = _interopRequireDefault(require("../specs/RNCollectionSubContainerNativeComponent"));
@@ -13,16 +13,16 @@ var _jsxRuntime = require("react/jsx-runtime");
 function _interopRequireDefault(e) { return e && e.__esModule ? e : { default: e }; }
 function _interopRequireWildcard(e, t) { if ("function" == typeof WeakMap) var r = new WeakMap(), n = new WeakMap(); return (_interopRequireWildcard = function (e, t) { if (!t && e && e.__esModule) return e; var o, i, f = { __proto__: null, default: e }; if (null === e || "object" != typeof e && "function" != typeof e) return f; if (o = t ? n : r) { if (o.has(e)) return o.get(e); o.set(e, f); } for (const t in e) "default" !== t && {}.hasOwnProperty.call(e, t) && ((i = (o = Object.defineProperty) && Object.getOwnPropertyDescriptor(e, t)) && (i.get || i.set) ? o(f, t, i) : f[t] = e[t]); return f; })(e, t); }
 /**
- * RiffSubContainer — generic JS host for a single section that owns its
+ * CollectionSubContainer — generic JS host for a single section that owns its
  * own layout (orthogonal, radial, spiral, carousel3D, hex, user-defined).
  *
  * Composition model:
- *   <RiffSubContainer
+ *   <CollectionSubContainer
  *     layout={radial({ radius: 150, itemSize: 80 })}
  *     data={items}
  *     renderItem={...}
  *     layoutCacheId={cacheId}     // shared with parent CollectionView
- *     sectionIndex={2}            // slice of the cache this owns (default: 0)
+ *     sectionIndex={2}            // slice of the cache this owns
  *   />
  *
  * What the component does:
@@ -31,8 +31,7 @@ function _interopRequireWildcard(e, t) { if ("function" == typeof WeakMap) var r
  *     which writes new attributes to the cache via `setAttributesBatch`. The
  *     C++ ShadowNode picks them up on its next layout pass and the iOS view
  *     applies the new frames + transforms + opacity natively (no JS work in
- *     the apply path). The returned render range is ignored — the native
- *     sub-container renders all mounted cells.
+ *     the apply path).
  *   - Mounts each data item inside an RNMeasuredCell. Cells receive NO absolute
  *     positioning — their frames come from the sub-container ShadowNode.
  *
@@ -49,13 +48,13 @@ const nativeMod = _NativeCollectionViewModule.default;
  *   2. Yoga measures intrinsic size when the layout is content-determined
  *      (list, grid with variable height, etc.)
  */
-function RiffSubContainerInner({
+function CollectionSubContainerInner({
   layout,
   data,
   renderItem,
   keyExtractor,
   layoutCacheId,
-  sectionIndex = 0,
+  sectionIndex,
   scrollDirection,
   crossAxisSize,
   style
@@ -100,12 +99,13 @@ function RiffSubContainerInner({
         x: 0,
         y: 0
       },
-      sections: [sectionInfo],
-      cacheId
+      sections: [sectionInfo]
     };
-  }, [containerSize.w, containerSize.h, data.length, itemKeys, cacheId]);
+  }, [containerSize.w, containerSize.h, data.length, itemKeys]);
 
   // ── Run prepare() whenever inputs change ──
+  // Layout writes attributes into the cache; the C++ ShadowNode reads them
+  // on its next layout pass and packs them into ChildVisualState entries.
   React.useEffect(() => {
     const ctx = layoutCtxRef.current;
     if (!ctx) return;
@@ -116,8 +116,7 @@ function RiffSubContainerInner({
   // Forward to layout.processScroll if defined. The layout writes new
   // attributes into the cache via setAttributesBatch; the C++ ShadowNode
   // re-reads on its next state update; iOS native view applies frames +
-  // transforms in one shot. The returned render range is ignored because the
-  // native sub-container renders all mounted cells regardless.
+  // transforms in one shot.
   const handleScroll = React.useCallback(e => {
     if (!layout.processScroll) return;
     const ctx = layoutCtxRef.current;
@@ -126,6 +125,7 @@ function RiffSubContainerInner({
       scrollX,
       scrollY
     } = e.nativeEvent;
+    // Update ctx with current offset for the layout's reference.
     const updatedCtx = {
       ...ctx,
       scrollOffset: {
@@ -134,21 +134,17 @@ function RiffSubContainerInner({
       }
     };
     layoutCtxRef.current = updatedCtx;
-    const opts = {
-      renderMultiplier: 0.5,
-      mountedWindowSize: 10,
-      measureAheadMult: 0
-    };
     layout.processScroll({
       x: scrollX,
       y: scrollY
-    }, updatedCtx, opts);
+    }, updatedCtx);
   }, [layout]);
 
   // ── Resolve scroll direction ──
   const dir = scrollDirection ?? (layout.horizontal ? 'horizontal' : 'vertical');
 
   // ── Content size for the native ScrollView ──
+  // Read from layout.contentSize() — single source of truth.
   const contentSize = React.useMemo(() => {
     if (containerSize.w <= 0) return {
       width: 0,
@@ -193,10 +189,6 @@ function RiffSubContainerInner({
   });
 }
 
-// Generics-friendly export — both old and new name for backward compat during transition.
-const RiffSubContainer = exports.RiffSubContainer = /*#__PURE__*/React.memo(RiffSubContainerInner);
-
-/** @deprecated Use RiffSubContainer */
-const CollectionSubContainer = exports.CollectionSubContainer = RiffSubContainer;
-/** @deprecated Use RiffSubContainerProps */
+// Generics-friendly export.
+const CollectionSubContainer = exports.CollectionSubContainer = /*#__PURE__*/React.memo(CollectionSubContainerInner);
 //# sourceMappingURL=CollectionSubContainer.js.map

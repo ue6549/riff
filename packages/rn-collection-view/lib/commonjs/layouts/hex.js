@@ -102,16 +102,9 @@ class HexLayout {
       height: maxBottom + this.opts.paddingY
     };
   }
-  processScroll(_offset, _ctx, _opts) {
-    // Hex is static — all positions written in prepare(), nothing to update per scroll.
-    const n = this.itemKeys.length;
-    return {
-      renderFirst: 0,
-      renderLast: n - 1,
-      visibleFirst: 0,
-      visibleLast: n - 1
-    };
-  }
+
+  // No processScroll — hex is a static layout.
+
   attributesForElements(_inRect) {
     const result = [];
     for (let i = 0; i < this.itemKeys.length; i++) {

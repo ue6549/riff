@@ -1,14 +1,14 @@
 /**
- * RiffSubContainer — generic JS host for a single section that owns its
+ * CollectionSubContainer — generic JS host for a single section that owns its
  * own layout (orthogonal, radial, spiral, carousel3D, hex, user-defined).
  *
  * Composition model:
- *   <RiffSubContainer
+ *   <CollectionSubContainer
  *     layout={radial({ radius: 150, itemSize: 80 })}
  *     data={items}
  *     renderItem={...}
  *     layoutCacheId={cacheId}     // shared with parent CollectionView
- *     sectionIndex={2}            // slice of the cache this owns (default: 0)
+ *     sectionIndex={2}            // slice of the cache this owns
  *   />
  *
  * What the component does:
@@ -17,8 +17,7 @@
  *     which writes new attributes to the cache via `setAttributesBatch`. The
  *     C++ ShadowNode picks them up on its next layout pass and the iOS view
  *     applies the new frames + transforms + opacity natively (no JS work in
- *     the apply path). The returned render range is ignored — the native
- *     sub-container renders all mounted cells.
+ *     the apply path).
  *   - Mounts each data item inside an RNMeasuredCell. Cells receive NO absolute
  *     positioning — their frames come from the sub-container ShadowNode.
  *
@@ -29,7 +28,7 @@
 import * as React from 'react';
 import type { RiffLayout } from '../types/protocol';
 type ScrollDirection = 'vertical' | 'horizontal' | 'none';
-export interface RiffSubContainerProps<T> {
+export interface CollectionSubContainerProps<T> {
     /** Layout engine for this section. Must implement RiffLayout. */
     layout: RiffLayout;
     /** Data items for this section. */
@@ -44,8 +43,8 @@ export interface RiffSubContainerProps<T> {
     keyExtractor?: (item: T, index: number) => string;
     /** Cache ID — must match the parent CollectionView's. Defaults to nativeMod.layoutCacheId. */
     layoutCacheId?: number;
-    /** Section index this sub-container owns within the parent cache. Default: 0. */
-    sectionIndex?: number;
+    /** Section index this sub-container owns within the parent cache. */
+    sectionIndex: number;
     /**
      * Override scroll direction. Defaults to derive-from-layout:
      *   layout.horizontal === true  → 'horizontal'
@@ -58,9 +57,5 @@ export interface RiffSubContainerProps<T> {
     /** Style passed through to the outer wrapper. */
     style?: object;
 }
-export declare const RiffSubContainer: <T>(props: RiffSubContainerProps<T>) => React.ReactElement;
-/** @deprecated Use RiffSubContainer */
-export declare const CollectionSubContainer: <T>(props: RiffSubContainerProps<T>) => React.ReactElement;
-/** @deprecated Use RiffSubContainerProps */
-export type CollectionSubContainerProps<T> = RiffSubContainerProps<T>;
+export declare const CollectionSubContainer: <T>(props: CollectionSubContainerProps<T>) => React.ReactElement;
 export {};

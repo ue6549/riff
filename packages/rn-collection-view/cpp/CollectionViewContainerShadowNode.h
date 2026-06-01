@@ -54,17 +54,6 @@ class CollectionViewContainerShadowNode final
 #pragma mark - LayoutableShadowNode
 
   /**
-   * B1.1: Override layoutTree to inject explicit Yoga dims for cells BEFORE
-   * YGNodeCalculateLayout runs. Prevents sub-pixel intrinsic-measurement drift
-   * from triggering spurious applyMeasurements cascades.
-   *
-   * For C++ layouts: inject only Measured cells (Height or Width axis per engine).
-   * For JS layouts:  inject BOTH axes for any cell with valid cache dimensions.
-   */
-  void layoutTree(LayoutContext layoutContext,
-                  LayoutConstraints layoutConstraints) override;
-
-  /**
    * Called after Yoga has computed layout for all children.
    *
    * 1. Calls parent layout() — reads Yoga-computed child dimensions.
@@ -75,11 +64,6 @@ class CollectionViewContainerShadowNode final
   void layout(LayoutContext layoutContext) override;
 
  private:
-  /**
-   * B1.1 implementation: pre-inject measured cell sizes into Yoga style dims.
-   */
-  void injectMeasuredDimensionsIfNeeded();
-
   /**
    * B4.1: Skip correction + state update when children + cache are unchanged.
    * Caches {cacheVersion, childCount, childTagsHash, yogaFrameHash} and returns

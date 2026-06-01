@@ -39,7 +39,7 @@ type OnScrollEvent = Readonly<{
     }>;
 }>;
 interface NativeProps extends ViewProps {
-    layoutType?: WithDefault<'list' | 'grid' | 'masonry' | 'flow' | 'compositional' | 'js', 'list'>;
+    layoutType?: WithDefault<'list' | 'grid' | 'masonry' | 'flow' | 'compositional', 'list'>;
     columns?: Int32;
     columnSpacing?: Float;
     rowSpacing?: Float;

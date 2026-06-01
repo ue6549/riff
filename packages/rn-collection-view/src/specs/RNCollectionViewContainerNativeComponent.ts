@@ -40,7 +40,7 @@ type OnScrollEvent = Readonly<{
 
 interface NativeProps extends ViewProps {
   // Layout engine configuration
-  layoutType?: WithDefault<'list' | 'grid' | 'masonry' | 'flow' | 'compositional' | 'js', 'list'>;
+  layoutType?: WithDefault<'list' | 'grid' | 'masonry' | 'flow' | 'compositional', 'list'>;
   columns?: Int32;
   columnSpacing?: Float;
   rowSpacing?: Float;

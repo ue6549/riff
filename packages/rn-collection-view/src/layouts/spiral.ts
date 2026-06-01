@@ -18,8 +18,6 @@
 import type {
   RiffLayout,
   LayoutContext,
-  JsLayoutScrollOptions,
-  JsLayoutScrollResult,
 } from '../types/protocol';
 import type { LayoutAttributes, Rect, Size } from '../types';
 import NativeCollectionViewModule from '../specs/NativeCollectionViewModule';
@@ -108,14 +106,8 @@ class SpiralLayout implements RiffLayout {
     this._writeForOffset(0);
   }
 
-  processScroll(
-    offset: { x: number; y: number },
-    _ctx: LayoutContext,
-    _opts: JsLayoutScrollOptions,
-  ): JsLayoutScrollResult {
+  processScroll(offset: { x: number; y: number }, _ctx: LayoutContext): void {
     this._writeForOffset(offset.y);
-    const n = this.itemKeys.length;
-    return { renderFirst: 0, renderLast: n - 1, visibleFirst: 0, visibleLast: n - 1 };
   }
 
   private _writeForOffset(scrollY: number): void {
@@ -149,13 +141,12 @@ class SpiralLayout implements RiffLayout {
       const zIndex  = i;
 
       batch[i] = {
-        key:         this.itemKeys[i],
-        section:     0,
-        index:       i,
-        frame:       { x, y, width: sz, height: sz },
-        sizingState: 'measured',
+        key:     this.itemKeys[i],
+        section: 0,
+        index:   i,
+        frame:   { x, y, width: sz, height: sz },
         zIndex,
-        alpha:       opacity,
+        alpha:   opacity,
         transform3D: scaleMatrix(scale),
       };
     }
