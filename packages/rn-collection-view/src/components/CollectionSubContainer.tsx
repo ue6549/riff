@@ -136,6 +136,7 @@ function CollectionSubContainerInner<T>({
       containerWidth:  containerSize.w,
       containerHeight: containerSize.h,
       scrollOffset:    { x: 0, y: 0 },
+      cacheId,
       sections:        [sectionInfo],
     };
   }, [containerSize.w, containerSize.h, data.length, itemKeys]);

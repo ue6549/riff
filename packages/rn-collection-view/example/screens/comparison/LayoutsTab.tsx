@@ -437,7 +437,6 @@ export function ListDemo() {
   const [decoCount, setDecoCount] = useState(0);
   const insertCounter = useRef(S0_DATA.length);
   const cvRef = useRef<RiffHandle<ListItem>>(null);
-  const [resizeVersion, setResizeVersion] = useState(0);
 
   const listLayout = useMemo(() => list({
     estimatedItemHeight: 56,
@@ -472,20 +471,21 @@ export function ListDemo() {
   const resizeS0First = useCallback(() => {
     setS0Items(prev => prev.map((item, i) =>
       i === 0 ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(0, 0);
   }, []);
 
   const resizeS1First = useCallback(() => {
     setS1Items(prev => prev.map((item, i) =>
       i === 0 ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(1, 0);
   }, []);
 
   const resizeS2Last = useCallback(() => {
+    const lastIdx = s2Items.length - 1;
     setS2Items(prev => prev.map((item, i) =>
       i === prev.length - 1 ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
-  }, []);
+    cvRef.current?.invalidateItem(2, lastIdx);
+  }, [s2Items.length]);
 
   // ── Sections ───────────────────────────────────────────────────────────────
 
@@ -602,7 +602,6 @@ export function ListDemo() {
         maintainVisibleContentPosition={mvcEnabled}
         decorationRenderers={decorationRenderers}
         onDecorationCountChange={setDecoCount}
-        extraData={resizeVersion}
       />
     </View>
   );
@@ -636,7 +635,6 @@ export function GridDemo() {
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(GS0_DATA.length);
 
   // estimatedHeightForItem reads resize state from item data — no ref closures needed.
@@ -682,7 +680,7 @@ export function GridDemo() {
   const toggleResize = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
     setGs0Items(prev => prev.map(item =>
       item.id === id ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(sectionIndex, itemIndex);
   }, []);
 
   const sections = useMemo(() => [
@@ -787,7 +785,6 @@ export function GridDemo() {
         onDecorationCountChange={setDecoCount}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        extraData={resizeVersion}
       />
     </View>
   );
@@ -801,7 +798,6 @@ export function MasonryDemo() {
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(MS0_INIT.length);
 
   // estimatedHeightForItem reads resize state from item data — no ref closures needed.
@@ -837,7 +833,7 @@ export function MasonryDemo() {
   const toggleResize = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
     setMs0Items(prev => prev.map(item =>
       item.id === id ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(sectionIndex, itemIndex);
   }, []);
 
   const sections = useMemo(() => [
@@ -907,7 +903,6 @@ export function MasonryDemo() {
         onDecorationCountChange={setDecoCount}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        extraData={resizeVersion}
       />
     </View>
   );
@@ -1116,7 +1111,6 @@ export function FlowDemo() {
   const [s0Cards, setS0Cards] = useState<FlowCard[]>(FC_S0_INIT);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(FC_S0_INIT.length);
 
   // Track the largest observed container width; when current width drops below
@@ -1167,14 +1161,14 @@ export function FlowDemo() {
     if (sectionIndex !== 0) return; // S1 items are static constants
     setS0Cards(prev => prev.map(item =>
       item.id === id ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(sectionIndex, itemIndex);
   }, []);
 
   const toggleTall = useCallback((id: string, sectionIndex: number, itemIndex: number) => {
     if (sectionIndex !== 0) return; // S1 items are static constants
     setS0Cards(prev => prev.map(item =>
       item.id === id ? { ...item, tall: !item.tall } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(sectionIndex, itemIndex);
   }, []);
 
   const sections = useMemo(() => [
@@ -1268,7 +1262,6 @@ export function FlowDemo() {
         keyExtractor={keyExtractor}
         renderItem={renderItem}
         onContainerSizeChange={(w: number) => { if (w > flowBaseWidthRef.current) flowBaseWidthRef.current = w; }}
-        extraData={resizeVersion}
       />
     </View>
   );
@@ -1754,7 +1747,6 @@ export function HorizontalListDemo() {
   const [s0Items, setS0Items] = useState<HCard[]>(staticSections[0]!.items);
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizeVersion, setResizeVersion] = useState(0);
   const insertCounter = useRef(staticSections[0]!.items.length);
   const cvRef = useRef<RiffHandle<HCard>>(null);
 
@@ -1782,7 +1774,7 @@ export function HorizontalListDemo() {
   const resizeFirst = useCallback(() => {
     setS0Items(prev => prev.map((item, i) =>
       i === 0 ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(0, 0);
   }, []);
 
   // ── Sections ───────────────────────────────────────────────────────────────
@@ -1910,7 +1902,6 @@ export function HorizontalListDemo() {
           decorationRenderers={decorationRenderers}
           onDecorationCountChange={setDecoCount}
           scrollViewProps={{ style: { backgroundColor: 'transparent' }, indicatorStyle: 'white' }}
-          extraData={resizeVersion}
         />
       </View>
     </View>
@@ -2016,7 +2007,6 @@ export function HorizontalGridDemo() {
   const [mvcEnabled, setMvcEnabled] = useState(false);
   const [sepEnabled, setSepEnabled] = useState(false);
   const [decoCount, setDecoCount] = useState(0);
-  const [resizeVersion, setResizeVersion] = useState(0);
   const [containerH, setContainerH] = useState(HG_CONTAINER_H);
   const insertCounter = useRef(staticSections[0]!.items.length);
   const cvRef = useRef<RiffHandle<HGCard>>(null);
@@ -2054,7 +2044,7 @@ export function HorizontalGridDemo() {
   const resizeFirst = useCallback(() => {
     setS0Items(prev => prev.map((item, i) =>
       i === 0 ? { ...item, resized: !item.resized } : item));
-    setResizeVersion(v => v + 1);
+    cvRef.current?.invalidateItem(0, 0);
   }, []);
 
   const riffSections = useMemo(() => {
@@ -2179,7 +2169,6 @@ export function HorizontalGridDemo() {
               if (h > 0) setContainerH(prev => Math.abs(prev - h) > 2 ? h : prev);
             },
           }}
-          extraData={resizeVersion}
         />
       </View>
     </View>

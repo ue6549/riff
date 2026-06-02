@@ -998,12 +998,14 @@ function CellWrapper({
 // Receives a snapshotRef so it reads fresh JS-side counters without
 // subscribing to CollectionView state (no extra re-renders).
 
+type _NativeModT = typeof nativeMod;
+
 function CollectionViewHUD({
   snapshotRef,
   nativeMod,
 }: {
   snapshotRef: React.RefObject<() => HUDSnapshot>;
-  nativeMod:   typeof nativeMod;
+  nativeMod:   _NativeModT;
 }) {
   const [fps,         setFps]         = React.useState(0);
   const [frameTimeMs, setFrameTimeMs] = React.useState(0);
@@ -1370,7 +1372,7 @@ function RiffBase<T = unknown>({
   // all cached elements to be invalidated (extraData, stickyConfig, layout, vpWidth).
   const renderGenRef = useRef(0);
   const prevCacheDepsRef = useRef<{
-    extraData: unknown; stickyConfig: unknown; layout: unknown; vpWidth: number;
+    extraData: unknown; layout: unknown; vpWidth: number;
   } | null>(null);
 
   // P5.1 — counters for the debug HUD. Plain refs — no state, no re-renders.
@@ -1440,6 +1442,10 @@ function RiffBase<T = unknown>({
   // ShadowNode looks up the cache during layout() via this ID.
   const [layoutCacheId] = useState(() => nativeMod.createLayoutCache());
   const [layoutCacheVersion, setLayoutCacheVersion] = useState(0);
+  // Bumped by invalidateItem/invalidateAt/invalidateKeys/remeasureOnItemChange to
+  // trigger the double-RAF version-polling effect without calling removeAttributes
+  // (which would break the spatial index and lose the item's position).
+  const [invalidateTrigger, setInvalidateTrigger] = useState(0);
 
   // B4.9: Release per-instance cache when this CollectionView unmounts.
   useEffect(() => {
@@ -1746,7 +1752,7 @@ function RiffBase<T = unknown>({
       if (raf2 !== null) cancelAnimationFrame(raf2);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [layoutContext, extraData]);
+  }, [layoutContext, extraData, invalidateTrigger]);
 
   // Read content size — updates when layoutCacheVersion changes (measurements
   // shift item positions) WITHOUT re-calling prepare().
@@ -2066,9 +2072,14 @@ function RiffBase<T = unknown>({
     },
 
     invalidateKeys: (keys: Iterable<string>) => {
-      for (const k of keys) nativeLayoutCache.removeAttributes(k);
+      // Do NOT call removeAttributes — it deletes from the spatial index, making
+      // processScroll unable to find the item and leaving it at position zero.
+      // The double-RAF (keyed on invalidateTrigger) detects the native version
+      // bump after Fabric measures the resized content and reflats positions.
       if (__DEV__ && RNCV_HGEST_DIAG) diagRef.current.cvBumps++;
+      void keys; // consumed by caller; trigger is sufficient
       setLayoutCacheVersion(v => v + 1);
+      setInvalidateTrigger(v => v + 1);
     },
 
     scrollToIndex: (index: number, options?: RiffScrollOptions) => {
@@ -2092,19 +2103,15 @@ function RiffBase<T = unknown>({
     },
 
     invalidateAt: (indices: number[]) => {
-      for (const index of indices) {
-        const item = data[index];
-        if (item == null) continue;
-        const k = keyExtractor ? keyExtractor(item, index) : String(index);
-        nativeLayoutCache.removeAttributes(k);
-      }
+      void indices;
       setLayoutCacheVersion(v => v + 1);
+      setInvalidateTrigger(v => v + 1);
     },
 
     invalidateItem: (sectionIndex: number, itemIndex: number) => {
-      const key = layoutContextRef.current?.sections[sectionIndex]?.itemKeys?.[itemIndex];
-      if (key) nativeLayoutCache.removeAttributes(key);
+      void sectionIndex; void itemIndex;
       setLayoutCacheVersion(v => v + 1);
+      setInvalidateTrigger(v => v + 1);
     },
   }), [data, keyExtractor, onDataChange, propSections, propKeyExtractor]); // eslint-disable-line react-hooks/exhaustive-deps -- onDataChange intentionally included; callSiteSetter is pass-through
 
@@ -2160,6 +2167,7 @@ function RiffBase<T = unknown>({
 
     if (keysToInvalidate.length > 0) {
       setLayoutCacheVersion(v => v + 1);
+      setInvalidateTrigger(v => v + 1);
     }
   }, [data]); // eslint-disable-line react-hooks/exhaustive-deps -- intentional: only recheck when data changes
 
@@ -2321,8 +2329,8 @@ function RiffBase<T = unknown>({
         const d = _diagRef.current;
         d.totalScroll++;
         const _isBandSkip = !_lcvChanged && !_rrChanged &&
-          scrollResult.renderFirst === prevRenderRef.current.first &&
-          scrollResult.renderLast  === prevRenderRef.current.last;
+          scrollResult.renderFirst === prevRenderRef.current!.first &&
+          scrollResult.renderLast  === prevRenderRef.current!.last;
         if (_isBandSkip) d.bandSkip++;
         if (_lcvChanged) d.lcvRender++;
         if (_rrChanged)  d.rrRender++;
@@ -3597,7 +3605,7 @@ function RiffBase<T = unknown>({
         horizontal={effectiveLayout.horizontal ?? false}
         showsVerticalScrollIndicator={scrollViewProps?.showsVerticalScrollIndicator ?? true}
         scrollEventThrottle={16}
-        onScroll={contractProps.onScroll}
+        onScroll={contractProps.onScroll as any}
         onScrollBeginDrag={scrollViewProps?.onScrollBeginDrag as any}
         onScrollEndDrag={scrollViewProps?.onScrollEndDrag as any}
         onMomentumScrollBegin={scrollViewProps?.onMomentumScrollBegin as any}

@@ -99,6 +99,7 @@ function CollectionSubContainerInner({
         x: 0,
         y: 0
       },
+      cacheId,
       sections: [sectionInfo]
     };
   }, [containerSize.w, containerSize.h, data.length, itemKeys]);
