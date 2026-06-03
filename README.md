@@ -957,7 +957,15 @@ Riff is a pre-release project. The core scroll path, all five built-in layouts, 
 
 **Android** — the LayoutCache and layout engine protocol are pure C++ with no platform dependencies. The platform-specific surface is six hook points (ShadowNode layout, state delivery, view lifecycle, scroll delegate, view flattening boundaries, JSI bindings). The Android equivalents of these hooks exist in the New Architecture stack; the port is a mapping exercise.
 
-**Web / React Native Web** — the JS windowing model and SlotManager work without native code. A web target would replace the C++ layout path with a TS equivalent and use `IntersectionObserver` + CSS transforms for native-free positioning.
+**Web / React Native Web** — the JS windowing model, SlotManager, layout engines, and mutation API are all pure TS with no platform dependencies. A web target replaces the C++ layer with TS layout engines, UIScrollView with a `div overflow:scroll`, Yoga with `ResizeObserver`, and frame assignment with `position:absolute` + CSS transforms. The component API (`layout=`, `sections=`, `renderItem`, `snapshot/apply`) stays identical, so cell content written for native works in RNW without changes.
+
+**Architectural hypotheses to validate on web (not yet tested):**
+
+- **Simple lists: hypothesis that Riff beats TanStack Virtual and react-virtuoso on CPU and active component count by the same mechanism it beats FlashList on native search results.** On native, Riff's search page numbers (the most uniform, FlashList-favourable scenario) showed 14% vs 24% CPU and 10 vs 62 active components — not because of compositional layouts, but because steady-state scroll only triggers React reconciliation at render-window boundary crossings. TanStack Virtual and react-virtuoso both update React state on scroll events to recompute their visible range. If the web port preserves the band-skip property (unchanged render range + layout version → no React work), the same structural advantage should appear on web. This is an untested hypothesis and requires benchmarking before any claim is made.
+
+- **Compositional pages: hypothesis that no existing web virtual list library handles multi-layout compositional pages as a first-class primitive.** TanStack Virtual (headless, 1D), react-virtuoso (list + grouped list), and RLV (list + grid) all require manual coordination for pages with mixed section layout types and H-sections. Riff's `compositional([...])` API handles this natively in one scroll container. This is an architectural claim, not a perf claim, and is confident — but the developer-experience advantage over manual coordination needs real-world validation.
+
+- **SSR / CLS:** height-correction cycles (render at estimated positions, ResizeObserver fires, positions update) are a CLS risk on web. This is not a Riff-specific problem — any virtual list that doesn't know item heights at SSR time has the same exposure. The standard mitigation (non-virtual SSR render, hydration takeover) needs to be designed into the web renderer. Unresolved; needs investigation before any SSR claim can be made.
 
 ### Performance
 
