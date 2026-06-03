@@ -971,6 +971,12 @@ Riff is a pre-release project. The core scroll path, all five built-in layouts, 
 
 Serialize the LayoutCache to JSON (or FlatBuffers) so a re-opened list restores scroll position, measured heights, and first-frame positions instantly — no cold-start correction cycle. Pair with iOS scroll position persistence (`UIScrollView.contentOffset` save/restore) for full list state restoration across app launches.
 
+### Developer tooling
+
+**Structured logging and tracing** — a layered observability system for understanding what the pipeline is doing. Three proposed tiers: (1) a JS-side trace API (`RiffTrace`) that records scroll events, render-window transitions, slot pool hits/misses, and mutation operations with timestamps, emitting structured JSON consumable by custom tooling; (2) a native-side C++ trace channel that captures `ShadowNode::layout()` cycle time, `correctChildPositionsIfNeeded` hash hits vs correction batches, LayoutCache version bumps, and `applyPositionsFromState` frame times; (3) a unified audit log for mutations — every `snapshot.apply()` call records before/after indices, stale-height evictions, and first-affected index. The existing `RNCV_DEBUG_LOGS` / `RNCV_ENABLE_NATIVE_LOGS` flags are toggle-based and write to console; the goal is structured, always-available low-overhead tracing that can be consumed programmatically (e.g. in tests or dev overlays) without spamming logs in normal operation.
+
+**Test harness** — automated test coverage for the layout engine, windowing model, and mutation pipeline. Planned layers: (1) C++ unit tests for the layout engine protocol — `prepare`, `applyMeasurements`, `invalidateFrom`, `contentSize` — exercising all five built-in layouts with deterministic inputs; (2) C++ unit tests for `correctChildPositionsIfNeeded` — injecting Yoga-height sequences and asserting LayoutCache correction outputs; (3) JS unit tests for `SlotManager` — pool hit/miss/eviction/type-segregation logic — and `RiffSnapshot` — mutation builder correctness, key eviction; (4) integration tests (Detox or equivalent) for golden-path flows — cold start, scroll through fully-measured list, insert/delete above and below fold with MVC, H-section scroll, sticky header push/overlay. The `BACKLOG.md` tracks specific test scenarios to cover.
+
 ---
 
 ## Getting started
