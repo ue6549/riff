@@ -450,6 +450,15 @@ class CompositionalLayoutEngine implements RiffLayout {
   readonly type = 'compositional';
   readonly horizontal = false;
   readonly needsSpatialQuery = false;
+  /**
+   * Union over entries: true if any sub-layout writes visual attrs. Drives
+   * the V container's gate. Per-section gating (e.g. one dynamic H section
+   * inside an otherwise-static compositional) still flows through each H
+   * sub-container's own layout.writesVisualAttributes — the V container's
+   * gate is a coarser optimisation for the case when no sub-section needs
+   * visual attrs at all.
+   */
+  readonly writesVisualAttributes: boolean;
 
   private readonly entries: CompositionalEntry[];
   private lastSectionKeys: (readonly string[])[] = [];
@@ -464,6 +473,9 @@ class CompositionalLayoutEngine implements RiffLayout {
 
   constructor(entries: CompositionalEntry[]) {
     this.entries = entries;
+    this.writesVisualAttributes = entries.some(
+      (e) => e.layout.writesVisualAttributes === true,
+    );
   }
 
   /** Find which entry applies for a given section index. */

@@ -11,9 +11,11 @@
  *   Items outside the render window are not mounted at all.
  *   Items inside the render window are Activity=visible — they form the visual
  *   buffer so cells are fully painted before the viewport reaches them.
- *   Items in the measure range (beyond render range, parked at top:-9999) use
+ *   Items in the measure range (beyond render range, when enabled) use
  *   Activity=hidden so Fabric computes their Yoga layout for height measurement
- *   without painting them or firing their user-cell effects.
+ *   without painting them or firing their user-cell effects. (Activity API
+ *   requires RN 0.83+ / React 19.2; on older RN the cells render normally and
+ *   are paint-clipped by UIScrollView, with no compute savings.)
  *   Heights are measured by the ShadowNode via Yoga and written back to the
  *   C++ LayoutCache — no JS measurement roundtrip needed.
  *
@@ -503,9 +505,12 @@ export interface RiffProps<T = unknown> {
 
   /**
    * M4.1 — How many viewport-heights to pre-measure ahead of (and behind) the
-   * render range. Cells in this extended zone are mounted off-screen at top:-9999
-   * inside Activity=hidden so their heights are captured before they scroll into
-   * view, eliminating white-space flash on fast scroll.
+   * render range. Cells in this extended zone are mounted inside Activity=hidden
+   * (RN 0.83+) so their heights are captured before they scroll into view,
+   * eliminating white-space flash on fast scroll. On older RN the Activity
+   * wrapper falls back to a fragment and the cells render normally — Yoga still
+   * measures them but the compute-suppression benefit of Activity=hidden is not
+   * available.
    * Default 2.0. Only active in variable-height mode (estimatedItemHeight).
    * Set to 0 to disable pre-measurement.
    */
@@ -533,6 +538,22 @@ export interface RiffProps<T = unknown> {
    * Set to 0 to disable pooling entirely (every revisit is a cold mount).
    */
   recyclePoolSize?: number;
+
+  /**
+   * When true (default), slots evicted by one section are eligible to be
+   * reclaimed by any other section that uses the same itemType — the
+   * per-type pool is global across sections. When false, each section
+   * gets its own private pool keyed by `(sectionIndex, itemType)` and
+   * evictions stay within the section that produced them.
+   *
+   * Useful for single-widget-type-across-many-sections workloads (e.g.
+   * product feeds where all sections use the same product card). The
+   * default behaviour produces high pool churn when V scroll moves cells
+   * out of one section while another section's cells need slots; setting
+   * to false isolates each section's pool. Trade: more total cells
+   * mounted (each section keeps its own warmth) for less pool turnover.
+   */
+  crossSectionRecycling?: boolean;
 
   /**
    * Called whenever the number of rendered items changes.
@@ -1159,6 +1180,7 @@ function RiffBase<T = unknown>({
   measureAhead = 0,
   initialNumToRender = 10,
   recyclePoolSize,
+  crossSectionRecycling = true,
   onRenderCountChange,
   onBlankArea,
   onViewableRangeChange,
@@ -1377,6 +1399,13 @@ function RiffBase<T = unknown>({
   const slotManagerRef = useRef<SlotManager<any>>(null as any);
   if (!slotManagerRef.current) slotManagerRef.current = new SlotManager();
   // recyclePoolSize=undefined → auto mode: updated to window size just before sync().
+
+  // Propagate cross-section recycling flag — non-destructive migration.
+  // setCrossSectionRecycling preserves slot keys (no React re-mount); only
+  // the pool index is rebuilt under the new keying policy.
+  useEffect(() => {
+    slotManagerRef.current.setCrossSectionRecycling(crossSectionRecycling);
+  }, [crossSectionRecycling]);
 
   // Opt 7: element cache for incremental render loop.
   // Maps slotKey → cached ReactElement. If slot state is unchanged AND no
@@ -2739,10 +2768,12 @@ function RiffBase<T = unknown>({
   const rr = renderRange;
 
   // measureOnly=true  → cell is in the measure range but NOT the render range.
-  //   Parked at top:-9999 so it's invisible; CellMeasureContainer captures its
-  //   height; Activity=hidden suppresses user-cell effects.
-  //   When the cell scrolls into the render range it is promoted in-place (just
-  //   a style update — no unmount/remount) so positions are already known.
+  //   Wrapped in Activity=hidden (RN 0.83+) so Fabric/Yoga still measure the
+  //   cell but React skips painting it and suppresses user-cell effects. On
+  //   older RN the Activity wrapper degrades to a fragment, so the cell renders
+  //   normally; it remains paint-clipped by UIScrollView since it sits outside
+  //   the visible viewport. When the cell scrolls into the render range it is
+  //   promoted in-place (mode flips visible) — no unmount/remount needed.
   // measureOnly=false → normal render-range cell (existing behaviour).
   // reactKey: when provided (slot mode), overrides the React key derived from
   // keyExtractor. Stable slot keys let the Fiber survive recycling (Opt 4).
@@ -3185,6 +3216,12 @@ function RiffBase<T = unknown>({
     // would set maxPoolSize=4, overflow the pool on bounce-back, discard
     // slots, and cold-mount the rebound cells — visible as the `MISSING tag`
     // → new tag transition seen in user logs at the bounce edge.
+    //
+    // Single-type-dominant pages (many sections sharing one widget type,
+    // e.g. storefront's product-card-across-all-section-types pattern) will
+    // overflow this auto floor: every section's eviction feeds the same
+    // per-type pool. Such pages should pass an explicit `recyclePoolSize`
+    // override sized for their max in-flight cell count across sections.
     let _maxHWindow = 0;
     for (const [, r] of hRenderRangesRef.current) {
       const span = r.last - r.first + 1;
@@ -3635,6 +3672,10 @@ function RiffBase<T = unknown>({
         layoutCacheId={layoutCacheId}
         layoutCacheVersion={layoutCacheVersion}
         layoutType={effectiveLayout.type as any}
+        // Static layouts (list/grid/masonry/flow/compositional with all-static
+        // sub-sections) leave this false → native skips the per-cell
+        // visual-attrs read/write in applyPositionsFromState. See protocol.ts.
+        layoutWritesVisualAttributes={effectiveLayout.writesVisualAttributes ?? false}
         estimatedItemHeight={effectiveItemHeight}
         renderRangeStart={renderRangeStart}
         renderRangeEnd={renderRangeEnd}

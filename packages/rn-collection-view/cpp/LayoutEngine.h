@@ -106,6 +106,23 @@ public:
                              const ScrollLayoutContext& /*ctx*/) {
     return false;
   }
+
+  /**
+   * Whether this layout writes non-default LayoutAttributes — alpha, zIndex,
+   * and/or transform3D — into the LayoutCache.
+   *
+   * Default false (static layouts: list / grid / masonry / flow /
+   * compositional with all-static sub-sections). When false, the native side
+   * gates off the per-cell visual-attrs read/write in
+   * RNCollectionViewContainerView::applyPositionsFromState and in
+   * CollectionSubContainerShadowNode::correctChildPositionsIfNeeded —
+   * avoiding N mutex-locked cache lookups + N layer-property writes per
+   * commit.
+   *
+   * Override and return true for scroll-driven layouts that animate
+   * per-cell transforms (radial, carousel3D, spiral, …).
+   */
+  virtual bool writesVisualAttributes() const { return false; }
 };
 
 } // namespace rncv

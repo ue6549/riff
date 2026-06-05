@@ -2537,7 +2537,7 @@ PODS:
     - React-perflogger (= 0.83.4)
     - React-utils (= 0.83.4)
     - SocketRocket
-  - RNCollectionView (0.1.0):
+  - Riff (0.1.0):
     - RCT-Folly
     - RCTRequired
     - RCTTypeSafety
@@ -2631,7 +2631,7 @@ DEPENDENCIES:
   - ReactAppDependencyProvider (from `build/generated/ios/ReactAppDependencyProvider`)
   - ReactCodegen (from `build/generated/ios/ReactCodegen`)
   - ReactCommon/turbomodule/core (from `../../node_modules/react-native/ReactCommon`)
-  - RNCollectionView (from `../..`)
+  - Riff (from `../..`)
   - SocketRocket (~> 0.7.1)
   - Yoga (from `../../node_modules/react-native/ReactCommon/yoga`)
 
@@ -2796,7 +2796,7 @@ EXTERNAL SOURCES:
     :path: build/generated/ios/ReactCodegen
   ReactCommon:
     :path: "../../node_modules/react-native/ReactCommon"
-  RNCollectionView:
+  Riff:
     :path: "../.."
   Yoga:
     :path: "../../node_modules/react-native/ReactCommon/yoga"
@@ -2880,7 +2880,7 @@ SPEC CHECKSUMS:
   ReactAppDependencyProvider: 2b19d66e5ddfe8dc7afb6338a4626156cbf2bab1
   ReactCodegen: d758b046e5995dfc93e15c53f5fccdcc91a4b9c6
   ReactCommon: 5901ef412ae35cc727b9584d4f7e3e1f7f17c251
-  RNCollectionView: 42222f50780d0d3098770f4eb516ddabc5d56ea6
+  Riff: 23444676266424898cdb9be5bfcc57e0122cc338
   SocketRocket: d4aabe649be1e368d1318fdf28a022d714d65748
   Yoga: b669e79fa0f8d3f6f5e35372345f54b99e06b13c
 

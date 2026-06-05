@@ -74,6 +74,8 @@ class SpiralLayout implements RiffLayout {
   readonly horizontal = false;
   private _cache = nativeMod.layoutCache;
   readonly needsSpatialQuery = false;
+  // Spiral writes per-cell transform3D + zIndex + alpha into LayoutCache.
+  readonly writesVisualAttributes = true;
 
   private readonly opts: Required<SpiralOptions>;
   private ctx: LayoutContext | null = null;

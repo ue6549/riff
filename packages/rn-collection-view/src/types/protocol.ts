@@ -123,6 +123,29 @@ export interface RiffLayout {
   readonly needsSpatialQuery?: boolean;
 
   /**
+   * When true, this layout writes non-default LayoutAttributes — alpha,
+   * zIndex, and/or transform3D — into the LayoutCache, and expects the
+   * native side to apply them per cell on every commit.
+   *
+   * Default false: static layouts (list / grid / masonry / flow / compositional
+   * with all-static sub-sections) leave all visual attrs at their identity
+   * defaults (alpha=1, zIndex=0, transform=identity). When false, the native
+   * applyPositionsFromState path skips the per-cell visual-attrs read/write
+   * entirely — single biggest CPU win on H-section-heavy pages where the
+   * block would otherwise fire for many cells per commit.
+   *
+   * Set to true for scroll-driven dynamic layouts (radial, carousel3D,
+   * spiral, hex) and for custom layouts that animate per-item transforms.
+   * Compositional layouts compute this as the union of their entries.
+   *
+   * Independent of needsSpatialQuery: a layout may be index-contiguous
+   * (needsSpatialQuery=false) AND still write rich visual attrs
+   * (writesVisualAttributes=true), which is the case for all built-in
+   * dynamic layouts.
+   */
+  readonly writesVisualAttributes?: boolean;
+
+  /**
    * Per-section LayoutCache key prefix.
    * Compositional layouts use different prefixes per section (e.g. "item" for list
    * sections, "grid" for grid sections). CollectionView.tsx calls this to derive

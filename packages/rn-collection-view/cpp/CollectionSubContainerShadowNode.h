@@ -42,6 +42,21 @@ class CollectionSubContainerShadowNode final
  public:
   using ConcreteViewShadowNode::ConcreteViewShadowNode;
 
+  /// Clone constructor — propagates skip-correction tracking state from the
+  /// source shadow node across Fabric clones. The base class's clone path
+  /// (called for every Fabric commit) does NOT use the C++ default copy
+  /// constructor; it uses this specific (source, fragment) signature, which
+  /// the base class implements but only copies base-class members. Without
+  /// an explicit override here, every clone resets lastCacheVersion_,
+  /// lastHMvcVersion_, lastLayoutCacheVersion_, lastChildCount_,
+  /// lastChildTagsHash_, lastYogaHeightHash_ to their declared defaults —
+  /// causing shouldSkipCorrection() to fail on every check, every commit,
+  /// for every sub-container instance. (Skip rate diag confirmed 0% with
+  /// lcv=-1→… ver=0→… hMvc=0→… N=0→… on every sample.)
+  CollectionSubContainerShadowNode(
+      const ShadowNode& sourceShadowNode,
+      const ShadowNodeFragment& fragment);
+
   static CollectionSubContainerState initialStateData(
       const Props::Shared& /*props*/,
       const ShadowNodeFamily::Shared& /*family*/,

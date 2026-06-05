@@ -69,7 +69,13 @@ const tracker = createMountTracker();
 // Riff implementation — single CollectionView, compositional layout
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function RiffSearchResults({ listRef }: { listRef: React.RefObject<any> }) {
+function RiffSearchResults({
+  listRef,
+  crossSectionRecycling,
+}: {
+  listRef: React.RefObject<any>;
+  crossSectionRecycling: boolean;
+}) {
   const layout = useMemo(() => compositional([
     { range: 0, layout: grid({ columns: 2, estimatedItemHeight: 200, columnSpacing: 10, rowSpacing: 10, headerHeight: 80, footerHeight: FOOTER_H, sectionSpacing: 8 }) },
     { range: 1, layout: list({ estimatedItemHeight: 280, headerHeight: HEADER_H, itemSpacing: 8, sectionSpacing: 8, estimatedCrossAxisHeight: 180 }), horizontal: true },
@@ -168,6 +174,15 @@ function RiffSearchResults({ listRef }: { listRef: React.RefObject<any> }) {
       getItemType={getItemType}
       renderItem={renderItem}
       renderMultiplier={0.25}
+      // Search has few H sections; setting hRenderMultiplier=0.5 explicitly
+      // (vs the default fall-through to renderMultiplier=0.25) gives those
+      // few H carousels a modest prefetch buffer for real-user H scroll
+      // without bloating V-scroll baseline cells.
+      hRenderMultiplier={0.5}
+      // Pool: auto formula. Search is product-card-dominated but has few H
+      // sections so the auto floor is fine. No explicit override needed.
+      // Toggle via PerfHood "X-Recycle" button.
+      crossSectionRecycling={crossSectionRecycling}
       onBlankArea={({ offsetStart, offsetEnd }) => {
         const vpH = tracker.getVpH();
         tracker.setBlank(vpH > 0 ? Math.round((offsetStart + offsetEnd) / vpH * 100) : 0);
@@ -355,6 +370,7 @@ const TOTAL_ITEMS = 20 + 4 + 25 + 8 + 25 + 3 + 25 + 8 + 55; // 173
 
 export default function SearchResultsDemo() {
   const [engine, setEngine] = useState<Engine>('riff');
+  const [crossSectionRecycling, setCrossSectionRecycling] = useState(true);
   const listRef = useRef<any>(null);
 
   // Reset mount counters on engine switch
@@ -379,7 +395,7 @@ export default function SearchResultsDemo() {
 
       <View style={LS.content} onLayout={(e) => { tracker.setVpH(e.nativeEvent.layout.height); }}>
         {engine === 'riff'
-          ? <RiffSearchResults listRef={listRef} />
+          ? <RiffSearchResults listRef={listRef} crossSectionRecycling={crossSectionRecycling} />
           : <FlashSearchResults listRef={listRef} />}
       </View>
 
@@ -394,6 +410,10 @@ export default function SearchResultsDemo() {
         itemCount={TOTAL_ITEMS}
         itemHeight={40}
         getContentHeight={tracker.getContentH}
+        crossSectionRecycling={engine === 'riff' ? crossSectionRecycling : undefined}
+        onToggleCrossSectionRecycling={
+          engine === 'riff' ? () => setCrossSectionRecycling(v => !v) : undefined
+        }
       />
     </SafeAreaView>
   );

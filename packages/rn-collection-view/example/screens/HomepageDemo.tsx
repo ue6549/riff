@@ -79,7 +79,13 @@ const TOTAL_ITEMS = 12 + 5 + 8 + 10 + 9 + 8 + 6 + 60; // 118
 // Riff implementation — single CollectionView, compositional layout
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
+function RiffHomepage({
+  listRef,
+  crossSectionRecycling,
+}: {
+  listRef: React.RefObject<any>;
+  crossSectionRecycling: boolean;
+}) {
   const SECTION_BG_COLORS = ['#f0f2f5', '#f5f2f0'];
 
   const layout = useMemo(() => compositional([
@@ -173,7 +179,14 @@ function RiffHomepage({ listRef }: { listRef: React.RefObject<any> }) {
       getItemType={getItemType}
       renderItem={renderItem}
       renderMultiplier={0.25}
-      hRenderMultiplier={1.0}
+      // hRenderMultiplier 1.0 → 0.5: V-scroll bench doesn't exercise H
+      // scroll, so 3× viewport per H section was waste. 0.5 keeps a modest
+      // prefetch for the real-user-driven H scroll case.
+      hRenderMultiplier={0.5}
+      // Pool: auto formula. Homepage has multiple widget types per pool, so
+      // per-type pool isn't congested. No explicit override needed.
+      // Toggle via PerfHood "X-Recycle" button.
+      crossSectionRecycling={crossSectionRecycling}
       decorationRenderers={decorationRenderers}
       onBlankArea={({ offsetStart, offsetEnd }) => {
         const vpH = tracker.getVpH();
@@ -382,6 +395,7 @@ type Engine = 'riff' | 'flash';
 
 export default function HomepageDemo() {
   const [engine, setEngine] = useState<Engine>('riff');
+  const [crossSectionRecycling, setCrossSectionRecycling] = useState(true);
   const listRef = useRef<any>(null);
 
   useLayoutEffect(() => { tracker.reset(); }, [engine]);
@@ -411,7 +425,7 @@ export default function HomepageDemo() {
 
       <View style={LS.content} onLayout={(e) => { tracker.setVpH(e.nativeEvent.layout.height); }}>
         {engine === 'riff'
-          ? <RiffHomepage listRef={listRef} />
+          ? <RiffHomepage listRef={listRef} crossSectionRecycling={crossSectionRecycling} />
           : <FlashHomepage listRef={listRef} />}
       </View>
 
@@ -426,6 +440,10 @@ export default function HomepageDemo() {
         itemCount={TOTAL_ITEMS}
         itemHeight={40}
         getContentHeight={getContentHeight}
+        crossSectionRecycling={engine === 'riff' ? crossSectionRecycling : undefined}
+        onToggleCrossSectionRecycling={
+          engine === 'riff' ? () => setCrossSectionRecycling(v => !v) : undefined
+        }
       />
     </SafeAreaView>
   );

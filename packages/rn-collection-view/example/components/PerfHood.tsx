@@ -63,6 +63,11 @@ export interface PerfHoodProps {
   itemHeight?: number;
   /** Getter for content height. Called on PerfHood's own 500ms tick. */
   getContentHeight?: () => number;
+  // ── Cross-section recycling toggle (optional — omit to disable button) ──
+  /** Current state of cross-section recycling on the Riff instance. */
+  crossSectionRecycling?: boolean;
+  /** Called when user taps the X-Recycle toggle. */
+  onToggleCrossSectionRecycling?: () => void;
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
@@ -346,6 +351,8 @@ export function PerfHood({
   itemCount = 0,
   itemHeight = 56,
   getContentHeight,
+  crossSectionRecycling,
+  onToggleCrossSectionRecycling,
 }: PerfHoodProps) {
   const m = usePerformanceMetrics(disabled);
   const [showResult, setShowResult] = useState(false);
@@ -510,6 +517,19 @@ export function PerfHood({
           )}
         </View>
 
+        {/* Cross-section recycling toggle.
+            Shows current state. Tap to flip. Migration is non-destructive
+            (SlotManager.setCrossSectionRecycling preserves slot keys), so
+            the bench can be run twice in succession — once each state —
+            without restarting the app. */}
+        {onToggleCrossSectionRecycling != null && (
+          <Pressable style={S.toggleBtn} onPress={onToggleCrossSectionRecycling}>
+            <Text style={S.toggleText} numberOfLines={1}>
+              X-Recycle: {crossSectionRecycling ? 'ON' : 'OFF'}
+            </Text>
+          </Pressable>
+        )}
+
         {/* Benchmark button / progress */}
         {benchmarkEnabled && (
           <Pressable style={S.benchBtn} onPress={handleBenchPress}>
@@ -557,6 +577,15 @@ const S = StyleSheet.create({
     alignItems: 'center',
   },
   benchText: { fontSize: 10, color: '#4ade80', fontWeight: '700', fontFamily: 'Menlo' },
+  toggleBtn: {
+    marginTop: 5,
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    backgroundColor: '#1a1a1a',
+    borderRadius: 5,
+    alignItems: 'center',
+  },
+  toggleText: { fontSize: 9, color: '#fbbf24', fontWeight: '700', fontFamily: 'Menlo' },
 });
 
 // ── Modal styles ──────────────────────────────────────────────────────────────

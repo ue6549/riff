@@ -57,10 +57,125 @@
   #define RNCV_HSUB_LOG(fmt, ...) ((void)0)
 #endif
 
+// ── Diagnostic: H sub-container layout commit + skip-correction rate ─────
+// Hypothesis under test: on compositional pages with many H sub-containers,
+// each V container commit fans out into a commit on every sub-container.
+// `shouldSkipCorrection()` short-circuits when nothing changed for that
+// sub-container — but if its hit rate is low, every V tick produces real
+// work across all sub-containers (the storefront p75/p90 CPU regression
+// candidate after the visual-attrs gate fix).
+//
+// Output: every 50 sub-container layout() invocations, one line:
+//   [RNCV-HSUB-DIAG] commits=<N> skips=<M> skipRate=<P>%
+//
+// Interpretation:
+//   - skipRate > 80% → fan-out is cheap, not a CPU cost source
+//   - skipRate 30–80% → fan-out has real cost, worth optimising
+//   - skipRate < 30% → every V tick re-runs all H sub-container correction
+//
+// Independent of all other log flags. Set RNCV_HSUB_SKIP_DIAG to 0 after
+// measurement is complete.
+// Re-enabled for B4.17 Phase 1 to correlate sub-container `fail.ver` count
+// with V container's `applyMeas` count — same bench, same log stream.
+// Disabled after Fix B verified: fail.ver dropped from 1127 → 54 (-95%),
+// HSub skip rate jumped from 27% → 80.6% (+53.6 pp). B4.17 closed.
+#define RNCV_HSUB_SKIP_DIAG 0
+
+#if RNCV_HSUB_SKIP_DIAG
+#include <atomic>
+#include <cstdio>
+namespace {
+  // Static-storage atomics: guaranteed zero-initialized by C++ before any
+  // dynamic init runs, so no explicit initializer is needed.
+  std::atomic<uint32_t> g_hsubCommits;
+  std::atomic<uint32_t> g_hsubSkips;
+  // Per-reason counters for "skip check failed and returned false".
+  // Bench shows skipRate==0%, so one of these is hitting every commit.
+  // Output identifies the culprit so we know whether to fix the check
+  // or accept the invalidation.
+  std::atomic<uint32_t> g_hsubFailLcv;        // props.layoutCacheVersion changed
+  std::atomic<uint32_t> g_hsubFailNoCache;    // layoutCacheForId returned null
+  std::atomic<uint32_t> g_hsubFailVersion;    // cache->version() changed
+  std::atomic<uint32_t> g_hsubFailHMvc;       // cache->hMvcVersion() changed (H only)
+  std::atomic<uint32_t> g_hsubFailChildCount; // N != lastChildCount_
+  std::atomic<uint32_t> g_hsubFailHash;       // tag/yoga hash changed
+  // Counter for cnt-change occurrences, used to sample 1 in 10 cnt-change logs
+  // (otherwise the cnt=100% pattern would flood the log).
+  std::atomic<uint32_t> g_hsubCntChangeCount;
+}
+#define RNCV_HSUB_DIAG_COMMIT()                                                  \
+  do {                                                                           \
+    uint32_t _c = g_hsubCommits.fetch_add(1, std::memory_order_relaxed) + 1;     \
+    if (_c % 50 == 0) {                                                          \
+      uint32_t _s = g_hsubSkips.load(std::memory_order_relaxed);                 \
+      uint32_t _flcv  = g_hsubFailLcv.load(std::memory_order_relaxed);           \
+      uint32_t _fnc   = g_hsubFailNoCache.load(std::memory_order_relaxed);       \
+      uint32_t _fver  = g_hsubFailVersion.load(std::memory_order_relaxed);       \
+      uint32_t _fhmvc = g_hsubFailHMvc.load(std::memory_order_relaxed);          \
+      uint32_t _fcnt  = g_hsubFailChildCount.load(std::memory_order_relaxed);    \
+      uint32_t _fhash = g_hsubFailHash.load(std::memory_order_relaxed);          \
+      fprintf(stderr,                                                            \
+              "[RNCV-HSUB-DIAG] commits=%u skips=%u skipRate=%.1f%% "            \
+              "fail{lcv=%u noCache=%u ver=%u hMvc=%u cnt=%u hash=%u}\n",         \
+              _c, _s, _c > 0 ? (_s * 100.0 / _c) : 0.0,                          \
+              _flcv, _fnc, _fver, _fhmvc, _fcnt, _fhash);                        \
+      fflush(stderr);                                                            \
+    }                                                                            \
+  } while (0)
+#define RNCV_HSUB_DIAG_SKIP()                                                    \
+  do {                                                                           \
+    g_hsubSkips.fetch_add(1, std::memory_order_relaxed);                         \
+  } while (0)
+// Reason taggers — used inside shouldSkipCorrection at each false-return path.
+#define RNCV_HSUB_DIAG_FAIL_LCV()        g_hsubFailLcv.fetch_add(1, std::memory_order_relaxed)
+#define RNCV_HSUB_DIAG_FAIL_NOCACHE()    g_hsubFailNoCache.fetch_add(1, std::memory_order_relaxed)
+#define RNCV_HSUB_DIAG_FAIL_VERSION()    g_hsubFailVersion.fetch_add(1, std::memory_order_relaxed)
+#define RNCV_HSUB_DIAG_FAIL_HMVC()       g_hsubFailHMvc.fetch_add(1, std::memory_order_relaxed)
+#define RNCV_HSUB_DIAG_FAIL_CHILDCOUNT() g_hsubFailChildCount.fetch_add(1, std::memory_order_relaxed)
+#define RNCV_HSUB_DIAG_FAIL_HASH()       g_hsubFailHash.fetch_add(1, std::memory_order_relaxed)
+#else
+#define RNCV_HSUB_DIAG_COMMIT() ((void)0)
+#define RNCV_HSUB_DIAG_SKIP()   ((void)0)
+#define RNCV_HSUB_DIAG_FAIL_LCV()        ((void)0)
+#define RNCV_HSUB_DIAG_FAIL_NOCACHE()    ((void)0)
+#define RNCV_HSUB_DIAG_FAIL_VERSION()    ((void)0)
+#define RNCV_HSUB_DIAG_FAIL_HMVC()       ((void)0)
+#define RNCV_HSUB_DIAG_FAIL_CHILDCOUNT() ((void)0)
+#define RNCV_HSUB_DIAG_FAIL_HASH()       ((void)0)
+#endif
+
 namespace facebook::react {
 
 // Must match the string used in codegenNativeComponent('RNCollectionSubContainer').
 const char CollectionSubContainerComponentName[] = "RNCollectionSubContainer";
+
+// ── Clone constructor: propagate skip-correction tracking state ─────────────
+// See header for the full diagnostic background. In short: Fabric's clone
+// path uses the (source, fragment) constructor signature, NOT the C++
+// default copy constructor. The base class's clone copies base-class state;
+// derived state (our lastXxx_ fields) has to be propagated explicitly.
+// Without this, every Fabric commit produces a clone with reset tracking
+// state — shouldSkipCorrection() never finds a match and runs full
+// correction every commit on every sub-container instance.
+//
+// Scratch members (correctedChildren_, childTags_, correctedContentSize_,
+// correctedBoundingRect_) are intentionally NOT propagated — they're
+// rebuilt by correctChildPositionsIfNeeded() when correction actually runs,
+// and ignored when shouldSkipCorrection() returns true (Fabric's state
+// mechanism carries forward the previous state's payload across clones).
+CollectionSubContainerShadowNode::CollectionSubContainerShadowNode(
+    const ShadowNode& sourceShadowNode,
+    const ShadowNodeFragment& fragment)
+    : ConcreteViewShadowNode(sourceShadowNode, fragment) {
+  const auto& source =
+      static_cast<const CollectionSubContainerShadowNode&>(sourceShadowNode);
+  lastCacheVersion_       = source.lastCacheVersion_;
+  lastHMvcVersion_        = source.lastHMvcVersion_;
+  lastLayoutCacheVersion_ = source.lastLayoutCacheVersion_;
+  lastChildCount_         = source.lastChildCount_;
+  lastChildTagsHash_      = source.lastChildTagsHash_;
+  lastYogaHeightHash_     = source.lastYogaHeightHash_;
+}
 
 // ── H-4b: Short-circuit check ──────────────────────────────────────────────
 // When the main container relayouts (V scroll cell churn), Yoga re-runs on
@@ -71,17 +186,51 @@ bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
   const auto& props =
       *std::static_pointer_cast<const RNCollectionSubContainerProps>(getProps());
 
+  // ── LCV check, post-fix: passive signal only ─────────────────────────────
+  //
+  // props.layoutCacheVersion is a JS-side React state that bumps on (a) any
+  // JS-initiated invalidation (invalidateItem, snapshot.apply) and (b) any
+  // JS detection of a C++ cache version change (double-RAF poll, V scroll
+  // handler). In case (b), the LCV bump is a redundant downstream notification
+  // of a C++ change that this sub-container can check directly via
+  // cache->version() and yogaHash below — so reacting to LCV here causes a
+  // false invalidation on every passive bump.
+  //
+  // We continue to track the current LCV value (so the diagnostic counter
+  // remains meaningful) but no longer return false on a mismatch. The C++
+  // checks below — cache version, hMvcVersion, child count, tag hash,
+  // Yoga hash — together cover every real reason a sub-container should
+  // re-correct.
+  // ── Snapshot inputs at function entry ────────────────────────────────────
+  // Captured before we overwrite tracked state, so sample logs can show
+  // current-vs-last for each check.
   const int curLCV = props.layoutCacheVersion;
-  if (curLCV != lastLayoutCacheVersion_) {
+  const int snapLastLCV = lastLayoutCacheVersion_;
+  bool failLcv = false;
+  if (curLCV != snapLastLCV) {
     lastLayoutCacheVersion_ = curLCV;
+    failLcv = true;
+    RNCV_HSUB_DIAG_FAIL_LCV();
+  }
+
+  // Diagnostic-only locals — track every authoritative reason a skip would
+  // fail, independent of which one would trigger first under early-return.
+  // Bench output via fail{} reports the real distribution, not the bias of
+  // first-match-wins ordering.
+  bool failVer = false, failHMvc = false, failCnt = false, failHash = false;
+
+  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
+  if (!cache) {
+    RNCV_HSUB_DIAG_FAIL_NOCACHE();
     return false;
   }
 
-  auto cache = CollectionViewModule::getLayoutCacheForId(props.layoutCacheId);
-  if (!cache) return false;
-
-  uint64_t cv = cache->version();
-  if (cv != lastCacheVersion_) return false;
+  const uint64_t cv = cache->version();
+  const uint64_t snapLastVer = lastCacheVersion_;
+  if (cv != snapLastVer) {
+    failVer = true;
+    RNCV_HSUB_DIAG_FAIL_VERSION();
+  }
 
   // H sub-containers also invalidate on H-only cache writes. These are batched
   // via endHBatch() — they bump _hMvcVersion but NOT _version, so the check
@@ -91,12 +240,42 @@ bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
   // they have no interest in H item position changes.
   const bool isH =
       (props.scrollDirection == RNCollectionSubContainerScrollDirection::Horizontal);
-  if (isH && cache->hMvcVersion() != lastHMvcVersion_) return false;
+  const uint64_t hMvcCur = cache->hMvcVersion();
+  const uint64_t snapLastHMvc = lastHMvcVersion_;
+  if (isH && hMvcCur != snapLastHMvc) {
+    failHMvc = true;
+    RNCV_HSUB_DIAG_FAIL_HMVC();
+  }
 
   auto children = getLayoutableChildNodes();
-  size_t N = children.size();
-  if (N != lastChildCount_) return false;
-  if (N == 0) return true; // empty → nothing to correct
+  const size_t N = children.size();
+  const size_t snapLastN = lastChildCount_;
+  if (N != snapLastN) {
+    failCnt = true;
+    RNCV_HSUB_DIAG_FAIL_CHILDCOUNT();
+    // Sample 1 in 10 cnt-change occurrences — the full set would flood at
+    // cnt=100%. Tells us whether N is oscillating (pool eviction +
+    // re-mount as V scroll moves past + back to the section) or growing /
+    // shrinking with a different pattern.
+#if RNCV_HSUB_SKIP_DIAG
+    uint32_t cChange = g_hsubCntChangeCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (cChange % 10 == 0) {
+      fprintf(stderr, "[RNCV-HSUB-CNTCHG] #%u s=%d N=%zu→%zu delta=%+d\n",
+              cChange, props.sectionIndex, snapLastN, N,
+              (int)(N - snapLastN));
+      fflush(stderr);
+    }
+#endif
+  }
+  if (N == 0 && !failVer && !failHMvc && !failCnt) {
+    // Empty children + no other change signals → nothing to correct.
+    return true;
+  }
+  if (N == 0) {
+    // Empty but something else changed → fall through to update tracked state
+    // by running correction (it's a no-op anyway for empty children).
+    return false;
+  }
 
   // Boost-style hash combine of child Fabric tags AND full Yoga frame.
   //
@@ -131,14 +310,62 @@ bool CollectionSubContainerShadowNode::shouldSkipCorrection() {
       yogaHash ^= v + 0x9e3779b9 + (yogaHash << 6) + (yogaHash >> 2);
     }
   }
-  if (tagHash != lastChildTagsHash_) return false;
+  if (tagHash != lastChildTagsHash_) {
+    failHash = true;
+    RNCV_HSUB_DIAG_FAIL_HASH();
+  }
 
   // Log only on mismatch — the interesting case where content changed.
   if (yogaHash != lastYogaHeightHash_) {
     RNCV_HSUB_LOG("SKIP-CHECK sIdx=%d yogaFrame mismatch: %zu → %zu (running correction)",
                   props.sectionIndex, lastYogaHeightHash_, yogaHash);
+    failHash = true;
+    RNCV_HSUB_DIAG_FAIL_HASH();
+  }
+
+  // ── Per-call sample log — every 100th sub-container layout() invocation ──
+  // Emits one line with the full state diff. Identifies which section, the
+  // current and previous values for every check, and whether each fired.
+  // Density: with 4 active sub-containers, ~1 sample line every 25 Fabric
+  // commits — light enough to read, dense enough to spot cascade patterns.
+  //
+  // Cascade detection: if `ver=A→B` and B-A>1 in consecutive lines for the
+  // same section, another sub-container wrote between this section's
+  // commits → cache version cascade is real.
+#if RNCV_HSUB_SKIP_DIAG
+  {
+    const uint32_t curCommits = g_hsubCommits.load(std::memory_order_relaxed);
+    if (curCommits % 100 == 0) {
+      fprintf(stderr,
+        "[RNCV-HSUB-SAMPLE] #%u s=%d isH=%d "
+        "lcv=%d→%d ver=%llu→%llu hMvc=%llu→%llu N=%zu→%zu "
+        "fired{lcv=%d ver=%d hMvc=%d cnt=%d hash=%d}\n",
+        curCommits,
+        props.sectionIndex,
+        isH ? 1 : 0,
+        snapLastLCV, curLCV,
+        (unsigned long long)snapLastVer, (unsigned long long)cv,
+        (unsigned long long)snapLastHMvc, (unsigned long long)hMvcCur,
+        snapLastN, N,
+        failLcv ? 1 : 0,
+        failVer ? 1 : 0,
+        failHMvc ? 1 : 0,
+        failCnt ? 1 : 0,
+        failHash ? 1 : 0);
+      fflush(stderr);
+    }
+  }
+#endif
+
+  // Decision: skip only when none of the authoritative C++ signals fired.
+  // LCV (JS-side) is recorded in failLcv but intentionally NOT considered
+  // here — it's a redundant downstream signal that fires on passive cache
+  // observation, which we'd otherwise re-detect via failVer.
+  if (failVer || failHMvc || failCnt || failHash) {
     return false;
   }
+  // Suppress unused-variable warning when diag macros expand to no-ops.
+  (void)failLcv;
 
   RNCV_HSUB_LOG("SKIP-DECISION sIdx=%d SKIP cv=%llu N=%zu",
                 props.sectionIndex,
@@ -153,12 +380,17 @@ void CollectionSubContainerShadowNode::layout(LayoutContext layoutContext) {
   // Step 1: Yoga sizes children.
   ConcreteViewShadowNode::layout(layoutContext);
 
+  // Diagnostic counter — must increment BEFORE the skip branch so commits
+  // count includes skipped invocations.
+  RNCV_HSUB_DIAG_COMMIT();
+
   // H-4b: Skip correction + state update when children + cache are unchanged.
   // The state from the previous commit (carried forward by Fabric clone) is
   // already correct — no need to re-read cache, compute deltas, or diff state.
   if (shouldSkipCorrection()) {
     RNCV_SUB_LOG("layout() SKIP — children + cache unchanged");
     RNCV_HSUB_LOG("LAYOUT-SKIP (H-4b confirmed)");
+    RNCV_HSUB_DIAG_SKIP();
     return;
   }
 
@@ -321,6 +553,23 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
       ? engine->contentDeterminedDimension()
       : rncv::ContentDimension::Height;
 
+  // Gate the per-cell visual-attrs cache read: when the layout doesn't write
+  // non-default alpha/zIndex/transform3D, ChildVisualState defaults (opacity=1,
+  // zIndex=0, hasTransform=false) already match what the cache would return.
+  // Skipping the read avoids N mutex-locked cache lookups per commit.
+  // Static H layouts (flow / list horizontal / grid horizontal etc.) — which
+  // make up all of storefront — go through this fast path.
+  //
+  // When the gate IS open (radial / spiral / carousel3D), we use a single
+  // bulk-read with one mutex acquisition instead of N per-cell getAttributes
+  // calls — eliminates lock contention on the cache during scroll-driven
+  // recomputation.
+  const bool layoutWritesVisualAttrs = engine && engine->writesVisualAttributes();
+  rncv::BulkAttributesResult bulkAttrs;
+  if (layoutWritesVisualAttrs && cache) {
+    bulkAttrs = cache->getAttributesForKeys(keys);
+  }
+
   std::vector<rncv::MeasurementDelta> deltas;
 
   for (size_t i = 0; i < N; ++i) {
@@ -335,20 +584,21 @@ void CollectionSubContainerShadowNode::correctChildPositionsIfNeeded() {
       cv.h = static_cast<Float>(bulkFrames.frames[i * 4 + 3]);
     }
 
-    // Pull richer attributes (transform/opacity/zIndex) from cache when present.
-    // These are written by scroll-driven layouts (radial, spiral, carousel3D)
-    // via setAttributesBatch.
-    if (cache && !keys[i].empty()) {
-      auto attrs = cache->getAttributes(keys[i]);
-      if (attrs) {
-        cv.opacity = static_cast<Float>(attrs->alpha);
-        cv.zIndex  = static_cast<Float>(attrs->zIndex);
-        if (attrs->transform3D != rncv::kIdentityTransform3D) {
-          for (size_t k = 0; k < 16; ++k) {
-            cv.transform[k] = static_cast<Float>(attrs->transform3D[k]);
-          }
-          cv.hasTransform = true;
+    // Pull richer attributes (transform/opacity/zIndex) from cache when the
+    // layout writes them (radial, spiral, carousel3D via setAttributesBatch).
+    // Static layouts skip this block entirely — their cache attrs would be
+    // identity defaults matching ChildVisualState's own defaults. When the
+    // gate is open, attrs came from a single bulk read above (one mutex
+    // acquisition for all keys).
+    if (layoutWritesVisualAttrs && i < bulkAttrs.found.size() && bulkAttrs.found[i]) {
+      const auto& a = bulkAttrs.attrs[i];
+      cv.opacity = static_cast<Float>(a.alpha);
+      cv.zIndex  = static_cast<Float>(a.zIndex);
+      if (a.transform3D != rncv::kIdentityTransform3D) {
+        for (size_t k = 0; k < 16; ++k) {
+          cv.transform[k] = static_cast<Float>(a.transform3D[k]);
         }
+        cv.hasTransform = true;
       }
     }
 

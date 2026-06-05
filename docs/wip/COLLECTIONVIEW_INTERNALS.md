@@ -1352,3 +1352,141 @@ Changing `extraData` forces a re-render of ALL visible cells — regardless of w
 ### Why `remeasureOnItemChange` is `@unstable`
 
 `remeasureOnItemChange` only bumps `layoutCacheVersion` — it does NOT call `nativeLayoutCache.removeAttributes`. If the LayoutCache still holds a stale measured height for the key, the layout pass sees the cached height and may not re-measure. This makes the resize conditional on LayoutCache state and can silently fail. Use `invalidateKeys` explicitly for reliable resize.
+
+---
+
+## Perf investigations for compositional layout (2026-06-05)
+
+A series of investigations targeting CPU/FPS regressions observed on compositional-layout pages — particularly storefront (all sections share one widget type) where Riff trailed FlashList on percentile CPU (p75/p90) despite winning on memory, min FPS, and active component count. The root causes turned out to be several distinct issues in the shouldSkipCorrection machinery, all of which silently increased per-commit work. Each was isolated, fixed, and verified with a dedicated C++ diagnostic. Documented here so future maintainers don't re-discover the same patterns.
+
+### The bench setup
+
+- Device: iPhone 15 Pro, iOS Low Power Mode ON (deliberate memory/CPU pressure for stress testing)
+- App: example workspace with three pages (storefront, homepage, search-results) — each can run either engine (Riff or FlashList) via toggle
+- Benchmark: 6 scroll scenarios (slow ↓/↑ @ 20pt/frame, fast ↓/↑ @ 100pt/frame, fling ↓/↑) × 5 rounds, sampled at 200ms with synchronous CPU + memory + FPS readings
+- Compositional layouts: storefront has 8 mixed sections (V list, V grid, V masonry, V flow, H list, H grid) all using one product-card type; homepage has 7 sections of varied widget types (banner, product card, category chip, etc.); search has ~7 sections mostly product cards
+
+### Issue 1: Visual-attributes pipeline running on every commit, regardless of layout type
+
+**Surfaced when:** a commit added per-cell visual-attribute application (alpha, zIndex, transform3D) into `applyPositionsFromState:` to support scroll-driven layouts (radial, carousel3D). The path ran for every cell on every commit, even for layouts whose values would always be identity.
+
+**Cost shape:** per cell per commit — NSString → UTF8 cacheKey conversion, `layoutCacheForId` registry lookup, mutex-locked single-key `cache->getAttributes`, three CALayer property writes (alpha / zPosition / transform) even when values are at identity. Multiplied by active cell count × commit frequency = measurable CPU on H-heavy pages.
+
+**Fix:** gate the block on a `layoutWritesVisualAttributes` codegen prop derived from the JS layout's `writesVisualAttributes` flag. Static layouts (list / grid / masonry / flow / compositional with all-static sub-sections) skip the block entirely. Dynamic layouts (radial, carousel3D, spiral, hex, custom) keep the path. Files: `ios/RNCollectionViewContainerView.mm`, `cpp/CollectionSubContainerShadowNode.cpp`, JS layout sources.
+
+### Issue 2: JS-side `layoutCacheVersion` redundantly invalidating sub-container skip checks
+
+**Surfaced when:** even after issue 1's fix, sub-container `shouldSkipCorrection` skip rate stayed near 0% on bench. C++ instrumentation showed the LCV check at the top of `shouldSkipCorrection` was failing on every commit.
+
+**Cause:** JS-side `layoutCacheVersion` (a React state in CollectionView.tsx that triggers Fabric re-commits) is bumped from 8 sites. Five are *passive* — JS observing a C++ cache version change via double-RAF poll or scroll handler. Three are *active* — JS-initiated invalidation (`invalidateItem`, `snapshot.apply`, `remeasureOnItemChange`). Sub-containers were treating every LCV bump as a reason to re-run correction, but passive bumps are redundant with the C++ `cache->version()` check that sub-containers also perform.
+
+**Fix:** in `CollectionSubContainerShadowNode::shouldSkipCorrection`, record the new LCV value but do NOT early-return on a mismatch. Fall through to the authoritative C++ checks (cache version, hMvc version, child count, tag/Yoga hash). The C++ side catches every real reason to re-run; LCV is a redundant trigger. Active LCV bumps still work because they accompany other observable signals — `invalidateItem` bumps `renderGen` which forces window cells to re-render, which produces Yoga measurement changes the hash check catches. Files: `cpp/CollectionSubContainerShadowNode.cpp`.
+
+### Issue 3: Missing clone constructor — silent skip-state reset
+
+**Surfaced when:** even after issue 2's fix, skip rate stayed at 0%. Refined diagnostic emitted per-call detail showing `lastCacheVersion_=0, lastHMvcVersion_=0, lastLayoutCacheVersion_=-1, lastChildCount_=0` on every single sub-container layout() call — the declared default initializers, every time.
+
+**Cause:** Fabric clones ShadowNodes on every commit. The clone path uses a *specific* constructor signature `(sourceShadowNode, fragment)` — NOT the C++ default copy constructor (which is explicitly `= delete`'d on the base `ShadowNode` class). The base class clone copies base-class state but knows nothing about derived-class members. The common shortcut `using ConcreteViewShadowNode::ConcreteViewShadowNode;` inherits constructors into the overload set but does not propagate derived-class fields — they get default-initialized on every clone.
+
+So every Fabric commit produced a fresh sub-container clone with `lastXxx_` fields at their declared defaults. The skip check compared "current values" against "defaults" — always failed.
+
+**Fix:** declare and implement an explicit clone constructor in both `CollectionSubContainerShadowNode` and `CollectionViewContainerShadowNode`:
+
+```cpp
+CollectionSubContainerShadowNode(
+    const ShadowNode& sourceShadowNode,
+    const ShadowNodeFragment& fragment)
+    : ConcreteViewShadowNode(sourceShadowNode, fragment) {
+  const auto& source =
+      static_cast<const CollectionSubContainerShadowNode&>(sourceShadowNode);
+  lastCacheVersion_       = source.lastCacheVersion_;
+  lastHMvcVersion_        = source.lastHMvcVersion_;
+  lastLayoutCacheVersion_ = source.lastLayoutCacheVersion_;
+  lastChildCount_         = source.lastChildCount_;
+  lastChildTagsHash_      = source.lastChildTagsHash_;
+  lastYogaHeightHash_     = source.lastYogaHeightHash_;
+}
+```
+
+The `static_cast` is safe because Fabric guarantees the source has the same dynamic type. The explicit constructor overrides the using-declaration's version for the `(source, fragment)` signature.
+
+**Lesson for any future custom ShadowNode subclass:** if you add member fields intended to survive across commits, you MUST also define this constructor explicitly. Treat the field declaration and the clone-ctor propagation as a single unit.
+
+Files: `cpp/CollectionSubContainerShadowNode.h/.cpp`, `cpp/CollectionViewContainerShadowNode.h/.cpp`. Skip rate jumped from 0% to ~30% with this fix.
+
+### Issue 4: Cross-talk between V container and sub-container via shared `_version`
+
+**Surfaced when:** after issue 3, sub-container skip rate stabilised at ~30%. C++ diag broke down the remaining 70% by failure cause: `fail.ver = 66%` dominated. The V container's `correctChildPositionsIfNeeded` was calling `applyMeasurements` ~64% of commits (cells streaming in during V scroll) — each call bumped `cache->version()` via `endBatch()`. Every active sub-container observed that bump and failed its skip check.
+
+Measured 1:1 correlation: V `applyMeas` count × average active sub-container count = sub-container `fail.ver` count, accurate to 0.2%.
+
+**Why it was wrong:** sub-containers read positions of their own children (H cells inside them), keyed by their own cache entries. V container writes positions of V cells (and the wrapper view position). These are non-overlapping. V's writes should not invalidate sub-containers.
+
+**Fix:** add a third version counter `_vVersion` to LayoutCache, paralleling the existing `_hMvcVersion`. V container's `correctChildPositionsIfNeeded` calls `cache->endVBatch()` (new) instead of `cache->endBatch()` — bumps `_vVersion` only. Sub-containers continue checking `cache->version()` (cross-cutting) and `cache->hMvcVersion()` (their own H writes) — they do NOT observe `_vVersion`. V container observes `_version` AND `_vVersion` (to detect its own writes).
+
+| Counter | Bumped by | Observed by |
+|---|---|---|
+| `_version` | JS mutations, prepare, fallback paths | V container, all sub-containers |
+| `_hMvcVersion` | H sub-container's `applyMeasurements` (`endHBatch`) | H sub-containers only |
+| **`_vVersion`** (new) | V container's `applyMeasurements` (`endVBatch`) | V container only |
+
+Files: `cpp/LayoutCache.h`, `cpp/LayoutCache.cpp`, `cpp/CollectionViewContainerShadowNode.h/.cpp`. Sub-container `fail.ver` dropped from 1127 → 54 (–95%). Skip rate jumped from ~30% to ~80%.
+
+### Diagnostic methodology
+
+Two C++ compile-time diagnostic blocks, gated by `RNCV_HSUB_SKIP_DIAG` (in `CollectionSubContainerShadowNode.cpp`) and `RNCV_V_SKIP_DIAG` (in `CollectionViewContainerShadowNode.cpp`). Each defaults to `0`; flip to `1` to enable.
+
+**Sub-container diag** emits `[RNCV-HSUB-DIAG]` every 50 sub-container layout() invocations with a per-reason breakdown:
+```
+commits=N skips=M skipRate=X% fail{lcv=A noCache=B ver=C hMvc=D cnt=E hash=F}
+```
+Also emits `[RNCV-HSUB-CNTCHG]` every 10th cnt-change event and `[RNCV-HSUB-SAMPLE]` every 100th call with full state snapshot.
+
+**V container diag** emits `[RNCV-V-DIAG]` every 50 V container layout() invocations:
+```
+commits=N skips=M skipRate=X% applyMeas=K avgDeltas=D
+```
+
+Both diags are zero-cost in release (macros expand to `((void)0)`). Re-enable for any future investigation into skip-correction behaviour.
+
+### Bench progression (storefront, X-Recycle ON, steady-state)
+
+| | Pre-investigation | Post-issue-1 | Post-issue-3 | Post-issue-4 |
+|---|---|---|---|---|
+| Sub-container skip rate | broken | 0% | ~30% | ~80% |
+| Sub-container fail.ver (% of commits) | n/a | ~100% | ~66% | ~4% |
+| Storefront Avg CPU | ~22% | ~22% | ~22% | ~21% |
+| Storefront p75 CPU | 34-36% | 34-36% | 32-36% | 32% |
+| Storefront p90 CPU | 38-42% | 38-42% | 38-42% | 37% |
+| Storefront Min FPS | 35-45 | 35-45 | 38-43 | 45 |
+
+The headline insight: even though the diag showed dramatic improvement from issue 4 (sub-container skip rate 30% → 80%), the absolute CPU impact on storefront was modest (~1-2% Avg CPU, larger gains at the p90 tail and on Min FPS). The cascade was correct to fix, but each sub-container correction was a small slice of total per-commit work. The dominant cost on storefront is the V container's own correction work (which is genuine — measuring cells streaming in during V scroll).
+
+Homepage, with its lighter V correction load (multiple widget types, fewer cells per commit), showed cleaner gains — p90 CPU dropped from 32-34% → 28%.
+
+### Cross-section recycling toggle
+
+In parallel with the skip-correction fixes, added a `crossSectionRecycling` prop on `Riff` (default `true`). When `false`, SlotManager keys its pool by `(sectionIndex, itemType)` instead of just `itemType` — each section gets its own private pool. Useful for diagnosis; not a default win.
+
+**Bench finding on storefront:** X-Recycle OFF made memory significantly worse (peak ~2× higher, since each section retains its own pool of warm cells) with no CPU win. Cross-section reclamation IS valuable on single-widget-type-dominant pages because it spreads pool capacity across sections that share the same widget type. The toggle stays the right default ON.
+
+The toggle is wired to the PerfHood overlay (X-Recycle button) for runtime experimentation. `SlotManager.setCrossSectionRecycling(value)` migrates the existing pools to the new keying without destroying slots — React Fibers, state, and in-flight animations are preserved across the toggle.
+
+### Remaining items in backlog (not pursued this round)
+
+- **B4.18** Tighter `applyMeasurements` thresholds in V container — would catch sub-pixel Yoga jitter, but most current writes are real cell measurements; expected impact <2%
+- **B4.19** Coalesce all cache writes within a Fabric commit into one batch — would reduce version bumps when multiple writers contribute per commit; not currently observed as a frequent scenario
+- **B4.20** Defer non-critical measurements (measure-band cells that aren't in render range) — only meaningful with `measureAhead > 0`, which is disabled in current bench
+- **B4.21** Defer V correction during high-velocity scroll, catch up at scroll-end / idle — most aggressive remaining lever for storefront; carries real risk of visible-cell staleness during fast scroll; needs scroll-velocity awareness + catch-up mechanism; significant architectural change
+- **B-hsection-private-pools** Per-H-section private slot pools — alternative pool architecture for single-widget-type pages; could help further but storefront's bench numbers don't strongly motivate it
+
+### Key files
+
+- `cpp/LayoutCache.h/.cpp` — `_version`, `_hMvcVersion`, `_vVersion`, batch + `endBatch` / `endHBatch` / `endVBatch`
+- `cpp/CollectionViewContainerShadowNode.h/.cpp` — V container's clone constructor, `shouldSkipCorrection` (checks `version` AND `vVersion`), `correctChildPositionsIfNeeded` (calls `endVBatch`)
+- `cpp/CollectionSubContainerShadowNode.h/.cpp` — sub-container's clone constructor, `shouldSkipCorrection` (checks `version`, `hMvcVersion`, `cnt`, `hash` — does NOT observe `vVersion`)
+- `src/components/SlotManager.ts` — `crossSectionRecycling`, `setCrossSectionRecycling()` non-destructive migration
+- `src/components/CollectionView.tsx` — `crossSectionRecycling` prop wiring, useEffect propagation
+- `src/types/protocol.ts` — `writesVisualAttributes` and `crossSectionRecycling` documented on `RiffLayout`
+- `example/components/PerfHood.tsx` — X-Recycle toggle button + dev counters
+

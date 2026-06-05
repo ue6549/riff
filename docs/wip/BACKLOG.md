@@ -75,6 +75,28 @@ The proxy is reliable today but not semantically precise. `displayType == Displa
 
 **Root cause documented for posterity:** Fabric does not re-clone `CollectionViewContainerShadowNode` for in-cell `setState` (the container's child array is structurally unchanged). `layout()` never fires, so `correctChildPositionsIfNeeded` never runs and the stale cached height is never evicted. An explicit signal is necessary — this is by design, matching UIKit's `invalidateLayout()` pattern.
 
+### B1.11 RN < 0.83 Activity fallback — clamp `measureAhead` only (B-pre83-measureahead)
+
+**Surfaced during:** session-prep validation (2026-06-03); refined by storefront diagnosis (2026-06-04).
+
+**Problem:** `Activity` resolves to `undefined` on RN < 0.83 (CollectionView.tsx:51–56). The `CellWrapper` fallback at line 1016 returns `<>{children}</>` — `measureOnly` no longer suppresses render. Two features behave differently in this fallback path:
+
+1. **Slot pool retention** — STILL useful on older RN. Pool re-renders cost subtree reconciliation only (no useEffect re-fire because deps are stable, no Yoga re-measure, no native UIView allocation). Cold-mount cost on re-entry is strictly higher than pool re-render cost for any cell that re-enters. Pool clamp would *hurt* bouncy workloads. **Do NOT clamp pool size based on Activity availability** — keep the consumer-tunable `recyclePoolSize` knob working on all RN versions. The consumer knows whether their workload re-enters cells (set high) or scrolls linearly (set low).
+
+2. **`measureAhead > 0`** — NOT useful without Activity. Its sole purpose is "mount cell, let Yoga measure, but suppress paint + useEffect." Activity is the mechanism that suppresses; without it the cells render fully, paint at their below-viewport position (clipped by UIScrollView but the React + Yoga compute already ran), useEffect fires. Zero observable benefit, full compute cost.
+
+**Fix:** when `Activity === undefined`, clamp the effective `measureAhead` to 0 regardless of the consumer prop value. Log a `__DEV__`-only warning the first time a non-zero `measureAhead` is observed on a pre-Activity build so consumers notice they're configuring a no-op.
+
+**Where:** `src/components/CollectionView.tsx` measureAhead read path (where the effective value is computed from props + memory pressure).
+
+**Document** in README §"Why Riff" §4 / §"Windowing and the slot pool":
+- `recyclePoolSize` works on all RN versions; trade is memory ↑ (cell stays mounted) for CPU ↓ (no cold mount on re-entry). On RN 0.83+ pool members are frozen by Activity (cheap memory); on older RN they re-render on parent reconcile (still cheaper than cold mount but not free).
+- `measureAhead` only takes effect on RN 0.83+. Older RN silently clamps to 0 — consumer needs to ship with first-paint correction visible if they expect content above first-paint to be variable-height.
+
+**Effort:** ~0.5d (clamp + dev warning + README paragraph + test).
+
+**Priority:** Pick up before any concerted RN < 0.83 support work. Not urgent for the current target (RN 0.83.4).
+
 ---
 
 ## B2 — High-Impact Features (Remaining)
@@ -166,6 +188,21 @@ Document + export the H-2 `RNCollectionSubContainer` framework so consumers can 
 
 **Priority:** After B2.7 (JS layout fix) to establish both extension paths simultaneously.
 
+### B3.5 `invalidateItem` API truthfulness (B-invalidate-api-truth)
+
+**Surfaced during:** session-prep validation (2026-06-03).
+
+**Problem:** The `invalidateItem(sectionIndex, itemIndex)` ref method (CollectionView.tsx:2148–2157) ignores both arguments. It bumps `invalidateTrigger` and `layoutCacheVersion`, which forces a full re-render of all window cells via the `renderGen` increment path. The README §9 framing — "Riff runs `invalidateFrom(i)` in C++ — only items from index i onward reflow" — is partially aspirational: the C++ tail-only path does run, but it's triggered after the full-window React re-render, not as a direct targeted invalidation from `(section, index)`.
+
+**Two options:**
+
+1. **Rename the API to match behaviour** — `invalidateWindow()` (or keep `invalidateItem` as an alias for callers that pass coordinates for documentation value, but make the arguments truly optional and clearly noted as unused). Updates README §9 accordingly. Cheap, honest.
+2. **Implement actual targeted invalidation** — route the call to evict only the named cell from the LayoutCache, force Fabric to re-measure only that cell (challenging — Fabric doesn't re-clone the container ShadowNode without a structural child-array change; see B1.10 root-cause note). Likely needs a synthetic dirty-flag prop on the child or a direct JSI bypass.
+
+**Recommendation:** Option 1 in the near term. Option 2 only if the full-window React re-render becomes a measurable cost on cell-resize-heavy pages.
+
+**Effort:** Option 1 ~0.5d (rename + README update). Option 2 ~2d+.
+
 ---
 
 ## B4 — Residual Perf (Remaining)
@@ -242,6 +279,168 @@ The `scrollTo*` / `scrollToSection` API implemented via `invokeScrollHandler` ro
 
 **Effort:** ~1d
 
+### B4.17 V-container cache-version bump source investigation (B-cache-version-bumps) — TOP PRIORITY
+
+**Surfaced during:** post-clone-ctor-fix bench (2026-06-05).
+
+**Context:** With the clone-constructor bug fixed, `shouldSkipCorrection` works correctly. Skip rate jumped from 0% to ~30% across all three bench pages. **The remaining 70% of correction runs are driven by `cache->version()` changes** — specifically, `fail.ver=66%` on storefront (1054/1600), `fail.ver=64%` on homepage, `fail.ver=67%` on search. Cache version is bumping by ~1 per Fabric commit during V scroll.
+
+The likely source: V container's `correctChildPositionsIfNeeded` writes measured heights via `applyMeasurements` as new cells enter render range during V scroll. New cells have estimated heights; Yoga measures them differently; the layout engine cascades; `endBatch()` bumps `_version`. Each such bump invalidates every sub-container's skip check on the next commit.
+
+This isn't necessarily a bug — measuring incoming cells during scroll is legitimate work. But it's putting a ~30% ceiling on skip rate. Investigation needed to determine:
+
+1. Are all of those writes truly necessary, or is some Yoga sub-pixel drift triggering needless `applyMeasurements`?
+2. Can the V container's `correctChildPositionsIfNeeded` batch multiple measurements into one `_version` bump per commit instead of one bump per measurement?
+3. Could the V container's writes use a separate counter (e.g. `_vMvcVersion` analogous to `_hMvcVersion`) that sub-containers don't observe, so V correction doesn't fan out to sub-containers?
+
+Approach: instrument the V container's `correctChildPositionsIfNeeded` to count `applyMeasurements` calls per commit and how many deltas were in each batch. If average batch size > 1, batching might already coalesce. If avg = 1 per commit, one write per scrolled-in cell is happening.
+
+**Effort:** ~1d for instrumentation + analysis. Fix effort depends on findings:
+- If sub-pixel drift: tighten threshold in the V engine's delta detection (~0.5d)
+- If genuine batching coalescing opportunity: refactor commit/batch boundaries (~1-2d)
+- If `_vMvcVersion` split: similar to `_hMvcVersion` precedent (~1d)
+
+**Priority:** TOP — this is the next bottleneck after the clone-ctor fix. Bench numbers show ~30% skip rate; pushing to 80-90% requires understanding what's driving the version bumps.
+
+### B4.18 Tighter applyMeasurements thresholds — V container (B-tighter-thresholds)
+
+**Surfaced during:** post-clone-ctor-fix bench (2026-06-05).
+
+**Problem:** Sub-container's `correctChildPositionsIfNeeded` filters Yoga deltas with a 0.5pt threshold to suppress sub-pixel jitter. The V container may not be as aggressive. If Yoga drift below 0.5pt triggers `applyMeasurements` in V correction, every commit during V scroll could be writing trivial corrections that bump `_version` and invalidate sub-container skip checks.
+
+**Investigation:** check V container's delta threshold and Yoga-vs-cache comparison logic. Compare to sub-container's pattern at `CollectionSubContainerShadowNode.cpp:381` (`kCellMVCThresholdPt = 0.5f`).
+
+**Effort:** ~0.5d to investigate + tighten if applicable.
+
+### B4.19 Coalesce cache writes within a Fabric commit (B-coalesce-writes)
+
+**Surfaced during:** post-clone-ctor-fix bench (2026-06-05).
+
+**Goal:** ensure a single Fabric commit produces a single `_version` bump regardless of how many cache writes happen during that commit. The V container, sub-containers, and any engine-driven recomputation should all write under one `beginBatch()` / `endBatch()` pair scoped to the commit.
+
+Currently `beginBatch`/`endBatch` is used inside specific engines (e.g. `applyMeasurements`), but cross-cutting writes (V correction → cache write, then sub-container correction → cache write) may each produce their own bump. Coalescing across the entire commit cycle would mean sub-containers only see one `_version` delta per Fabric commit, capping cascade fan-out.
+
+**Approach:** wrap `ShadowNode::layout()` of the V container in `beginBatch()`/`endBatch()`. Sub-containers nested inside this scope would have their writes coalesced into the outer batch.
+
+**Effort:** ~1-1.5d. Needs care: batch reentry semantics must support nesting; existing batch users (engine `applyMeasurements`) must continue to work.
+
+### B4.21 Defer V correction during high-velocity scroll (B-defer-v-correction)
+
+**Surfaced during:** post-B4.17-fix bench review (2026-06-05).
+
+**Context:** After all skip-correction fixes (clone ctor, LCV-removal, vVersion split), storefront's p75/p90 CPU still trails FlashList by 3-8 points (Riff 32/37% vs Flash 29/29%). The remaining cost is the V container's own `correctChildPositionsIfNeeded` running on ~95% of Fabric commits during fast scroll, with each call doing real layout work (Yoga delta detection, `applyMeasurements`, position cascade, state delivery).
+
+The work itself is legitimate — cells genuinely stream into render range and need their measured heights applied. But during fast V scroll, the user can't perceive sub-pixel position corrections happening every frame. There may be room to defer the corrections until scroll velocity drops or scroll ends.
+
+**Proposed approach:**
+- Read scroll velocity from the LayoutCache (already tracked via `setScrollOffset`)
+- During high-velocity scroll (e.g. > 50pt/frame), skip `applyMeasurements` writes in `correctChildPositionsIfNeeded` — keep the cached estimates as the current frame's positions, defer real corrections
+- Maintain a "pending corrections" set; flush on `didEndDecelerating` / `didEndDragging` / sustained low-velocity frame
+- Sub-containers continue to function normally (they read positions from cache; cache stays at estimates during the deferred window)
+- Once the user stops scrolling, flush the queue: one large `applyMeasurements` batch with all accumulated deltas → one cache version bump → one re-correction pass through sub-containers
+
+**Risks:**
+1. **Visible-cell staleness during fast scroll** — if a cell's measured height differs significantly from its estimate, the visible position would shift on scroll-end as the deferred correction lands. Acceptable for sub-pixel deltas; bad for large deltas (e.g. image-load resize during fling).
+2. **MVC interaction** — `maintainVisibleContentPosition` relies on position changes propagating to scroll-offset adjustments. Deferral could produce visible jumps when corrections flush.
+3. **Heuristic tuning** — what counts as "high velocity"? Per-platform? Per-device?
+
+**Effort:** ~2-3 days for prototype + tuning + bench verification. The most aggressive remaining optimization on storefront.
+
+**Priority:** Pursue only if storefront's p75/p90 gap vs FlashList becomes a real product issue. Current Riff wins on min FPS, p5 FPS, memory, and active component count even on storefront; the percentile-CPU gap is an analytical loss but not a perceived loss.
+
+### B4.20 Defer non-critical measurements (B-defer-measurements)
+
+**Surfaced during:** post-clone-ctor-fix bench (2026-06-05).
+
+**Goal:** cells entering the *measure* range but not the *render* range don't strictly need their measured heights applied immediately — the user can't see them. Defer those corrections until they actually enter the render range (or until idle time after scroll-end). Reduces cache writes during fast scroll.
+
+**Risk:** estimates may be inaccurate at first paint when a cell scrolls into render range. May produce a one-frame correction flicker on fast scroll. Trade between scroll smoothness and first-paint accuracy.
+
+**Effort:** ~1-1.5d to implement + test for paint flicker.
+
+### B5.6 Document crossSectionRecycling + per-section pool model (B-doc-cross-section-recycling)
+
+**Surfaced during:** post-clone-ctor-fix bench (2026-06-05).
+
+**Pending docs work** — to be done AFTER bench numbers validate the `crossSectionRecycling` prop's impact across the three workloads:
+
+1. **README** §"Windowing and the slot pool" — add `crossSectionRecycling` prop to the "four knobs" tuning section. Explain trade-off (global pool vs per-section pool); when to set to false (single-widget-type-across-many-sections workloads like product feeds); note migration is non-destructive (slot keys preserved). Add to "Tuning the four knobs" table.
+
+2. **`session_riff_sneak_peek.md` (slide deck)** — extend the R4 (slot lifecycle) block: add a note that pool keying can be global vs per-section, controlled by `crossSectionRecycling` prop. Show the trade-off in one sentence each.
+
+3. **`session_riff_handout.md` (engineer handout)** — substantive section after the "Tuning the four knobs" content. Cover: SlotManager's pool-keying mechanism (single map keyed by `itemType` or `${section}|${itemType}`), the non-destructive migration semantics of `setCrossSectionRecycling()`, the storefront-style workload pattern (one widget type → high cross-section churn), and benchmark guidance ("toggle via PerfHood, measure both states").
+
+Hold off until at least one full bench cycle with both states confirms the model and produces consistent numbers — the docs need real numbers, not speculation.
+
+### B4.16 Per-H-section private slot pools (B-hsection-private-pools)
+
+**Surfaced during:** storefront regression diagnosis (2026-06-05).
+
+**Problem:** Riff's current slot pool is keyed by `getItemType` and SHARED globally across V and H sections. On pages where multiple sections use the same widget type (storefront: all 8 sections use one product card type), the single shared pool absorbs evictions from every section. Consequences:
+
+1. **Pool churn dominates the bench** — V scroll moving past a section evicts its H cells; the pool capacity is consumed faster than its `recyclePoolSize` (default ~16, storefront tested up to 64). Cells from sections currently in V scope get evicted by sections that just left scope.
+2. **`shouldSkipCorrection` cnt-check fails 100%** — when a section re-enters V scope, its sub-container wrapper is still mounted (the wrapper is one slot, easy to retain) but the cells inside are gone; they cold-mount. Wrapper's child count goes `N → 0 → N` constantly. Every commit on every sub-container sees a cnt change.
+3. **Pre-RN-0.83 path is even worse** — without `Activity=hidden` suppression, pool-retained cells render full-cost on every parent reconcile.
+
+**Proposed alternative:** each H sub-container owns its own private pool, sized for its own H render range (~hWindow × 2). H cells of section A only compete with section A's own evictions, not with section B's. With 4 sections × ~10-20 retained cells each, total mounted ≈ ~40-80 cells per type but isolated — and section A's cells survive V-scroll-past-and-back because nothing else's evictions are competing for A's pool.
+
+The V container's slot pool can stay global (V cells aren't subject to the same cross-section pool churn pattern).
+
+**Design questions to resolve:**
+- Where does the pool live? On the H sub-container instance (SlotManager subordinate)? Or via a separate pool manager keyed by (sectionIndex, itemType)?
+- How to compute size? Static (set via prop)? Auto (derived from hWindow)?
+- How to handle compositional pages where some H sections are empty (e.g. a section in V scope but with zero items currently visible)?
+- Backwards compat: should the existing global pool stay as a fallback for V cells while H sections opt into private pools?
+
+**Effort:** ~3-5d for the implementation + benchmarking. This is a significant architectural change to the slot manager.
+
+**Priority:** Pursue after the immediate `shouldSkipCorrection` work has been investigated (B4.14, B-cascade-investigation). If the diag's per-section sampling reveals that cross-section pool churn is the dominant cause of storefront's CPU regression, this becomes the primary fix.
+
+### B4.14 H sub-container commit-fanout metric (B-subcontainer-commit-fanout-metric)
+
+**Surfaced during:** storefront regression diagnosis (2026-06-04).
+
+**Hypothesis:** every V container commit may cascade into a commit on each H sub-container, even when the sub-container's own state is unchanged. `CollectionSubContainerShadowNode` has a `shouldSkipCorrection` hash check, but its hit rate is unknown. If hit rate is low on storefront (10 mixed sections all sharing one widget type), every V scroll tick fans out into 5–10 sub-container commits → that's the N× multiplier on percentile CPU even after the visual-attrs gate and the pool-size bump.
+
+**Investigation plan:**
+- Add HUD counters: `hsub_commit_per_sec`, `hsub_skip_per_sec`, ratio.
+- Run storefront bench. Expected outcomes:
+  - Skip-rate ≥80%: fan-out is not the bottleneck; close as not-a-problem.
+  - Skip-rate <50%: investigate what's bumping each sub-container's hash on V-only scrolls. Likely candidates: `lastCacheVersion_`, `lastHMvcVersion_`, `lastChildCount_` tracking is too aggressive and triggers when sub-container's own state is genuinely unchanged.
+
+**Effort:** ~0.5d to add counters + measure. Follow-up effort depends on findings.
+
+### B4.15 Deferred Phase-2 pool unmount (B-deferred-pool-unmount)
+
+**Surfaced during:** storefront regression diagnosis (2026-06-04).
+
+**Problem:** `SlotManager.sync()` Phase 2 (lines 207–211) and Phase 4 (lines 294–304) delete overflowed pool entries synchronously inside the React render pass. On pages with bursty section transitions (V scroll passing through many sections that share one widget type), this concentrates N React Fiber unmounts into a single frame — visible as min-FPS dips (storefront 2026-06-04 bench: 35–36 fps min vs Flash 42–43).
+
+**Approach:** batch the actual `activeSlots.delete()` calls into a `requestIdleCallback` (or RAF-deferred) microtask, so:
+- The sync() return value (the active slot set) reflects the post-eviction state immediately for correctness.
+- The actual React tree shrinkage happens between bursts, smoothing the per-frame work.
+
+Trades a small amount of transient memory (deferred-unmount cells still in tree) for smoother min-FPS.
+
+**Risk:** Fiber unmount has side effects (useEffect cleanup, ref clearing). Need to verify that deferring them does not produce visible / observable problems. Cells getting their data ripped out of `activeSlots` while still in the React tree could see prop access into a stale state.
+
+**Effort:** ~1d to implement + verify no regressions.
+
+### B4.13 Memory-aware dynamic pool sizing (B-pool-memory-aware)
+
+**Surfaced during:** session-prep validation (2026-06-03).
+
+**Problem:** Auto-pool formula is `max(renderRangeSize, maxHWindow × 2, 8)` at CollectionView.tsx:3188–3196, recomputed every `sync()`. The formula is *viewport-aware* (scales with render-range width and H window) but *memory-unaware* (doesn't react to system memory pressure or available headroom). `memoryMultiplier` at line 1445 already exists for the mounted-cap path; the pool path has no equivalent.
+
+**Proposal:**
+- Plumb the same `memoryMultiplier` (or a related memory-pressure signal) through to the pool-size auto formula.
+- Under pressure: shrink pool to the visible band only, accepting more cold mounts in exchange for lower mounted-cell count.
+- Under headroom: optionally raise the floor (e.g. 1.5× the current ceiling) so brief-scroll-off state preservation is more generous.
+
+**Why not urgent:** Current perf numbers (RN 0.83.4) show the existing floor working in practice — Riff already runs at 2–3× lower memory than FlashList across all three bench pages. The optimisation would help edge cases (constrained devices, very long sessions) but isn't load-bearing for the default story.
+
+**Effort:** ~1d (signal plumbing + test under simulated memory pressure).
+
 ---
 
 ## B5 — Documentation
@@ -277,6 +476,34 @@ The `scrollTo*` / `scrollToSection` API implemented via `invokeScrollHandler` ro
 - `docs/OPTIMIZATIONS.md` (one section per Opt 1-7 + H-1 through H-5)
 
 **Effort:** ~0.5d
+
+### B5.4 Remove stale `top:-9999` comments (B-stale-9999-comments)
+
+**Surfaced during:** session-prep validation (2026-06-03).
+
+**Problem:** Three comments in `src/components/CollectionView.tsx` describe a `top:-9999` offscreen-parking strategy that was never actually implemented — the design was superseded by the `Activity` API. The comments are at lines 14, 506, and 2742. They mislead anyone reading the code expecting to find offscreen-parking styling that doesn't exist.
+
+**Fix:** Delete or rewrite the three comments to reflect what the code actually does — `Activity=hidden` for measure-only cells (RN 0.83+) with a `<>{children}</>` fragment fallback for older RN.
+
+**Coordinate with:** README §"Why Riff" §4 — which still claims "graceful degradation via top:-9999" for pre-0.83 RN. Same edit pass.
+
+**Effort:** ~15 min.
+
+### B5.5 Record perf-bench environment versions (B-perf-bench-versions)
+
+**Surfaced during:** session-prep validation (2026-06-03).
+
+**Problem:** The README "Performance → Test setup" section has `> FlashList version: _[fill in]_` as a placeholder. The RN, Hermes, and iOS versions used in the bench are implicit (assumed RN 0.83.4 per `CLAUDE.md`). Numbers stay interpretable across time only if the environment is pinned.
+
+**Fix:** in the README perf section, record:
+- React Native version (likely 0.83.4)
+- Hermes version
+- iOS version (likely 17.x)
+- Xcode version
+- FlashList version (the placeholder)
+- Device model (already noted: iPhone 15 Pro)
+
+**Effort:** ~15 min once the numbers are confirmed with whoever ran the bench.
 
 ---
 

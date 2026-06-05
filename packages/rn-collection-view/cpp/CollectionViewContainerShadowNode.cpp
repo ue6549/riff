@@ -43,10 +43,91 @@
   #define RNCV_SN_MVC_TRACE(fmt, ...) ((void)0)
 #endif
 
+// ── B4.17 diagnostic: V container commit / skip / applyMeasurements rate ──
+// Identifies the source of fail.ver=66% observed in the sub-container diag.
+// Hypothesis: V container's correctChildPositionsIfNeeded calls
+// applyMeasurements once per commit during V scroll, bumping cache->version()
+// and invalidating every sub-container's skip-correction.
+//
+// Output every 50 V container layout() calls:
+//   [RNCV-V-DIAG] commits=N skips=M skipRate=X% applyMeas=K avgDeltas=D
+//
+// Interpretation:
+//   - applyMeas / (commits - skips): how often non-skipped commits actually
+//     wrote to cache (1.0 = every non-skipped commit writes; <1.0 = some
+//     non-skipped commits compute deltas but threshold-filter them out)
+//   - avgDeltas: average measurements written per applyMeas call
+//   - high applyMeas/sec during fast scroll vs slow scroll confirms the
+//     "cells streaming in" cost source
+//
+// Set to 0 to disable after measurement.
+// Disabled after Fix B verified: V applyMeas count was the source of HSub
+// fail.ver cascade (measured 1:1). Fix B routes V writes to _vVersion which
+// sub-containers don't observe — HSub fail.ver dropped 95%.
+#define RNCV_V_SKIP_DIAG 0
+
+#if RNCV_V_SKIP_DIAG
+#include <atomic>
+#include <cstdio>
+namespace {
+  std::atomic<uint32_t> g_vCommits;
+  std::atomic<uint32_t> g_vSkips;
+  std::atomic<uint32_t> g_vApplyMeas;
+  std::atomic<uint64_t> g_vDeltaSum;
+}
+#define RNCV_V_DIAG_COMMIT()                                                     \
+  do {                                                                           \
+    uint32_t _c = g_vCommits.fetch_add(1, std::memory_order_relaxed) + 1;        \
+    if (_c % 50 == 0) {                                                          \
+      uint32_t _s  = g_vSkips.load(std::memory_order_relaxed);                   \
+      uint32_t _a  = g_vApplyMeas.load(std::memory_order_relaxed);               \
+      uint64_t _ds = g_vDeltaSum.load(std::memory_order_relaxed);                \
+      double avgD  = _a > 0 ? (double)_ds / _a : 0.0;                            \
+      fprintf(stderr,                                                            \
+              "[RNCV-V-DIAG] commits=%u skips=%u skipRate=%.1f%% "               \
+              "applyMeas=%u avgDeltas=%.1f\n",                                   \
+              _c, _s, _c > 0 ? (_s * 100.0 / _c) : 0.0,                          \
+              _a, avgD);                                                         \
+      fflush(stderr);                                                            \
+    }                                                                            \
+  } while (0)
+#define RNCV_V_DIAG_SKIP()                                                       \
+  do { g_vSkips.fetch_add(1, std::memory_order_relaxed); } while (0)
+#define RNCV_V_DIAG_APPLY_MEAS(deltaCount)                                       \
+  do {                                                                           \
+    g_vApplyMeas.fetch_add(1, std::memory_order_relaxed);                        \
+    g_vDeltaSum.fetch_add((uint64_t)(deltaCount), std::memory_order_relaxed);    \
+  } while (0)
+#else
+#define RNCV_V_DIAG_COMMIT()                ((void)0)
+#define RNCV_V_DIAG_SKIP()                  ((void)0)
+#define RNCV_V_DIAG_APPLY_MEAS(deltaCount)  ((void)0)
+#endif
+
 namespace facebook::react {
 
 // Must match the string used in codegenNativeComponent('RNCollectionViewContainer').
 const char CollectionViewContainerComponentName[] = "RNCollectionViewContainer";
+
+// ── Clone constructor: propagate skip-correction tracking state ─────────────
+// Fabric's clone path uses the (source, fragment) constructor, not the C++
+// default copy constructor. The base class clone only copies base-class
+// members; derived `lastXxx_` tracking fields would otherwise reset to
+// declared defaults on every clone — silently breaking shouldSkipCorrection.
+// Sub-container had the same bug (see CollectionSubContainerShadowNode.cpp).
+CollectionViewContainerShadowNode::CollectionViewContainerShadowNode(
+    const ShadowNode& sourceShadowNode,
+    const ShadowNodeFragment& fragment)
+    : ConcreteViewShadowNode(sourceShadowNode, fragment) {
+  const auto& source =
+      static_cast<const CollectionViewContainerShadowNode&>(sourceShadowNode);
+  lastCacheVersion_        = source.lastCacheVersion_;
+  lastChildCount_          = source.lastChildCount_;
+  lastChildTagsHash_       = source.lastChildTagsHash_;
+  lastYogaHeightHash_      = source.lastYogaHeightHash_;
+  lastLayoutCacheVersion_  = source.lastLayoutCacheVersion_;
+  lastVVersion_            = source.lastVVersion_;  // B4.17
+}
 
 bool CollectionViewContainerShadowNode::shouldSkipCorrection() {
   const auto& props =
@@ -67,6 +148,13 @@ bool CollectionViewContainerShadowNode::shouldSkipCorrection() {
 
   const uint64_t cv = cache->version();
   if (cv != lastCacheVersion_) return false;
+
+  // B4.17: V container also observes its OWN vVersion. Sub-containers don't.
+  // Without this check, the V container would skip its next commit after
+  // writing — even though it (or some prior V cycle) just changed cache state
+  // it needs to re-read and apply.
+  const uint64_t vv = cache->vVersion();
+  if (vv != lastVVersion_) return false;
 
   const auto children = getLayoutableChildNodes();
   const size_t N = children.size();
@@ -104,10 +192,15 @@ void CollectionViewContainerShadowNode::layout(LayoutContext layoutContext) {
   // height:auto and Yoga measured them freely before arriving here.
   ConcreteViewShadowNode::layout(layoutContext);
 
+  // B4.17 diag: must increment BEFORE the skip branch so the commit count
+  // reflects total Fabric commits, not just non-skipped ones.
+  RNCV_V_DIAG_COMMIT();
+
   // B4.1: Skip correction + state update when children + cache are unchanged.
   // Cloned member state from previous commit is still valid.
   if (shouldSkipCorrection()) {
     RNCV_SN_LOG("layout() SKIP — children + cache unchanged");
+    RNCV_V_DIAG_SKIP();
     return;
   }
 
@@ -498,7 +591,16 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
     // produces N version bumps — the root cause of 50-60 JS re-renders/sec.
     cache->beginBatch();
     bool handled = engine->applyMeasurements(deltas, *cache);
-    cache->endBatch();
+    // B4.17 fix: endVBatch (not endBatch) — V cell position writes bump
+    // _vVersion, NOT _version. Sub-containers observe _version only and so
+    // don't invalidate their skip-check when the V container writes its
+    // own cells. Eliminates the V→sub-container cascade that was the
+    // dominant source of sub-container fail.ver (measured 1:1 with V's
+    // applyMeas count).
+    cache->endVBatch();
+    // B4.17 diag: count this as one applyMeasurements invocation. endVBatch()
+    // produced at most one cache->vVersion() bump regardless of delta count.
+    RNCV_V_DIAG_APPLY_MEAS(deltas.size());
     RNCV_SN_LOG("applyMeasurements handled=%s cacheVersionBefore=%llu cacheVersionAfter=%llu",
                 handled ? "YES" : "NO",
                 static_cast<unsigned long long>(cacheVersionBeforeApply),
@@ -547,7 +649,13 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
         cache->setAttributes(updated);
       }
     }
-    cache->endBatch();
+    // B4.17 fix: same as main path — V's writes go to _vVersion, not
+    // _version. Keeps sub-containers from cascading on V correction writes.
+    cache->endVBatch();
+    // B4.17 diag: count as one applyMeasurements-equivalent invocation
+    // (single batch → single vVersion bump). Fallback path is rare in
+    // production but worth observing in the diag.
+    RNCV_V_DIAG_APPLY_MEAS(deltas.size());
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -607,6 +715,10 @@ void CollectionViewContainerShadowNode::correctChildPositionsIfNeeded() {
   }
   if (cache) {
     lastCacheVersion_ = cache->version();
+    // B4.17: also snapshot vVersion so the next commit's shouldSkipCorrection
+    // sees the same value we just produced and can skip if nothing else
+    // changed since.
+    lastVVersion_ = cache->vVersion();
   }
 }
 

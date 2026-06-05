@@ -20,6 +20,8 @@ class CustomLayoutEngine implements RiffLayout {
   readonly horizontal: boolean;
   /** Custom layouts default to spatial query — items may not be contiguously ordered. */
   readonly needsSpatialQuery = true;
+  // Custom layouts can write arbitrary per-item visual attrs — safe default true.
+  readonly writesVisualAttributes = true;
   private readonly delegate: RiffCustomConfig;
   private _attrs: LayoutAttributes[] = [];
   private _contentWidth = 0;

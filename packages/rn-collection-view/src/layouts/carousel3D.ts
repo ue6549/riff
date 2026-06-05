@@ -80,6 +80,8 @@ class Carousel3DLayout implements RiffLayout {
   readonly type = 'carousel3D';
   readonly horizontal = true;
   readonly needsSpatialQuery = false;
+  // 3D carousel writes per-cell rotateY transform + alpha + zIndex.
+  readonly writesVisualAttributes = true;
 
   private readonly opts: Required<Carousel3DOptions>;
   private ctx: LayoutContext | null = null;

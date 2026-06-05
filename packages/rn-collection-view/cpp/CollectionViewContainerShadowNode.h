@@ -44,6 +44,18 @@ class CollectionViewContainerShadowNode final
  public:
   using ConcreteViewShadowNode::ConcreteViewShadowNode;
 
+  /// Clone constructor — propagates skip-correction tracking state across
+  /// Fabric clones. Fabric's clone path uses the (source, fragment)
+  /// constructor, NOT the C++ default copy ctor; the base only copies
+  /// base-class members. Without this explicit override, every clone
+  /// resets lastCacheVersion_, lastChildCount_, lastChildTagsHash_,
+  /// lastYogaHeightHash_, lastLayoutCacheVersion_ to their declared
+  /// defaults — making shouldSkipCorrection() fail on every check, every
+  /// commit. Same fix as CollectionSubContainerShadowNode.
+  CollectionViewContainerShadowNode(
+      const ShadowNode& sourceShadowNode,
+      const ShadowNodeFragment& fragment);
+
   static CollectionViewContainerState initialStateData(
       const Props::Shared& props,
       const ShadowNodeFamily::Shared& family,
@@ -103,6 +115,11 @@ class CollectionViewContainerShadowNode final
   size_t   lastChildTagsHash_     = 0;
   size_t   lastYogaHeightHash_    = 0;
   int      lastLayoutCacheVersion_ = -1;
+  // B4.17: V container's own writes bump _vVersion (not _version) — see
+  // LayoutCache::endVBatch and ::vVersion. This lets sub-containers ignore
+  // V correction's writes while V container still observes its own work
+  // to avoid skipping a commit where it just changed cache state.
+  uint64_t lastVVersion_          = 0;
 };
 
 } // namespace facebook::react

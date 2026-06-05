@@ -67,11 +67,28 @@ export interface SlotInfo<T> {
 
 export class SlotManager<T> {
   private activeSlots = new Map<string, SlotInfo<T>>();  // slotKey → info
-  private recyclePools = new Map<string, string[]>();    // itemType → slotKey[] (LIFO)
+  /**
+   * Pool keyed by either `itemType` (cross-section recycling enabled) or
+   * `${sectionIndex}|${itemType}` (cross-section recycling disabled).
+   * The key shape is determined by `crossSectionRecycling` at the time
+   * `_poolKey(slot)` is called for each push / pop.
+   */
+  private recyclePools = new Map<string, string[]>();    // poolKey → slotKey[] (LIFO)
   private dataKeyToSlot = new Map<string, string>();     // dataKey → slotKey
   private slotCounter = 0;
-  /** Max idle slots per type kept alive between renders. Default 4. */
+  /** Max idle slots per pool key kept alive between renders. Default 4. */
   maxPoolSize = 4;
+  /**
+   * Cross-section recycling control. When `true` (default), pools are keyed
+   * by `itemType` alone — a slot freed by section A can be reclaimed by
+   * section B if both use the same widget type. When `false`, pools are
+   * keyed by `(sectionIndex, itemType)` — each section's pool is isolated;
+   * a slot freed by section A stays available only for section A's
+   * subsequent re-entry. Helpful for single-widget-type-across-many-
+   * sections workloads (e.g. product feeds) where cross-section churn
+   * dominates pool overflow. See backlog B-hsection-private-pools.
+   */
+  crossSectionRecycling = true;
   /** Number of fresh slot Fibers created in the most recent sync() call (Case C). */
   lastColdMounts = 0;
 
@@ -197,7 +214,10 @@ export class SlotManager<T> {
 
       if (!stillNeeded) {
         this.dataKeyToSlot.delete(slot.dataKey);
-        const pool = this._pool(slot.itemType);
+        // Pool keyed by slot's sectionIndex when cross-section recycling
+        // is off — preserved across phase 2 / phase 3 because slot.sectionIndex
+        // is set on every Case A/B/C assignment.
+        const pool = this._pool(slot.sectionIndex, slot.itemType);
         if (pool.length < this.maxPoolSize) {
           pool.push(slotKey);
           slot.isPooled = true;
@@ -223,8 +243,10 @@ export class SlotManager<T> {
         const slot = this.activeSlots.get(existingSlotKey);
         if (slot) {
           if (slot.isPooled) {
-            // Promote from pool.
-            const pool = this._pool(slot.itemType);
+            // Promote from pool. Use slot.sectionIndex (the pool's key when
+            // cross-section recycling is off), not the new section's index,
+            // because the slot was pooled under its prior section's key.
+            const pool = this._pool(slot.sectionIndex, slot.itemType);
             const pi = pool.indexOf(existingSlotKey);
             if (pi >= 0) pool.splice(pi, 1);
             slot.isPooled = false;
@@ -244,8 +266,14 @@ export class SlotManager<T> {
       }
 
       // Case B: claim a recycled slot of matching type.
+      // The pool we draw from is keyed by the *new* index's section (when
+      // cross-section recycling is off) — so we only reclaim a slot that
+      // was previously pooled by the same section. Cross-section reclaim
+      // returns a smaller pool and forces Case C for sections without
+      // matching prior occupants.
       const itemType = getItemType(index);
-      const pool = this._pool(itemType);
+      const sectionIndex = getSectionIndex(index);
+      const pool = this._pool(sectionIndex, itemType);
       if (pool.length > 0) {
         const slotKey = pool.pop()!;
         const slot = this.activeSlots.get(slotKey)!;
@@ -259,7 +287,7 @@ export class SlotManager<T> {
         slot.dataKey   = dataKey;
         slot.dataIndex = index;
         slot.cacheKey  = getCacheKey(index);
-        slot.sectionIndex = getSectionIndex(index);
+        slot.sectionIndex = sectionIndex;
         slot.kind      = getKind(index);
         slot.itemType  = itemType;
         slot.measureOnly = this._isMeasureOnly(index, renderFirst, renderLast, measureFirst !== null);
@@ -322,6 +350,40 @@ export class SlotManager<T> {
     this.maxPoolSize = Math.max(0, n);
   }
 
+  /**
+   * Toggle cross-section recycling and migrate the existing pools so the
+   * change is non-destructive — slot keys (and therefore React Fibers,
+   * `useState`, `useRef`, in-flight animations) are preserved across the
+   * toggle. Only the pool index is rebuilt.
+   *
+   * Caveat: a slot evicted by section A while cross-section recycling was
+   * ON might have been about to be reclaimed by section B. After toggling
+   * OFF, that slot moves to section A's private pool, so section B can no
+   * longer reclaim it — section B will cold-mount on its next assignment.
+   * This is the intended trade and is expected on the first sync() call
+   * after the toggle.
+   */
+  setCrossSectionRecycling(value: boolean) {
+    if (this.crossSectionRecycling === value) return;
+
+    // Collect every currently pooled slot before mutating state.
+    const pooledSlots: SlotInfo<T>[] = [];
+    for (const [, pool] of this.recyclePools) {
+      for (const slotKey of pool) {
+        const slot = this.activeSlots.get(slotKey);
+        if (slot) pooledSlots.push(slot);
+      }
+    }
+
+    // Rebuild pool index under the new keying policy.
+    this.recyclePools.clear();
+    this.crossSectionRecycling = value;
+    for (const slot of pooledSlots) {
+      const pool = this._pool(slot.sectionIndex, slot.itemType);
+      pool.push(slot.slotKey);
+    }
+  }
+
   /** Reset all state (e.g. on data reset or component remount). */
   reset() {
     this.activeSlots.clear();
@@ -338,9 +400,21 @@ export class SlotManager<T> {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  private _pool(type: string): string[] {
-    let pool = this.recyclePools.get(type);
-    if (!pool) { pool = []; this.recyclePools.set(type, pool); }
+  /**
+   * Composite pool key. When cross-section recycling is on (default), this
+   * is just the itemType — sections share their pools. When off, the key
+   * includes the sectionIndex so each section has its own private pool.
+   * The "|" separator is reserved (not allowed in itemType returned from
+   * consumer's getItemType) so there's no collision risk.
+   */
+  private _poolKey(sectionIndex: number, itemType: string): string {
+    return this.crossSectionRecycling ? itemType : `${sectionIndex}|${itemType}`;
+  }
+
+  private _pool(sectionIndex: number, itemType: string): string[] {
+    const key = this._poolKey(sectionIndex, itemType);
+    let pool = this.recyclePools.get(key);
+    if (!pool) { pool = []; this.recyclePools.set(key, pool); }
     return pool;
   }
 

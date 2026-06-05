@@ -87,6 +87,13 @@ using namespace facebook::react;
   // Scroll axis — when YES, UIScrollView scrolls horizontally.
   BOOL _horizontal;
 
+  // True when the current layout writes non-default LayoutAttributes (alpha,
+  // zIndex, transform3D). When NO, applyPositionsFromState: skips the
+  // per-cell visual-attrs read/write block entirely — eliminates N mutex-
+  // locked LayoutCache lookups + N CALayer property writes per commit.
+  // Mirrored from RNCollectionViewContainerProps.layoutWritesVisualAttributes.
+  BOOL _layoutWritesVisualAttributes;
+
   // Last seen layoutRevision — used to fire onScroll when positions change
   // even if content size is unchanged (e.g. flow reflow after width measurement).
   int32_t _lastLayoutRevision;
@@ -235,6 +242,11 @@ using namespace facebook::react;
   if (newProps.scrollEventThrottle > 0) {
     _scrollEventMinInterval = newProps.scrollEventThrottle / 1000.0;
   }
+
+  // Cache the visual-attrs flag — gates the per-cell attribute lookup +
+  // CALayer writes in applyPositionsFromState:. Static layouts leave this
+  // false → that block is skipped entirely.
+  _layoutWritesVisualAttributes = newProps.layoutWritesVisualAttributes;
 
   // Register scroll handler when layoutCacheId is assigned.
   // The handler is invoked from JS (nativeMod.scrollTo) via the scroll handler
@@ -574,6 +586,25 @@ using namespace facebook::react;
     tagToView[@(sv.tag)] = sv;
   }
 
+  // When the layout writes visual attrs, batch-read them once. One mutex
+  // acquisition for all keys instead of N per-cell getAttributes() calls.
+  // Keys for non-RNMeasuredCellView children stay empty (cache miss) — the
+  // per-cell visual-attrs branch checks isKindOfClass:[RNMeasuredCellView]
+  // anyway. Skip the entire bulk read for static layouts.
+  rncv::BulkAttributesResult bulkAttrs;
+  if (_layoutWritesVisualAttributes && _layoutCacheId != 0 && !childTags.empty()) {
+    std::vector<std::string> attrKeys(childCount);
+    for (size_t i = 0; i < childCount && i < childTags.size(); ++i) {
+      UIView *cv = tagToView[@(childTags[i])];
+      if ([cv isKindOfClass:[RNMeasuredCellView class]]) {
+        NSString *ck = ((RNMeasuredCellView *)cv).cacheKey;
+        if (ck.length > 0) attrKeys[i] = ck.UTF8String;
+      }
+    }
+    auto cache = facebook::react::layoutCacheForId(_layoutCacheId);
+    if (cache) bulkAttrs = cache->getAttributesForKeys(attrKeys);
+  }
+
   // Apply full frame (position + size) from ShadowNode-computed layout.
   for (size_t i = 0; i < childCount && i < childTags.size(); i++) {
     UIView *child = (childTags.empty()) ? subviews[i] : tagToView[@(childTags[i])];
@@ -630,30 +661,33 @@ using namespace facebook::react;
                child.frame.size.width, child.frame.size.height);
 
       // Apply visual attributes (alpha, transform3D, zIndex) from LayoutCache.
-      // All layout types can write these; C++ layouts leave them at default
-      // (alpha=1, zIndex=0, transform=identity) which is a no-op here.
-      if ([child isKindOfClass:[RNMeasuredCellView class]]) {
-        NSString *ck = ((RNMeasuredCellView *)child).cacheKey;
-        if (ck.length > 0) {
-          auto cache = facebook::react::layoutCacheForId(_layoutCacheId);
-          if (cache) {
-            auto attrs = cache->getAttributes(ck.UTF8String);
-            if (attrs) {
-              child.alpha = (CGFloat)attrs->alpha;
-              child.layer.zPosition = (CGFloat)attrs->zIndex;
-              const auto& t = attrs->transform3D;
-              if (t != rncv::kIdentityTransform3D) {
-                CATransform3D ct;
-                ct.m11 = t[0];  ct.m21 = t[1];  ct.m31 = t[2];  ct.m41 = t[3];
-                ct.m12 = t[4];  ct.m22 = t[5];  ct.m32 = t[6];  ct.m42 = t[7];
-                ct.m13 = t[8];  ct.m23 = t[9];  ct.m33 = t[10]; ct.m43 = t[11];
-                ct.m14 = t[12]; ct.m24 = t[13]; ct.m34 = t[14]; ct.m44 = t[15];
-                child.layer.transform = ct;
-              } else {
-                child.layer.transform = CATransform3DIdentity;
-              }
-            }
-          }
+      // Gated on _layoutWritesVisualAttributes: static layouts (list/grid/
+      // masonry/flow/compositional with all-static sub-sections) skip this
+      // entire block — they leave attrs at defaults (alpha=1, zIndex=0,
+      // transform=identity), so a per-cell mutex-locked cache lookup + three
+      // CALayer property writes per cell per commit is pure overhead.
+      // Attrs were bulk-read once at the top of this method — one mutex
+      // acquisition for all keys. Per-cell value guards (stage 5) avoid
+      // KVO/needs-display dispatch when the new value equals the current.
+      if (_layoutWritesVisualAttributes &&
+          i < bulkAttrs.found.size() && bulkAttrs.found[i]) {
+        const auto& a = bulkAttrs.attrs[i];
+        const CGFloat newAlpha = (CGFloat)a.alpha;
+        if (child.alpha != newAlpha) child.alpha = newAlpha;
+        const CGFloat newZ = (CGFloat)a.zIndex;
+        if (child.layer.zPosition != newZ) child.layer.zPosition = newZ;
+        const auto& t = a.transform3D;
+        CATransform3D ct;
+        if (t != rncv::kIdentityTransform3D) {
+          ct.m11 = t[0];  ct.m21 = t[1];  ct.m31 = t[2];  ct.m41 = t[3];
+          ct.m12 = t[4];  ct.m22 = t[5];  ct.m32 = t[6];  ct.m42 = t[7];
+          ct.m13 = t[8];  ct.m23 = t[9];  ct.m33 = t[10]; ct.m43 = t[11];
+          ct.m14 = t[12]; ct.m24 = t[13]; ct.m34 = t[14]; ct.m44 = t[15];
+        } else {
+          ct = CATransform3DIdentity;
+        }
+        if (!CATransform3DEqualToTransform(child.layer.transform, ct)) {
+          child.layer.transform = ct;
         }
       }
     }

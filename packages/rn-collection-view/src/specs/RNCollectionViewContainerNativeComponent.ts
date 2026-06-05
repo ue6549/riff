@@ -58,6 +58,14 @@ interface NativeProps extends ViewProps {
   // Fallback estimated height for items not yet in LayoutCache.
   estimatedItemHeight?: Float;
 
+  // When true, this layout writes non-default LayoutAttributes (alpha,
+  // zIndex, transform3D) into the LayoutCache and the native view should
+  // apply them per cell in applyPositionsFromState:. When false (default),
+  // applyPositionsFromState: skips the per-cell visual-attrs read/write
+  // — single biggest CPU win on H-section-heavy pages with static layouts.
+  // For compositional, this is the union over all sub-section layouts.
+  layoutWritesVisualAttributes?: WithDefault<boolean, false>;
+
   // Render range: which items are mounted as children (indices into data array).
   // ShadowNode uses these to map children to their data indices.
   renderRangeStart?: Int32;

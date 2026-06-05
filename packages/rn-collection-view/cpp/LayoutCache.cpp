@@ -97,9 +97,23 @@ void LayoutCache::endHBatch() {
   }
 }
 
+void LayoutCache::endVBatch() {
+  std::lock_guard<std::mutex> lock(_mutex);
+  if (_batchDepth > 0) _batchDepth--;
+  if (_batchDepth == 0 && _batchDirty) {
+    ++_vVersion;
+    _batchDirty = false;
+  }
+}
+
 uint64_t LayoutCache::hMvcVersion() const {
   std::lock_guard<std::mutex> lock(_mutex);
   return _hMvcVersion;
+}
+
+uint64_t LayoutCache::vVersion() const {
+  std::lock_guard<std::mutex> lock(_mutex);
+  return _vVersion;
 }
 
 void LayoutCache::_setAttributesLocked(const LayoutAttributes& attrs) {
@@ -427,6 +441,22 @@ BulkFrameResult LayoutCache::getFramesForKeys(const std::vector<std::string>& ke
       result.frames[i * 4 + 1] = it->second.frame.y;
       result.frames[i * 4 + 2] = it->second.frame.width;
       result.frames[i * 4 + 3] = it->second.frame.height;
+    }
+  }
+  return result;
+}
+
+BulkAttributesResult LayoutCache::getAttributesForKeys(
+    const std::vector<std::string>& keys) const {
+  BulkAttributesResult result;
+  result.attrs.resize(keys.size());
+  result.found.resize(keys.size(), false);
+  std::lock_guard<std::mutex> lock(_mutex);
+  for (size_t i = 0; i < keys.size(); ++i) {
+    auto it = _map.find(keys[i]);
+    if (it != _map.end()) {
+      result.found[i] = true;
+      result.attrs[i] = it->second;
     }
   }
   return result;

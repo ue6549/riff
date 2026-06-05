@@ -322,7 +322,13 @@ function calcHCardWidth(windowWidth: number): number {
   return Math.round((windowWidth - 36) / 2.25);
 }
 
-function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
+function RiffStorefront({
+  listRef,
+  crossSectionRecycling,
+}: {
+  listRef: React.RefObject<any>;
+  crossSectionRecycling: boolean;
+}) {
   const { width: windowWidth } = useWindowDimensions();
   const hCardWidth = calcHCardWidth(windowWidth);
 
@@ -399,7 +405,22 @@ function RiffStorefront({ listRef }: { listRef: React.RefObject<any> }) {
       getItemType={getItemType}
       renderItem={renderItem}
       renderMultiplier={0.25}
-      hRenderMultiplier={1.0}
+      // hRenderMultiplier was 1.0 (3× viewport active per H section).
+      // For a V-scroll-dominated benchmark (no user-driven H scroll) that's
+      // pure waste — every H cell beyond the section's visible width is
+      // mounted-but-never-seen. Match V's renderMultiplier at 0.5 here; H
+      // sections retain a modest prefetch buffer for the realistic case
+      // (user H-scrolls a carousel into the page) without bloating the
+      // baseline active set.
+      hRenderMultiplier={0.5}
+      // Storefront uses one widget type (product card) across multiple
+      // mixed-layout sections (V list, V grid, V masonry, Flow, H carousel).
+      // All evictions feed the same per-type pool; the auto formula's
+      // hWindow×2 floor under-allocates and overflows on V scroll-through.
+      recyclePoolSize={32}
+      // Toggle via PerfHood "X-Recycle" button. When false, each section
+      // gets its own per-type pool (no cross-section reclamation).
+      crossSectionRecycling={crossSectionRecycling}
       decorationRenderers={decorationRenderers}
       onBlankArea={({ offsetStart, offsetEnd }) => {
         storefrontBlankPct = storefrontVpH > 0
@@ -605,6 +626,7 @@ const TOTAL_ITEMS = 8 + 6 + 10 + 4 + 8 + 30 + 12 + 80; // 158
 
 export default function StorefrontDemo() {
   const [engine, setEngine] = useState<Engine>('riff');
+  const [crossSectionRecycling, setCrossSectionRecycling] = useState(true);
   const listRef = useRef<any>(null);
 
   // Reset mount counters on engine switch. useLayoutEffect fires synchronously
@@ -639,7 +661,7 @@ export default function StorefrontDemo() {
 
       <View style={S.content} onLayout={(e) => { storefrontVpH = e.nativeEvent.layout.height; }}>
         {engine === 'riff'
-          ? <RiffStorefront listRef={listRef} />
+          ? <RiffStorefront listRef={listRef} crossSectionRecycling={crossSectionRecycling} />
           : <FlashStorefront listRef={listRef} />}
       </View>
 
@@ -654,6 +676,10 @@ export default function StorefrontDemo() {
         itemCount={TOTAL_ITEMS}
         itemHeight={40}
         getContentHeight={getContentHeight}
+        crossSectionRecycling={engine === 'riff' ? crossSectionRecycling : undefined}
+        onToggleCrossSectionRecycling={
+          engine === 'riff' ? () => setCrossSectionRecycling(v => !v) : undefined
+        }
       />
     </SafeAreaView>
   );

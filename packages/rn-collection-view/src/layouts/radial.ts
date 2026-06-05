@@ -81,6 +81,8 @@ class RadialLayout implements RiffLayout {
   readonly type = 'radial';
   readonly horizontal = false;
   readonly needsSpatialQuery = false;
+  // Radial writes per-cell transform3D + zIndex + alpha into LayoutCache.
+  readonly writesVisualAttributes = true;
 
   private readonly opts: Required<RadialOptions>;
   private ctx: LayoutContext | null = null;

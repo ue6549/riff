@@ -51,13 +51,14 @@ Static layouts (list, grid, masonry, flow) compute once on data change and do no
 
 ### 4. O(render window) React tree — windowing, pools, and the Activity API
 
-Riff maintains three concentric windows around the current scroll position:
+Riff exposes two knobs (a desired range and a hard ceiling) plus an optional measure-ahead band and a per-type slot pool. The slot lifecycle is paint-state → hidden-in-pool → eventually unmounted.
 
-- **Render window** (`renderMultiplier`, default ±0.5× viewport): items are mounted and painted — `Activity=visible`.
-- **Measure window** (`measureAhead`, default disabled): items beyond the render window are mounted off-screen as `Activity=hidden`. Fabric measures their Yoga height without painting them or triggering `useEffect`. When they scroll into the render window, they promote in-place — no remount, no blank frame.
-- **Mounted window** (`mountedWindowSize`, default 2× viewport): hard cap on total mounted content. Items beyond this cap are unmounted.
+- **Render range** (`renderMultiplier`, default ±0.5× viewport): items mounted and painted — `Activity=visible`. This is the set of cells the user can actually see at any moment.
+- **Measure band** (`measureAhead`, default disabled): when enabled, items beyond the render range mount with `Activity=hidden` so Fabric measures their Yoga height without painting them or triggering `useEffect`. When they scroll into the render range they promote in-place — no remount, no blank frame.
+- **Mounted ceiling** (`mountedWindowSize`, default 2× viewport): a *cap on the render range itself*, not a separate concentric ring. If `renderMultiplier` would produce a range wider than `mountedWindowSize × vpHeight`, the range is trimmed symmetrically around the visible midpoint. At default values the cap aligns with the desired range and rarely fires; it primarily guards against aggressive `renderMultiplier` tuning and exposes a single knob the system can shrink under memory pressure without overriding the consumer's prefetch intent.
+- **Slot pool** (`recyclePoolSize`, per item type, default auto): when a slot leaves the render range it is *not* immediately unmounted — it goes into a per-`getItemType` LIFO pool with `Activity=hidden`, keeping its Fiber alive. The default pool size auto-tracks the current render range each sync — formula `max(renderRangeSize, maxHWindow × 2, 8)`. Real unmount happens only when the pool fills past `recyclePoolSize` (per type): the oldest slot is removed and React drops the Fiber.
 
-Beyond the mounted window, the **slot pool** (`recyclePoolSize`, configurable per widget type, default auto-tracks window size) keeps recently-evicted slots alive as `Activity=hidden` Fibers. When an item re-enters the window, if its slot is still in the pool it returns as a prop update — zero cold-mount cost. If the pool slot was evicted, it remounts as a fresh Fiber.
+When an item re-enters the render range, if its data key still owns a pool slot it returns as a prop update — zero cold-mount cost, original Fiber and state preserved. If the pool slot was evicted or recycled to a different item, it remounts as a fresh Fiber.
 
 **First paint:** `initialNumToRender` (default 10) controls how many items are mounted before the viewport size is known. Set it to the minimum needed to fill the visible screen — typically 3–5 items — to get the first paint on screen as fast as possible. Once the container reports its size, the full windowed range takes over.
 
@@ -94,7 +95,9 @@ Insert at index 50 in a 1000-item list: C++ `invalidateFrom(50)` recomputes only
 
 ### 9. `invalidateItem` — O(n − i) in-place cell resize
 
-When a cell changes height via a local `setState` (expand/collapse, image load resolving), call `ref.current.invalidateItem(section, index)` alongside the state update. Riff re-renders the window so Fabric re-measures the changed cell, then runs `invalidateFrom(i)` in C++ — only items from index i onward reflow. FlashList requires an `extraData` change which re-renders the full list.
+When a cell changes height via a local `setState` (expand/collapse, image load resolving), call `ref.current.invalidateItem(section, index)` alongside the state update. Riff re-renders the *entire window* so Fabric re-measures every mounted cell, including the one that changed; then `applyMeasurements` records the new Yoga height and `invalidateFrom(i)` in C++ reflows only items from index `i` onward. FlashList requires an `extraData` change which re-renders the full list.
+
+> **API truthfulness note:** today the `section` and `index` arguments to `invalidateItem` are accepted but unused — the call bumps an internal render-gen counter that invalidates the whole window, and the `i` passed to C++ `invalidateFrom` is determined by `applyMeasurements`, not by the caller. The user-visible behaviour is correct (only the tail reflows), but the API would be more honestly named `invalidateWindow()`. A future revision may either rename it or implement actual targeted invalidation; the call site stays the same.
 
 ### 10. Height correction without visible jump
 
@@ -122,21 +125,21 @@ When `invalidateItem` is called while the user is not actively scrolling, Riff d
 
 ### Test setup
 
-**Device:** iPhone 15 Pro, iOS 17, ProMotion display (up to 120Hz).
+**Device:** iPhone 15 Pro, iOS 17, ProMotion display (up to 120Hz). Benchmarks run with iOS **Low Power Mode ON** to apply deliberate CPU/memory pressure — Riff's numbers represent a constrained environment, not best-case headroom. On Low Power Mode off, both engines benefit; the relative comparison stays consistent.
 
 **Widgets:** Fully coded React Native components simulating real e-commerce UI — product cards, banners, carousels, editorial strips. No mock views or simplified placeholders. Each product card renders approximately 40 React nodes (image, title, rating, price, badge, call-to-action). Image loading was excluded to isolate layout and scroll performance from network variability.
 
-**Scroll scenarios per page:** slow scroll down and up (20px/frame), fast scroll down and up (100px/frame), fling gesture down and up. Numbers below are aggregated across all scroll scenarios.
+**Scroll scenarios per page:** slow scroll down and up (20px/frame), fast scroll down and up (100px/frame), fling gesture down and up. Numbers below are aggregated across all scroll scenarios over 5 rounds each.
 
-**Riff configuration:** default windowing settings — `renderMultiplier=0.5`, `mountedWindowSize=2.0`, `measureAhead=0` (measure window disabled; measure = render in this bench).
+**Riff configuration:** default windowing — `renderMultiplier=0.5`, `mountedWindowSize=2.0`, `measureAhead=0`, `crossSectionRecycling=true`. Per-page tweaks: storefront uses `renderMultiplier=0.25`, `hRenderMultiplier=0.5`, `recyclePoolSize=32` (single-widget-type page needs a tighter window and a larger explicit pool). Homepage and search use `renderMultiplier=0.25`, `hRenderMultiplier=0.5`, auto-sized pool.
 
 **Page types:**
 
 | Page | Profile |
 |---|---|
-| **Homepage** | Widest widget-type variety — hero banners, product cards, category chips across different section types (H carousels, editorial strips, recommendation lists). Closest to a real app home feed. |
-| **Storefront** | Widest section-layout variety (horizontal carousel, masonry, flow, vertical grid, horizontal grid, vertical list) with a single widget type — every individual item is a product card. |
-| **Search results** | Predominantly product cards — the most uniform content profile. A few horizontal widget sections interspersed. Maximum slot-recycling opportunity for FlashList's card pool. |
+| **Homepage** | Diverse widget-type variety — hero banners, product cards, category chips, recommendation rails across 7 compositional sections (mix of V and H, mix of widget types). Closest to a real-world feed-style home page. |
+| **Storefront** | 8 compositional sections (V list, V grid, V masonry, V flow, H list, H grid) all rendering the *same* product-card widget type. Maximum cross-section pool churn — the architecturally hostile case for any pool-based recycler. |
+| **Search results** | Predominantly product cards — the most uniform content profile. A few H widget sections interspersed. Closest to FlashList's optimal recycling case. |
 
 **FlashList implementation in this bench:** outer vertical FlashList with `getItemType` for section-aware recycling; horizontal sections backed by nested horizontal FlashLists; vertical grids and masonry built with manually mapped View rows (FlashList's `numColumns` does not support variable column widths).
 
@@ -148,23 +151,25 @@ When `invalidateItem` is called while the user is not actively scrolling, Riff d
 
 #### Homepage
 
+Diverse widget types, 7 sections mixing V and H layouts. Riff's strongest page — wins decisively on every metric except total mounts (the architectural trade-off).
+
 | Metric | Riff | FlashList | Winner |
 |---|---|---|---|
-| Avg FPS | 70 | 71 | Tied |
-| Min FPS | 60 | 59 | Tied |
-| p5 FPS | 60 | 59 | Tied |
-| JS Idle | 100% | 100% | Tied |
-| **Avg CPU** | **11%** | **25%** | **Riff 2.3×** |
-| p75 CPU | 16% | 34% | Riff 2.1× |
-| p90 CPU | 17% | 36% | Riff 2.1× |
-| **Avg Memory** | **63 MB** | **128 MB** | **Riff 2.0×** |
-| p75 Memory | 65 MB | 136 MB | Riff 2.1× |
-| p90 Memory | 79 MB | 137 MB | Riff 1.7× |
-| Peak Memory | 79 MB | 137 MB | Riff 1.7× |
+| Avg FPS | 60 | 59 | Tied |
+| Min FPS | 49 | 37 | Riff +12 |
+| p5 FPS | 51 | 37 | Riff |
+| JS Idle | 99% | 98% | Tied |
+| **Avg CPU** | **18%** | **24%** | **Riff (−6%)** |
+| p75 CPU | 23% | 32% | Riff |
+| **p90 CPU** | **28%** | **35%** | **Riff (−7%)** |
+| **Avg Memory** | **3.0 MB** | **35.0 MB** | **Riff 11.7×** |
+| p75 Memory | 3.5 MB | 35.5 MB | Riff 10.1× |
+| p90 Memory | 4.7 MB | 35.8 MB | Riff 7.6× |
+| Peak Memory | 4.7 MB | 35.8 MB | Riff 7.6× |
 | **Active components (avg)** | **14** | **86** | **Riff 6.1×** |
-| Active components (p75) | 20 | 90 | Riff 4.5× |
-| Active components (peak) | 24 | 90 | Riff 3.8× |
-| Total mounts (session) | 1,006 | 629 | FlashList 1.6× |
+| Active components (p75) | 19 | 90 | Riff 4.7× |
+| Active components (peak) | 21 | 90 | Riff 4.3× |
+| Total mounts (session) | 932 | 587 | FlashList 1.6× |
 
 #### Storefront
 
@@ -278,26 +283,81 @@ A JS/TS path is also available via `customLayout(delegate)`: pass an `attributes
 
 ### Windowing and the slot pool — O(render-window) React tree
 
-The React tree has three concentric size bounds:
+The React tree is bounded by a **desired range**, a **hard ceiling on that range**, an optional **measure-ahead band**, and a **per-type slot pool**:
 
-| Window | Prop | Default | Behavior |
+| Knob | Prop | Default | Behaviour |
 |---|---|---|---|
-| **Render** | `renderMultiplier` | 0.5× viewport | Items mounted as `Activity=visible`. Painted, interactive. |
-| **Measure** | `measureAhead` | 0 (disabled) | Items mounted as `Activity=hidden` ahead of the render window. Yoga measures them before they enter the render window — no blank frame on first scroll-in. |
-| **Mounted cap** | `mountedWindowSize` | 2× viewport | Hard cap on total mounted content. Items beyond this threshold are evicted to the pool. |
+| **Render range** | `renderMultiplier` | 0.5× viewport (each side) | Items mounted as `Activity=visible`. Painted, interactive. |
+| **Mounted ceiling** | `mountedWindowSize` | 2× viewport | Hard cap on the render range itself, *not* a separate concentric ring. If the desired render range would exceed `mountedWindowSize × vpHeight`, `applyBudget` trims it symmetrically around the visible midpoint. At default values the cap aligns with the desired range and rarely fires; primarily a guardrail and a memory-pressure dial. |
+| **Measure band** | `measureAhead` | 0 (disabled) | When enabled, items beyond the render range mount with `Activity=hidden`. Yoga measures them before they enter the render range — no blank frame on first scroll-in. |
+| **Slot pool** | `recyclePoolSize` | auto: `max(renderRangeSize, maxHWindow × 2, 8)` per type | Per-`getItemType` LIFO afterlife. Slots that leave the render range go here with `Activity=hidden`, keeping their Fiber alive. Auto formula is recomputed each `sync()`, so it tracks viewport changes (rotation) without consumer wiring. |
+| **Cross-section recycling** | `crossSectionRecycling` | `true` | Whether the slot pool is keyed by `itemType` alone (`true`) or by `(sectionIndex, itemType)` (`false`). Set to `false` for compositional pages where the same widget type renders very differently in different sections — disables cross-section pool sharing so a slot returning to its home section keeps its state, at the cost of more cold mounts on cross-section returns. |
 
-Beyond the mounted cap, the **slot pool** (`recyclePoolSize`, configurable per item type, defaults to auto-track window size) keeps recently-evicted Fibers alive. When an item re-enters the window:
+**Lifecycle.** A slot enters as `Activity=visible` while in the render range, transitions to `Activity=hidden` in the pool when it leaves, and only *actually unmounts* when its per-type pool fills past `recyclePoolSize` (the oldest pooled slot is then removed from the React tree). The render-range edge is a **paint boundary**, not a mount boundary — that's what produces the "active components: 14" floor while total mounted can be much higher.
 
-- **Pool hit:** same React Fiber → prop update, zero cold-mount cost.
+**Pool hit vs miss when an item re-enters the render range:**
+
+- **Pool hit (same data key):** same React Fiber → prop update only, zero cold-mount cost. `useState` and `useRef` survive.
+- **Pool hit (recycled slot of matching type):** Fiber reused, props replaced with new data. Cell-internal state is reset unless the consumer opts into a recycling pattern.
 - **Pool miss:** fresh mount.
-
-The pool is **LIFO per item type** — segregated by the `getItemType` return value. Separate widget types (product cards, banners, chips) each have their own pool. Pool excess above `maxPoolSize` is unmounted immediately.
 
 **First paint:** `initialNumToRender` (default 10) controls how many items mount before the viewport size is known. Set it to the fewest items needed to fill the visible screen — typically 3–5 — for the fastest cold start. Once the container reports its size, the windowed range takes over.
 
 **Per-section windowing overrides:** each section can carry its own `renderMultiplier`, `measureAhead`, and `mountedWindowSize`. Horizontal sections use `hRenderMultiplier` as a fallback before `renderMultiplier`. Precedence: `section.renderMultiplier ?? hRenderMultiplier ?? renderMultiplier`.
 
+#### Tuning the five knobs — which to reach for, and when
+
+The knobs above interact, and reaching for the wrong one is the most common configuration mistake. Each one solves a different observable problem:
+
+- **`renderMultiplier` / `hRenderMultiplier` — *active paint buffer*.** Bump these if you see blank cells on fast scroll or fling (cells aren't ready before they enter the viewport). The trade is *more mounted-and-painted cells per frame* → more memory, more GPU compositing, more React work each time the render range shifts. The defaults (0.5 V, falls through to 0.5 for H unless overridden) are tuned for typical V scroll; H sections that genuinely get user-driven horizontal scrolling can benefit from `hRenderMultiplier=1.0` so flicked carousels have ready cells.
+- **`measureAhead` (RN 0.83+ only) — *measure-before-scroll-in*.** Bump if items have *variable height that's wrong on first paint* (estimate diverges noticeably from measured). The trade is *cells mounted with `Activity=hidden` ahead of the render range* → cells exist + Yoga measures them, but no paint, no `useEffect`. On RN < 0.83 this clamps to 0 silently (the wrapper falls back to a fragment, no compute suppression available — see the platform compatibility note below).
+- **`recyclePoolSize` — *retention buffer for cells that left the render range*.** Bump if cells flicker / cold-mount during bounce-back, or if a page has *many sections sharing one widget type* (e.g. a product feed where every section renders the same card type). With the default auto formula sized per H render range, single-type-dominant pages can overflow the pool when V scroll passes through multiple sections in quick succession — the resulting cold remounts spike p75/p90 CPU. Pass an explicit value (typically 50-128 for product feeds). The trade is *more cells stay mounted with `Activity=hidden`* — pure memory cost on RN 0.83+, very cheap. On older RN pooled cells re-render on parent reconcile, still net cheaper than cold-mount but not free.
+- **`mountedWindowSize` — *safety ceiling on the render range itself*.** Leave at default (2× viewport) unless you have an aggressive `renderMultiplier` and need to cap memory. The system also shrinks this knob automatically under memory pressure (`memoryMultiplier`), without changing your stated `renderMultiplier`.
+- **`crossSectionRecycling` — *pool keying strategy*.** Default `true` keys the pool by `itemType` alone, so a card pooled by section A can be reused by section B if they share an `itemType`. Set to `false` to key the pool by `(sectionIndex, itemType)` — cards stay in their home section's pool. Use `false` when the same `itemType` renders very differently across sections (different sizing logic, different sub-tree, different state semantics) and you'd rather pay cold-mount cost on cross-section reuse than risk an "off-section" recycle. Use the default `true` on uniform feeds where every section renders the same card identically. Switching at runtime non-destructively rebuilds the pool indices without unmounting anything. Verified runtime-tunable on the storefront demo's `PerfHood`.
+
+Two clean shortcuts:
+
+- **"My fast scroll shows blank cells"** → bump `renderMultiplier` (or `hRenderMultiplier` for an H carousel).
+- **"My bounce-back stutters / cold-mounts"** → bump `recyclePoolSize`.
+- **"Same widget looks/behaves differently per section and I see flicker on cross-section returns"** → set `crossSectionRecycling={false}`.
+
+The first knob solves a *painting* problem; the second a *retention* problem; the third a *pool-identity* problem. They are not interchangeable.
+
 **Visibility callback:** `onViewableRangeChange` fires when the set of items in the visible range changes. It receives `{ visible: { first, last }, render: { first, last } }` — the `visible` range reflects what the user can actually see; the `render` range reflects the broader painted buffer. Use this for analytics impression tracking or lazy-loading triggers rather than parsing scroll offsets manually.
+
+### Data prefetch — `onPrefetch` / `onEvict` / `prefetchAhead`
+
+The render window paints cells; the **prefetch window** is a wider band, outside the render window, where Riff fires `onPrefetch(keys)` so the consumer can warm caches (images, network requests, decoded data) *before* those cells mount. When items leave the prefetch window in the opposite direction, `onEvict(keys)` fires so in-flight loads can be cancelled and resources released.
+
+```tsx
+<Riff
+  data={products}
+  keyExtractor={(p) => p.id}
+  prefetchAhead={12}                          // default 12 viewport heights
+  onPrefetch={(keys) => imageCache.warm(keys)}
+  onEvict={(keys) => imageCache.cancel(keys)}
+  ...
+/>
+```
+
+**Props:**
+
+| Prop | Default | Behaviour |
+|---|---|---|
+| `prefetchAhead` | `12` (viewport heights) | How far beyond the render range the prefetch window extends, in either direction. Set to `0` to disable the prefetch system entirely. |
+| `onPrefetch?: (keys: string[]) => void` | — | Called with the set of `keyExtractor` keys **entering** the prefetch window since the last call. |
+| `onEvict?: (keys: string[]) => void` | — | Called with the set of keys **leaving** the prefetch window in the trailing direction. Use to cancel in-flight loads / free decoded resources. |
+
+**Semantics:**
+
+- The prefetch window is a *data* window, not a *layout* window. Cells in it are **not mounted**, **not laid out**, **not measured**. The callback only delivers the *keys* of items the consumer should start loading data for.
+- `onPrefetch` and `onEvict` fire **diff-only** — only the entering / leaving subsets, not the full window. A scroll that moves the window by 5 items produces 5 entering keys and 5 leaving keys, not 12 × viewport.
+- The range arithmetic is synchronous on the scroll path. The entering / leaving loops (which call `keyExtractor` for each item in the diff) are deferred to `setImmediate` so they never block a scroll frame. Coalescing is built in — if a new scroll tick lands before the previous callback ran, the pending callback is cancelled and replaced.
+- `onEvict` only fires after `onPrefetch` has fired at least once (it diffs against the prior prefetch range, so there's nothing to evict on first paint).
+
+**Why this matters.** On a typical product grid, the user fling-scrolls past one viewport in ~250 ms but image network round-trips are 200–500 ms. Without prefetch, every cell first paints with a placeholder, then the image arrives 1–2 frames late. With `prefetchAhead=12`, image requests start 12 viewport-heights before the cell mounts — by the time the cell paints, the cached `Image` source is hot. Combined with Riff's pool retention, scroll-back is instant: cells return from the pool with state preserved *and* their images already decoded.
+
+**Tuning.** Default `prefetchAhead=12` is a generous lead — appropriate for image-heavy feeds where the network is the dominant latency. Drop it for data-light pages (text-only lists where loading doesn't dominate) to reduce key-iteration work. Increase it for very long-form content where the user typically scrolls in large jumps. Set to `0` for fully static data where there's nothing to prefetch.
 
 ### React-level identity — state survives brief scroll-off
 
@@ -476,7 +536,7 @@ Using Fabric tag identity (not subview index) here is important. Fabric's reconc
 
 **③ `updateLayoutMetrics:` on `RNMeasuredCellView` — UI thread**
 
-After `applyPositionsFromState:` has set a cell's frame, Fabric applies its own computed layout metrics to the cell. `RNMeasuredCellView` overrides `updateLayoutMetrics:`. When `_shadowNodePositioned = YES` (set by `applyPositionsFromState:`), it replaces Fabric's computed origin with `self.frame.origin` while passing Yoga's size through unchanged. Yoga wins on **size** (actual content dimensions); LayoutCache wins on **position** (layout engine placement). These two authorities do not conflict — they govern different parts of the layout metrics.
+After `applyPositionsFromState:` has set a cell's frame, Fabric applies its own computed layout metrics to the cell. `RNMeasuredCellView` overrides `updateLayoutMetrics:`. When `_shadowNodePositioned = YES` (set by `applyPositionsFromState:`), the override is an **origin guard**: it replaces Fabric's computed origin with `self.frame.origin` (the LayoutCache-set position) while letting Yoga's measured size pass through. This prevents Fabric's about-to-fire `setFrame:` call from overwriting the position the layout engine already chose. Yoga's measured size is unconflicted — the height was injected into the Yoga node from the LayoutCache at measure-time, so what flows through here simply reflects that injection back.
 
 **A note on Fabric view flattening**
 
@@ -486,7 +546,7 @@ Riff's boundary views (`RNCollectionViewContainerView`, `RNMeasuredCellView`, `R
 
 **④ UIScrollViewDelegate — UI thread, before JS**
 
-`RNCollectionViewContainerView` is the UIScrollView's delegate. `scrollViewDidScroll:` fires on the UI thread — before the scroll event is delivered to JavaScript. Riff uses this to call C++ `processScroll` via JSI synchronously, computing the render range and cache version number immediately. If neither has changed, no further work happens (band-skip). If the render window boundary has moved, a synthetic event is dispatched to JS. The full delegate chain — `willBeginDragging`, `didEndDragging:willDecelerate:`, `willBeginDecelerating`, `didEndDecelerating`, `didEndScrollingAnimation` — gives Riff precise knowledge of scroll phase for MVC snapshotting and for knowing when to flush deferred corrections.
+`RNCollectionViewContainerView` is the UIScrollView's delegate. `scrollViewDidScroll:` fires on the UI thread — before the scroll event is delivered to JavaScript. Riff uses this to throttle and dispatch a JS-side scroll event; the native delegate does not call C++ layout work directly via JSI. JS receives the event and calls `nativeWindowController.processScroll` (for the main V) or `processHScroll` (for H sub-containers) via JSI. The returned render range and cache version drive a *band-skip* decision in JS — if neither has changed since the previous tick, React reconciliation is skipped entirely. What `processScroll` does in C++ depends on the layout type: for static layouts (`list`/`grid`/`masonry`/`flow`) it is an O(log n) binary search through cumulative positions, returning a render range with no per-item recomputation; for scroll-driven dynamic layouts (currently the `radial`/`carousel3D`/`spiral`/`hex` H section types) it additionally recomputes per-item frame, transform, alpha, and zIndex at the new scroll offset, because the layout's geometry is itself a function of scroll position. The full delegate chain — `willBeginDragging`, `didEndDragging:willDecelerate:`, `willBeginDecelerating`, `didEndDecelerating`, `didEndScrollingAnimation` — gives Riff precise knowledge of scroll phase for MVC snapshotting and for knowing when to flush deferred corrections.
 
 **⑤ KVO on `contentOffset` — UI thread (sticky views)**
 
@@ -669,7 +729,7 @@ For maintainers porting to other platforms or a future RN architecture:
 | JSI bindings | RN (stable since 0.68) | Replace with equivalent zero-cost C++↔script bridge |
 | **`LayoutCache`** | **Pure C++, no deps** | **Fully portable as-is** |
 | **Layout engine protocol** | **Pure C++, no deps** | **Fully portable as-is** |
-| **Windowing model** (JS) | React/RN | Concept universal; `Activity` API is RN 0.80+ |
+| **Windowing model** (JS) | React/RN | Concept universal; `Activity` API requires RN 0.83+ (React 19.2). On older RN, slot-pool falls back to a fragment wrapper — Fibers are preserved but `Activity=hidden`'s compute suppression is not available. |
 | **MVC** arithmetic | C++ (concept) | `setContentOffset:` is iOS-specific; the delta math is not |
 
 The LayoutCache and layout engine protocol are the most valuable portable assets — pure C++ with no platform dependencies. The iOS/Fabric-specific surface is six hooks; everything else is logic that transfers directly.
@@ -926,6 +986,12 @@ layout={customLayout({
 ```
 
 `LayoutContext` provides: `containerWidth`, `containerHeight`, `scrollOffset`, `itemCount`, and the current Yoga-measured size for the item if available.
+
+### `writesVisualAttributes` — opt into the visual-attrs pipeline
+
+Layouts that need to push *per-frame* visual attributes (alpha, transform, zIndex) — radial, carousel3D, spiral, custom — set `writesVisualAttributes = true` on the layout object. Layouts that only position cells (list, grid, masonry, flow, and most compositional sections) leave it `false` (the default). Compositional layouts derive this flag automatically from their entries: if any nested section sets `true`, the parent inherits `true`.
+
+The native side gates the visual-attrs path on this flag. When `false`, the per-commit pipeline that reads and applies alpha/transform/zIndex is skipped entirely — measurable CPU win on compositional pages where most sections are static. When `true`, it runs as before. Set this on any custom layout that needs the visual channel; leave it off if you only use the frame channel.
 
 ### Current status
 

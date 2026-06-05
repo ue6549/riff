@@ -101,6 +101,13 @@ struct BulkFrameResult {
   std::vector<bool>   found;   // which keys had cache entries
 };
 
+// ─── BulkAttributesResult — batch attribute reads for the gated visual-attrs path ─
+
+struct BulkAttributesResult {
+  std::vector<LayoutAttributes> attrs;  // one entry per input key (default-constructed if missing)
+  std::vector<bool>             found;  // which keys had cache entries
+};
+
 // ─── LayoutCache ─────────────────────────────────────────────────────────────
 
 /**
@@ -202,6 +209,19 @@ public:
    * getAttributes() calls.
    */
   BulkFrameResult getFramesForKeys(const std::vector<std::string>& keys) const;
+
+  /**
+   * Batch attribute read by key names — returns full LayoutAttributes (frame +
+   * alpha + zIndex + transform3D + sizingState) for each key under a single
+   * mutex acquisition. Use when the visual-attrs gate is open
+   * (LayoutEngine::writesVisualAttributes() == true) to replace N per-cell
+   * getAttributes() calls with one bulk lookup.
+   *
+   * Result has size == keys.size(). For keys with no cache entry, the
+   * corresponding attrs entry is default-constructed (identity values) and
+   * found[i] == false. Callers should check found[i] before using attrs[i].
+   */
+  BulkAttributesResult getAttributesForKeys(const std::vector<std::string>& keys) const;
 
   /**
    * Returns heights for items 0..count-1 in the given section.
@@ -323,6 +343,18 @@ public:
   // causing shouldSkipCorrection() misses in unrelated V sub-containers.
   uint64_t hMvcVersion() const;
 
+  // V-container version — bumped by endVBatch() instead of endBatch().
+  // The main V container's correctChildPositionsIfNeeded writes V cell
+  // positions during V scroll; those writes invalidate the V container's
+  // own skip-check but are NOT cross-cutting — H sub-containers don't
+  // read V cell positions, so they shouldn't invalidate on these writes.
+  // Without this split, every V correction's applyMeasurements bumps
+  // version() and cascades into every active sub-container's
+  // shouldSkipCorrection failure. Measured: 1:1 correlation between V
+  // applyMeasurements count and sub-container fail.ver count, ratio
+  // matching active sub-container count. See B4.17.
+  uint64_t vVersion() const;
+
   // ── Batch mode ─────────────────────────────────────────────────────────────
   // Coalesce multiple setAttributes writes into a single version bump.
   // Without batching, applyMeasurements cascading one Yoga delta through N
@@ -336,6 +368,10 @@ public:
   // Like endBatch() but bumps hMvcVersion instead of version.
   // Use for H sub-container applyMeasurements writes.
   void endHBatch();
+  // Like endBatch() but bumps vVersion instead of version.
+  // Use for V CollectionViewContainer applyMeasurements writes — keeps
+  // V cell position updates from invalidating sub-container skip checks.
+  void endVBatch();
 
   // ── JSI bindings ──────────────────────────────────────────────────────────
 
@@ -373,6 +409,7 @@ private:
   mutable bool                                      _sortedHorizontal = false;
   uint64_t                                          _version = 0;
   uint64_t                                          _hMvcVersion = 0;
+  uint64_t                                          _vVersion    = 0;
   int                                               _batchDepth = 0;
   bool                                              _batchDirty = false;
   bool                                              _batchIsHMvc = false;
