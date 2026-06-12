@@ -97,6 +97,58 @@ The proxy is reliable today but not semantically precise. `displayType == Displa
 
 **Priority:** Pick up before any concerted RN < 0.83 support work. Not urgent for the current target (RN 0.83.4).
 
+### B1.12 `mountedWindowSize` as a real mount ceiling (B-mount-cap-real)
+
+**Surfaced during:** mount-semantics discussion (2026-06-12).
+
+**Today's state.** `mountedWindowSize` is a *trim policy parameter* for `applyBudget` — it caps the render range itself but does not introduce a separate mount tier. The per-type slot pool (`recyclePoolSize`, default auto-sized to `max(renderRangeSize, maxHWindow×2, 8)`) is what retains slots beyond the render range. On RN 0.83+ pooled slots are `Activity=hidden` (no paint, effects suspended). On RN < 0.83 the Activity wrapper degrades to a `<>{children}</>` fragment — pooled cells render full cost on every parent reconcile, giving the pool a memory benefit (Fiber preserved) but zero compute benefit (and arguably a compute liability). Pool unmount happens only on overflow, which is unobservable to consumers.
+
+Three problems with the current semantics:
+
+1. **Pre-0.83 regression risk.** Pool members re-render on every parent commit when Activity is absent. `B1.11` plans a `measureAhead` clamp; `B-pre83-pool` plans a `maxPoolSize=0` clamp. Both are bandages on the underlying issue: the pool tier doesn't have a coherent mount story when Activity is unavailable.
+2. **Consumer mental model is opaque.** "How many cells stay mounted?" has no public-API answer today — it's `renderRange + pool`, where pool is auto-formula-sized and the value isn't surfaced. `mountedWindowSize` exists but doesn't actually mean what its name suggests.
+3. **`recyclePoolSize` exposed publicly is a footgun.** Consumers tune it without a clear mental model. The default auto formula often produces pool sizes comparable to render range, so on continuous scroll the pool churns rather than retains — the bounce-back state-preservation benefit is real but smaller than it sounds.
+
+**Proposal.** Make `mountedWindowSize` a real mount ceiling:
+
+- **Render range** (`renderMultiplier`) → painted, interactive. `Activity=visible` on 0.83+; normal render pre-0.83.
+- **Mounted-but-suspended band** (between render range and `mountedWindowSize × vpHeight`) →
+  - **0.83+:** mounted with `Activity=hidden`, effects suspended, paint suppressed.
+  - **pre-0.83:** *unmounted*. Activity-absent Fragment fallback gives no compute saving, so the band collapses to zero — items live only in the render range tier, outside that the cap is the unmount edge.
+- **Past `mountedWindowSize`** → always unmounted. Hard ceiling, observable, consumer-controlled.
+- **Slot pool** → internal optimization living inside the mounted band; not a public API. The "did this Fiber survive?" question becomes a function of "was this item inside `mountedWindowSize` at all points since it left the render range?", not "did the pool happen to retain it?"
+
+Public-API consequence: `recyclePoolSize` deprecated. `measureAhead` becomes a sub-range knob inside the mounted band (extend it ahead by N viewports for Yoga measurement), simpler semantics.
+
+**What this preserves.**
+- Render-range state preservation when items briefly leave and re-enter (within the mounted band, on 0.83+, the Fiber stays alive — same as today).
+- The C++ scroll hot path. Cap is a JS-side concept; C++ doesn't change.
+- Auto-formula intelligence — the cap's *default* can still be `max(2.0 × vpH, maxHWindow × 2 + renderRange, 8 cells)` so H-carousel-heavy pages get retention; consumers can override with a single number.
+
+**What it changes for consumers.**
+- Long-distance bounce-back loses Fiber preservation past the cap. Items returning from beyond `mountedWindowSize × vpHeight` cold-mount. Probably fine — consumers needing longer state preservation should externalize to a store anyway.
+- The `crossSectionRecycling` knob remains relevant (pool keying strategy is independent of pool retention semantics).
+
+**What we measure to validate.**
+- Storefront / homepage bench at default + extreme `mountedWindowSize` values — confirm CPU/memory profiles match or improve current pool-based scheme.
+- Pre-0.83 simulation (force `Activity = undefined`) — confirm compute drops vs current pool-renders-on-reconcile path.
+- Bounce-back smoothness on real device — visual regressions during fast V scroll where pool retention was masking cold-mount.
+
+**Backwards compat.**
+- `recyclePoolSize`: warn for one release, no-op for one more, remove. Document migration: "leave undefined; the default mount-cap auto-formula now handles retention."
+- `mountedWindowSize`: existing values (default 2.0) keep working, just gain hard-cap semantics. Document the contract change.
+
+**Effort:** ~3–5d.
+- SlotManager simplification: collapse pool into "mounted-band membership" check + LRU eviction at the cap.
+- `applyBudget` becomes the single ceiling enforcer; `recyclePoolSize`'s code paths fold in.
+- Pre-0.83 path: detect missing `Activity`, route the mounted band to "render range only" semantics.
+- Tests + bench validation.
+- README + protocol JSDoc updates.
+
+**Priority:** Pursue after `B1.11` (pre-0.83 `measureAhead` clamp) — that's a smaller fix that buys time. The bigger refactor can land in a Riff 2.x milestone. Worth doing before broad pre-0.83 adoption is encouraged.
+
+**Cross-references:** supersedes `B-pre83-pool` (folds into the unified mount-cap behaviour); reframes `B4.13` (memory-aware pool sizing → memory-aware mount cap); related to `B4.16` (per-H-section private pools — would become per-H-section sub-bands within the global cap).
+
 ---
 
 ## B2 — High-Impact Features (Remaining)
