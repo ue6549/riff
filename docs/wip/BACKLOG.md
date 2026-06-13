@@ -358,13 +358,47 @@ Document + export the H-2 `RNCollectionSubContainer` framework so consumers can 
 
 ## B4 — Residual Perf (Remaining)
 
-### B4.5 Opt 3: Transform-based cell positioning
+### B4.5 Opt 3: Transform-based cell positioning (B-transform-positioning)
 
-Replace `setFrame:` with `layer.transform = CATransform3DMakeTranslation(x, y, 0)` in `applyPositionsFromState:`. For position-only changes, avoids UIView layout pass. Requires `hitTest:withEvent:` override on `_contentView`. Deferred during earlier perf work — revisit if native positioning shows up in profiles.
+**Surfaced during:** original perf plan; re-prioritised 2026-06-13 during Android-port debugging discussion.
 
-**Source:** PERF-PLAN.md Opt 3
+**Problem.** `applyPositionsFromState:` today writes `child.frame = CGRectMake(x, y, w, h)` per cell per commit. `setFrame:` triggers:
+- `setNeedsLayout` on the receiver
+- `layoutSubviews` if overridden by the cell's content
+- Recursive layout pass for size-dependent descendants
+- Composition update
 
-**Effort:** ~1d
+For position-only changes (the dominant case during steady-state scroll — Yoga sizes settle quickly, only `y` origins change), all of the above is wasted work. Cheaper paths exist:
+
+- **iOS, position-only:** `view.layer.position = CGPointMake(...)` or `view.center = ...` — no layout pass, just a CALayer property write.
+- **iOS, transform-based:** `view.transform = CGAffineTransformMakeTranslation(dx, dy)` — paint with offset, even cheaper.
+- **iOS, position + size:** fall back to `setFrame:` (today's path).
+- **Android, position-only:** `view.setTranslationX/Y` — no `layout()` pass.
+- **Android, position + size:** `view.layout(l, t, r, b)` (today's path on the Android port).
+
+**Per-cell diff strategy:**
+1. Cache each cell's *last-applied frame* in a sidecar map (`{tag → CGRect}`) on the container view.
+2. On each `applyPositionsFromState:` call, for each cell: diff new position+size vs cached.
+3. If size unchanged → cheap path (`layer.position` on iOS, `setTranslationX/Y` on Android). Update cache.
+4. If size changed → `setFrame:` / `view.layout(...)`. Update cache.
+
+**Expected impact.**
+- **iOS:** ~30–50% reduction in per-commit position-application cost. Most visible on storefront/homepage where many cells reposition per scroll tick.
+- **Android:** potentially **2–3× reduction**. Android's `view.layout(l, t, r, b)` is significantly more expensive than the iOS equivalent (broader layout-pass propagation, no UIKit-style lazy composition). The Android port's CPU regression vs FlashList may be partially explained by this — Android pays full layout-pass cost per cell per commit, where FlashList writes positions via `setTranslationX/Y` on absolute-positioned children.
+
+**Connection to the Android port.** This is a top suspect for the Android CPU regression (alongside missing origin guard, see B1.14). The Android port likely uses `view.layout(...)` for all position writes — full layout-pass cost per cell. Switching to `setTranslationX/Y` for size-unchanged cases would close a big slice of the iOS-vs-Android perf gap.
+
+**Implementation notes:**
+- The sidecar cache must invalidate when the cell is recycled (Case B in SlotManager) — different data may have arrived with different size expectations. Hook into SlotManager's slot reassignment.
+- Decoration views and supplementary views need the same treatment.
+- For sticky views (`RNScrollCoordinatedViewView`), the existing KVO-driven transform path already does this — no change needed there.
+- `hitTest:withEvent:` may need override if the content view's bounds no longer naturally clip subviews (depends on whether content view has clipsToBounds set).
+
+**Source:** PERF-PLAN.md Opt 3, plus 2026-06-13 architectural discussion.
+
+**Effort:** ~1d iOS + ~1d Android. Bench validation: re-run storefront and homepage on both platforms.
+
+**Priority:** **HIGH for Android port stabilization.** This may be the single biggest lever for closing the Android CPU gap vs FlashList. iOS gains are smaller but cumulative with B1.12 / B4.x work — worth doing as a package.
 
 ### B4.6 Opt 5: Flat arrays from spatial queries
 
