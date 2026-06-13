@@ -3,6 +3,7 @@
 #import "RNMeasuredCellView.h"
 #import "RNOrthogonalSectionView.h"
 #import "RNCollectionSubContainerView.h"
+#import "RNRiffCollectionView.h"
 
 // Our custom ShadowNode and ComponentDescriptor (NOT the codegen-generated ones).
 #import "CollectionViewContainerComponentDescriptor.h"
@@ -62,6 +63,10 @@ using namespace facebook::react;
 @implementation RNCollectionViewContainerView {
   UIScrollView *_scrollView;
   RNCVContentView *_contentView;
+
+  // UICollectionView POC — created when experimental_useUICollectionView = YES.
+  RNRiffCollectionView *_riffCollectionView;
+  BOOL _useUICollectionView;
 
   // State from ShadowNode.
   std::shared_ptr<const CollectionViewContainerShadowNode::ConcreteState> _state;
@@ -195,7 +200,12 @@ using namespace facebook::react;
 // ── Child management ────────────────────────────────────────────────────────
 // Children from React are mounted into _contentView, not directly into self.
 
-- (UIView *)contentViewForChildMounting { return _contentView; }
+- (UIView *)contentViewForChildMounting {
+  if (_useUICollectionView && _riffCollectionView) {
+    return _riffCollectionView.limboContainer;
+  }
+  return _contentView;
+}
 
 - (void)mountChildComponentView:(UIView<RCTComponentViewProtocol> *)childComponentView
                           index:(NSInteger)index
@@ -213,6 +223,11 @@ using namespace facebook::react;
     ((RNScrollCoordinatedViewView *)childComponentView).layoutCacheId = _layoutCacheId;
   }
 
+  // In UICollectionView mode, register the view with the bridge bookkeeper.
+  if (_useUICollectionView && _riffCollectionView) {
+    [_riffCollectionView adoptFabricChild:childComponentView tag:(int32_t)childComponentView.tag];
+  }
+
   RNCV_LOG("mountChild index=%ld tag=%ld afterSubviews=%lu",
            (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
 }
@@ -222,7 +237,12 @@ using namespace facebook::react;
 {
   RNCV_LOG("unmountChild index=%ld tag=%ld beforeSubviews=%lu",
            (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
-  [childComponentView removeFromSuperview];
+  if (_useUICollectionView && _riffCollectionView) {
+    // Let the bridge bookkeeper handle view removal and map cleanup.
+    [_riffCollectionView releaseFabricChild:childComponentView tag:(int32_t)childComponentView.tag];
+  } else {
+    [childComponentView removeFromSuperview];
+  }
   RNCV_LOG("unmountChild index=%ld tag=%ld afterSubviews=%lu",
            (long)index, (long)childComponentView.tag, (unsigned long)_contentView.subviews.count);
 }
@@ -252,6 +272,18 @@ using namespace facebook::react;
   // CALayer writes in applyPositionsFromState:. Static layouts leave this
   // false → that block is skipped entirely.
   _layoutWritesVisualAttributes = newProps.layoutWritesVisualAttributes;
+
+  // UICollectionView POC: create or destroy the backing view on flag change.
+  BOOL wantsUCV = newProps.experimental_useUICollectionView;
+  if (wantsUCV && !_useUICollectionView) {
+    _riffCollectionView = [[RNRiffCollectionView alloc] initWithFrame:self.bounds];
+    [self addSubview:_riffCollectionView];
+    _useUICollectionView = YES;
+  } else if (!wantsUCV && _useUICollectionView) {
+    [_riffCollectionView removeFromSuperview];
+    _riffCollectionView = nil;
+    _useUICollectionView = NO;
+  }
 
   // Register scroll handler when layoutCacheId is assigned.
   // The handler is invoked from JS (nativeMod.scrollTo) via the scroll handler
@@ -348,6 +380,18 @@ using namespace facebook::react;
         _pendingMVCScrollTarget = cache->consumePendingScrollTarget();
       }
     }
+  }
+
+  // In UICollectionView mode, pass positions to the UICollectionView bridge.
+  // applyPositionsFromState: is a no-op in this mode (contentView has no subviews).
+  if (_useUICollectionView && _riffCollectionView) {
+    const auto &d = data;
+    NSMutableArray<NSNumber *> *posArray = [NSMutableArray arrayWithCapacity:d.positions.size()];
+    for (auto v : d.positions) [posArray addObject:@(v)];
+    NSMutableArray<NSNumber *> *tagArray = [NSMutableArray arrayWithCapacity:d.childTags.size()];
+    for (auto t : d.childTags) [tagArray addObject:@(t)];
+    CGSize cs = CGSizeMake(d.contentSize.width, d.contentSize.height);
+    [_riffCollectionView updateWithPositions:posArray childTags:tagArray contentSize:cs];
   }
 
   // Apply positions immediately — don't wait for layoutSubviews.
@@ -481,6 +525,12 @@ using namespace facebook::react;
   // Ensure scroll view fills our bounds.
   if (!CGRectEqualToRect(_scrollView.frame, self.bounds)) {
     _scrollView.frame = self.bounds;
+  }
+
+  // UICollectionView mode: keep riffCV filling our bounds.
+  if (_useUICollectionView && _riffCollectionView &&
+      !CGRectEqualToRect(_riffCollectionView.frame, self.bounds)) {
+    _riffCollectionView.frame = self.bounds;
   }
 
   RNCV_LOG("layoutSubviews subviews=%lu offset=(%.1f,%.1f) contentSize=(%.1f,%.1f)",
