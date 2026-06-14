@@ -1,8 +1,17 @@
 #import "RNRiffCollectionView.h"
 #import "RNRiffCell.h"
 #import "RNRiffCollectionViewLayout.h"
+#import "RNFabricLayoutInterceptor.h"
 
 static NSString * const kRiffCellReuseID = @"RNRiffCell";
+
+// Tell the Fabric origin guard that this view's position is now owned by
+// UICollectionView — prevents Fabric from clobbering the {0,0} cell-local origin.
+static inline void setExternallyPositioned(UIView *view, BOOL value) {
+  if ([view conformsToProtocol:@protocol(RNExternallyPositioned)]) {
+    ((id<RNExternallyPositioned>)view).shadowNodePositioned = value;
+  }
+}
 
 @implementation RNRiffCollectionView {
   UICollectionView         *_collectionView;
@@ -138,6 +147,7 @@ static NSString * const kRiffCellReuseID = @"RNRiffCell";
     [_tagToCell removeObjectForKey:key];
   }
 
+  setExternallyPositioned(child, NO);
   [child removeFromSuperview];
   [_tagToView removeObjectForKey:key];
 }
@@ -161,6 +171,7 @@ static NSString * const kRiffCellReuseID = @"RNRiffCell";
     UIView *prev = [cell releaseAdoptedView];
     if (prev) {
       NSNumber *prevKey = @(prev.tag);
+      setExternallyPositioned(prev, NO);  // Fabric may reposition it in limbo
       [_limboContainer addSubview:prev];
       NSMutableArray<NSIndexPath *> *keysToRemove = [NSMutableArray array];
       [_indexPathToAdoptedTag enumerateKeysAndObjectsUsingBlock:^(NSIndexPath *ip, NSNumber *t, BOOL *stop) {
@@ -179,6 +190,10 @@ static NSString * const kRiffCellReuseID = @"RNRiffCell";
 
   // Adopt the Fabric view into the cell.
   [cell adoptView:targetView];
+  // Mark as externally positioned so the origin guard in RNFabricLayoutInterceptor
+  // preserves the {0,0} cell-local origin and Fabric doesn't clobber it with
+  // the content-space y-coordinate of this item.
+  setExternallyPositioned(targetView, YES);
   _indexPathToAdoptedTag[indexPath] = targetTag;
   _tagToCell[targetTag] = cell;
 

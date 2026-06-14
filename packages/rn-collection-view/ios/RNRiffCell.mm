@@ -25,6 +25,16 @@
   return view;
 }
 
+- (void)layoutSubviews
+{
+  [super layoutSubviews];
+  // UICollectionView sets the cell frame after cellForItemAtIndexPath: returns.
+  // Ensure the adopted view fills the contentView once the final frame is known.
+  if (_adoptedView) {
+    _adoptedView.frame = self.contentView.bounds;
+  }
+}
+
 - (void)prepareForReuse
 {
   [super prepareForReuse];
