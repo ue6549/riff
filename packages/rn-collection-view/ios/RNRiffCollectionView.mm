@@ -17,6 +17,11 @@ static NSString * const kRiffCellReuseID = @"RNRiffCell";
   // Cached state received from the Fabric ShadowNode.
   NSArray<NSNumber *> *_positions;  // flat [x,y,w,h, ...]
   CGSize               _contentSize;
+
+  // Deferred reload: positions may arrive before Fabric children are mounted.
+  // We coalesce multiple adoptFabricChild: calls into one reloadData on the
+  // next runloop tick so cellForItemAtIndexPath: finds populated _tagToView.
+  BOOL _pendingReload;
 }
 
 @synthesize limboContainer  = _limboContainer;
@@ -73,12 +78,34 @@ static NSString * const kRiffCellReuseID = @"RNRiffCell";
                   childTags:(NSArray<NSNumber *> *)childTags
                 contentSize:(CGSize)contentSize
 {
-  _positions   = positions;
-  _contentSize = contentSize;
+  _positions      = positions;
+  _contentSize    = contentSize;
   _dataIndexToTag = childTags;
+  [_layout invalidateLayout];
+  // Defer reloadData — Fabric may deliver updateState: before mountChildComponentView:
+  // completes for all children. Dispatching to next runloop ensures _tagToView is
+  // fully populated before cellForItemAtIndexPath: runs.
+  [self _scheduleReload];
+}
 
+- (void)reloadCells
+{
   [_layout invalidateLayout];
   [_collectionView reloadData];
+}
+
+- (void)_scheduleReload
+{
+  if (_pendingReload) return;
+  _pendingReload = YES;
+  __weak RNRiffCollectionView *weakSelf = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    RNRiffCollectionView *s = weakSelf;
+    if (!s) return;
+    s->_pendingReload = NO;
+    [s->_layout invalidateLayout];
+    [s->_collectionView reloadData];
+  });
 }
 
 // ── Fabric child lifecycle ────────────────────────────────────────────────────
@@ -87,9 +114,11 @@ static NSString * const kRiffCellReuseID = @"RNRiffCell";
 {
   NSNumber *key = @(tag);
   _tagToView[key] = child;
-  // Child is already in limboContainer (placed there by the owning
-  // Fabric container's mountChildComponentView: redirect).
-  // UICollectionView will adopt it when the cell comes into view.
+  // Schedule a coalesced reload so cells are claimed once all mounts have landed.
+  // This handles the race where updateState: fires before mountChildComponentView:.
+  if (_dataIndexToTag.count > 0) {
+    [self _scheduleReload];
+  }
 }
 
 - (void)releaseFabricChild:(UIView *)child tag:(int32_t)tag

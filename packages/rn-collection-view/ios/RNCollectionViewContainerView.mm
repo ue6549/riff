@@ -162,7 +162,14 @@ using namespace facebook::react;
   _scrollView.zoomScale = 1.0;
   _scrollView.contentInset = UIEdgeInsetsZero;
   _scrollView.scrollIndicatorInsets = UIEdgeInsetsZero;
+  _scrollView.hidden = NO;
   _contentView.frame = CGRectZero;
+  // Clean up UICollectionView mode so recycled views start fresh.
+  if (_riffCollectionView) {
+    [_riffCollectionView removeFromSuperview];
+    _riffCollectionView = nil;
+  }
+  _useUICollectionView = NO;
   if (_layoutCacheId != 0) {
     facebook::react::unregisterScrollHandler(_layoutCacheId);
     _layoutCacheId = 0;
@@ -258,6 +265,8 @@ using namespace facebook::react;
       *std::static_pointer_cast<const RNCollectionViewContainerProps>(props);
 
   // Forward scroll-related props to internal UIScrollView.
+  // In UICollectionView mode the scroll view is disabled — UICollectionView
+  // handles scrolling directly. The flag may be toggled later in this method.
   _horizontal = newProps.horizontal;
   _scrollView.scrollEnabled = newProps.scrollEnabled;
   _scrollView.bounces = newProps.bounces;
@@ -279,10 +288,16 @@ using namespace facebook::react;
     _riffCollectionView = [[RNRiffCollectionView alloc] initWithFrame:self.bounds];
     [self addSubview:_riffCollectionView];
     _useUICollectionView = YES;
+    // Disable the underlying scroll view — UICollectionView is the scroll surface.
+    _scrollView.scrollEnabled = NO;
+    _scrollView.hidden = YES;
   } else if (!wantsUCV && _useUICollectionView) {
     [_riffCollectionView removeFromSuperview];
     _riffCollectionView = nil;
     _useUICollectionView = NO;
+    // Restore scroll view for normal Riff mode.
+    _scrollView.scrollEnabled = newProps.scrollEnabled;
+    _scrollView.hidden = NO;
   }
 
   // Register scroll handler when layoutCacheId is assigned.

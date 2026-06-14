@@ -38,6 +38,9 @@ NS_ASSUME_NONNULL_BEGIN
                   childTags:(NSArray<NSNumber *> *)childTags
                 contentSize:(CGSize)contentSize;
 
+/// Force a reload — call after all Fabric children have been mounted into limbo.
+- (void)reloadCells;
+
 /// Called by RNCollectionViewContainerView.mountChildComponentView:.
 - (void)adoptFabricChild:(UIView *)child tag:(int32_t)tag;
 
