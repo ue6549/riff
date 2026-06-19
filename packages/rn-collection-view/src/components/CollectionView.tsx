@@ -859,7 +859,7 @@ const RNCV_HSUB_LOGS = false;
 //   h4Compute — H-4 actual computes (low = good)
 //   hReRender — H-5 React re-renders from H range changes
 //   hRestore  — scroll position restorations
-const RNCV_HEALTH_DIAG = true;
+const RNCV_HEALTH_DIAG = false;
 
 function rncvMvcTrace(msg: string) {
   if (!__DEV__ || !RNCV_MVC_TRACE) return;
