@@ -17,6 +17,8 @@ class CustomLayoutEngine {
   type = 'custom';
   /** Custom layouts default to spatial query — items may not be contiguously ordered. */
   needsSpatialQuery = true;
+  // Custom layouts can write arbitrary per-item visual attrs — safe default true.
+  writesVisualAttributes = true;
   _attrs = [];
   _contentWidth = 0;
   _contentHeight = 0;

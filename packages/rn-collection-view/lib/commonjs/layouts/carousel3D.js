@@ -45,6 +45,8 @@ class Carousel3DLayout {
   type = 'carousel3D';
   horizontal = true;
   needsSpatialQuery = false;
+  // 3D carousel writes per-cell rotateY transform + alpha + zIndex.
+  writesVisualAttributes = true;
   ctx = null;
   itemKeys = [];
   constructor(opts) {

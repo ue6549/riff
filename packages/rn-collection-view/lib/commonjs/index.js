@@ -12,7 +12,8 @@ var _exportNames = {
   masonry: true,
   grid: true,
   flow: true,
-  customLayout: true
+  customLayout: true,
+  compositional: true
 };
 Object.defineProperty(exports, "CollectionViewModule", {
   enumerable: true,
@@ -30,6 +31,12 @@ Object.defineProperty(exports, "Riff", {
   enumerable: true,
   get: function () {
     return _CollectionView.Riff;
+  }
+});
+Object.defineProperty(exports, "compositional", {
+  enumerable: true,
+  get: function () {
+    return _layouts.compositional;
   }
 });
 Object.defineProperty(exports, "customLayout", {

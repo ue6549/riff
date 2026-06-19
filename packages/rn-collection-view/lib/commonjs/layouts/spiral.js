@@ -35,6 +35,8 @@ class SpiralLayout {
   horizontal = false;
   _cache = nativeMod.layoutCache;
   needsSpatialQuery = false;
+  // Spiral writes per-cell transform3D + zIndex + alpha into LayoutCache.
+  writesVisualAttributes = true;
   ctx = null;
   itemKeys = [];
   constructor(opts) {

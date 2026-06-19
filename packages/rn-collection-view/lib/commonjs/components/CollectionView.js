@@ -30,9 +30,11 @@ function _interopRequireWildcard(e, t) { if ("function" == typeof WeakMap) var r
  *   Items outside the render window are not mounted at all.
  *   Items inside the render window are Activity=visible — they form the visual
  *   buffer so cells are fully painted before the viewport reaches them.
- *   Items in the measure range (beyond render range, parked at top:-9999) use
+ *   Items in the measure range (beyond render range, when enabled) use
  *   Activity=hidden so Fabric computes their Yoga layout for height measurement
- *   without painting them or firing their user-cell effects.
+ *   without painting them or firing their user-cell effects. (Activity API
+ *   requires RN 0.83+ / React 19.2; on older RN the cells render normally and
+ *   are paint-clipped by UIScrollView, with no compute savings.)
  *   Heights are measured by the ShadowNode via Yoga and written back to the
  *   C++ LayoutCache — no JS measurement roundtrip needed.
  *
@@ -522,6 +524,7 @@ function RiffBase({
   measureAhead = 0,
   initialNumToRender = 10,
   recyclePoolSize,
+  crossSectionRecycling = true,
   onRenderCountChange,
   onBlankArea,
   onViewableRangeChange,
@@ -738,6 +741,13 @@ function RiffBase({
   const slotManagerRef = (0, _react.useRef)(null);
   if (!slotManagerRef.current) slotManagerRef.current = new _SlotManager.SlotManager();
   // recyclePoolSize=undefined → auto mode: updated to window size just before sync().
+
+  // Propagate cross-section recycling flag — non-destructive migration.
+  // setCrossSectionRecycling preserves slot keys (no React re-mount); only
+  // the pool index is rebuilt under the new keying policy.
+  (0, _react.useEffect)(() => {
+    slotManagerRef.current.setCrossSectionRecycling(crossSectionRecycling);
+  }, [crossSectionRecycling]);
 
   // Opt 7: element cache for incremental render loop.
   // Maps slotKey → cached ReactElement. If slot state is unchanged AND no
@@ -2103,10 +2113,12 @@ function RiffBase({
   const rr = renderRange;
 
   // measureOnly=true  → cell is in the measure range but NOT the render range.
-  //   Parked at top:-9999 so it's invisible; CellMeasureContainer captures its
-  //   height; Activity=hidden suppresses user-cell effects.
-  //   When the cell scrolls into the render range it is promoted in-place (just
-  //   a style update — no unmount/remount) so positions are already known.
+  //   Wrapped in Activity=hidden (RN 0.83+) so Fabric/Yoga still measure the
+  //   cell but React skips painting it and suppresses user-cell effects. On
+  //   older RN the Activity wrapper degrades to a fragment, so the cell renders
+  //   normally; it remains paint-clipped by UIScrollView since it sits outside
+  //   the visible viewport. When the cell scrolls into the render range it is
+  //   promoted in-place (mode flips visible) — no unmount/remount needed.
   // measureOnly=false → normal render-range cell (existing behaviour).
   // reactKey: when provided (slot mode), overrides the React key derived from
   // keyExtractor. Stable slot keys let the Fiber survive recycling (Opt 4).
@@ -2508,6 +2520,12 @@ function RiffBase({
     // would set maxPoolSize=4, overflow the pool on bounce-back, discard
     // slots, and cold-mount the rebound cells — visible as the `MISSING tag`
     // → new tag transition seen in user logs at the bounce edge.
+    //
+    // Single-type-dominant pages (many sections sharing one widget type,
+    // e.g. storefront's product-card-across-all-section-types pattern) will
+    // overflow this auto floor: every section's eviction feeds the same
+    // per-type pool. Such pages should pass an explicit `recyclePoolSize`
+    // override sized for their max in-flight cell count across sections.
     let _maxHWindow = 0;
     for (const [, r] of hRenderRangesRef.current) {
       const span = r.last - r.first + 1;
@@ -2912,7 +2930,12 @@ function RiffBase({
       },
       layoutCacheId: layoutCacheId,
       layoutCacheVersion: layoutCacheVersion,
-      layoutType: effectiveLayout.type,
+      layoutType: effectiveLayout.type
+      // Static layouts (list/grid/masonry/flow/compositional with all-static
+      // sub-sections) leave this false → native skips the per-cell
+      // visual-attrs read/write in applyPositionsFromState. See protocol.ts.
+      ,
+      layoutWritesVisualAttributes: effectiveLayout.writesVisualAttributes ?? false,
       estimatedItemHeight: effectiveItemHeight,
       renderRangeStart: renderRangeStart,
       renderRangeEnd: renderRangeEnd,

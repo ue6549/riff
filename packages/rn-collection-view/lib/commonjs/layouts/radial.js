@@ -35,6 +35,8 @@ class RadialLayout {
   type = 'radial';
   horizontal = false;
   needsSpatialQuery = false;
+  // Radial writes per-cell transform3D + zIndex + alpha into LayoutCache.
+  writesVisualAttributes = true;
   ctx = null;
   itemKeys = [];
   constructor(opts) {

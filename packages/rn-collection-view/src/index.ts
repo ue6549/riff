@@ -42,4 +42,5 @@ export type {
 } from './types/protocol';
 
 // Layout factories
-export { list, masonry, grid, flow, customLayout } from './layouts';
+export { list, masonry, grid, flow, customLayout, compositional } from './layouts';
+export type { CompositionalEntry, SectionRange } from './layouts/compositional';

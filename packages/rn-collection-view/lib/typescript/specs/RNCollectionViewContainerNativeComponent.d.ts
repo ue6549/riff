@@ -50,6 +50,7 @@ interface NativeProps extends ViewProps {
     layoutCacheId?: Int32;
     layoutCacheVersion?: Int32;
     estimatedItemHeight?: Float;
+    layoutWritesVisualAttributes?: WithDefault<boolean, false>;
     renderRangeStart?: Int32;
     renderRangeEnd?: Int32;
     maintainVisibleContentPosition?: WithDefault<boolean, true>;

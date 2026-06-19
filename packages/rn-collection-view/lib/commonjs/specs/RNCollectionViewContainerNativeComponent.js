@@ -66,6 +66,7 @@ const __INTERNAL_VIEW_CONFIG = exports.__INTERNAL_VIEW_CONFIG = {
     layoutCacheId: true,
     layoutCacheVersion: true,
     estimatedItemHeight: true,
+    layoutWritesVisualAttributes: true,
     renderRangeStart: true,
     renderRangeEnd: true,
     maintainVisibleContentPosition: true,

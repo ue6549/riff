@@ -65,11 +65,28 @@ export interface SlotInfo<T> {
 }
 export declare class SlotManager<T> {
     private activeSlots;
+    /**
+     * Pool keyed by either `itemType` (cross-section recycling enabled) or
+     * `${sectionIndex}|${itemType}` (cross-section recycling disabled).
+     * The key shape is determined by `crossSectionRecycling` at the time
+     * `_poolKey(slot)` is called for each push / pop.
+     */
     private recyclePools;
     private dataKeyToSlot;
     private slotCounter;
-    /** Max idle slots per type kept alive between renders. Default 4. */
+    /** Max idle slots per pool key kept alive between renders. Default 4. */
     maxPoolSize: number;
+    /**
+     * Cross-section recycling control. When `true` (default), pools are keyed
+     * by `itemType` alone — a slot freed by section A can be reclaimed by
+     * section B if both use the same widget type. When `false`, pools are
+     * keyed by `(sectionIndex, itemType)` — each section's pool is isolated;
+     * a slot freed by section A stays available only for section A's
+     * subsequent re-entry. Helpful for single-widget-type-across-many-
+     * sections workloads (e.g. product feeds) where cross-section churn
+     * dominates pool overflow. See backlog B-hsection-private-pools.
+     */
+    crossSectionRecycling: boolean;
     /** Number of fresh slot Fibers created in the most recent sync() call (Case C). */
     lastColdMounts: number;
     private _prevFirst;
@@ -107,8 +124,30 @@ export declare class SlotManager<T> {
     sync(renderFirst: number, renderLast: number, measureFirst: number | null, measureLast: number | null, getDataKey: (i: number) => string, getItemType: (i: number) => string, getCacheKey: (i: number) => string, getSectionIndex: (i: number) => number, getKind: (i: number) => 'item' | 'header' | 'footer', getItem: (i: number) => T, dataLength: number, stickySet: Set<number> | null, excludeIndices?: Set<number>, renderGen?: number): Map<string, SlotInfo<T>>;
     /** Adjust max pool size (e.g. on memory pressure). */
     setMaxPoolSize(n: number): void;
+    /**
+     * Toggle cross-section recycling and migrate the existing pools so the
+     * change is non-destructive — slot keys (and therefore React Fibers,
+     * `useState`, `useRef`, in-flight animations) are preserved across the
+     * toggle. Only the pool index is rebuilt.
+     *
+     * Caveat: a slot evicted by section A while cross-section recycling was
+     * ON might have been about to be reclaimed by section B. After toggling
+     * OFF, that slot moves to section A's private pool, so section B can no
+     * longer reclaim it — section B will cold-mount on its next assignment.
+     * This is the intended trade and is expected on the first sync() call
+     * after the toggle.
+     */
+    setCrossSectionRecycling(value: boolean): void;
     /** Reset all state (e.g. on data reset or component remount). */
     reset(): void;
+    /**
+     * Composite pool key. When cross-section recycling is on (default), this
+     * is just the itemType — sections share their pools. When off, the key
+     * includes the sectionIndex so each section has its own private pool.
+     * The "|" separator is reserved (not allowed in itemType returned from
+     * consumer's getItemType) so there's no collision risk.
+     */
+    private _poolKey;
     private _pool;
     private _isMeasureOnly;
 }

@@ -11,9 +11,11 @@
  *   Items outside the render window are not mounted at all.
  *   Items inside the render window are Activity=visible — they form the visual
  *   buffer so cells are fully painted before the viewport reaches them.
- *   Items in the measure range (beyond render range, parked at top:-9999) use
+ *   Items in the measure range (beyond render range, when enabled) use
  *   Activity=hidden so Fabric computes their Yoga layout for height measurement
- *   without painting them or firing their user-cell effects.
+ *   without painting them or firing their user-cell effects. (Activity API
+ *   requires RN 0.83+ / React 19.2; on older RN the cells render normally and
+ *   are paint-clipped by UIScrollView, with no compute savings.)
  *   Heights are measured by the ShadowNode via Yoga and written back to the
  *   C++ LayoutCache — no JS measurement roundtrip needed.
  *
@@ -298,9 +300,12 @@ export interface RiffProps<T = unknown> {
     mountedWindowSize?: number;
     /**
      * M4.1 — How many viewport-heights to pre-measure ahead of (and behind) the
-     * render range. Cells in this extended zone are mounted off-screen at top:-9999
-     * inside Activity=hidden so their heights are captured before they scroll into
-     * view, eliminating white-space flash on fast scroll.
+     * render range. Cells in this extended zone are mounted inside Activity=hidden
+     * (RN 0.83+) so their heights are captured before they scroll into view,
+     * eliminating white-space flash on fast scroll. On older RN the Activity
+     * wrapper falls back to a fragment and the cells render normally — Yoga still
+     * measures them but the compute-suppression benefit of Activity=hidden is not
+     * available.
      * Default 2.0. Only active in variable-height mode (estimatedItemHeight).
      * Set to 0 to disable pre-measurement.
      */
@@ -326,6 +331,21 @@ export interface RiffProps<T = unknown> {
      * Set to 0 to disable pooling entirely (every revisit is a cold mount).
      */
     recyclePoolSize?: number;
+    /**
+     * When true (default), slots evicted by one section are eligible to be
+     * reclaimed by any other section that uses the same itemType — the
+     * per-type pool is global across sections. When false, each section
+     * gets its own private pool keyed by `(sectionIndex, itemType)` and
+     * evictions stay within the section that produced them.
+     *
+     * Useful for single-widget-type-across-many-sections workloads (e.g.
+     * product feeds where all sections use the same product card). The
+     * default behaviour produces high pool churn when V scroll moves cells
+     * out of one section while another section's cells need slots; setting
+     * to false isolates each section's pool. Trade: more total cells
+     * mounted (each section keeps its own warmth) for less pool turnover.
+     */
+    crossSectionRecycling?: boolean;
     /**
      * Called whenever the number of rendered items changes.
      * Useful for debug overlays: (renderCount, totalCount) => void.
