@@ -50,10 +50,20 @@ import {
   ViewStyle,
 } from 'react-native';
 
-// Activity: stable in React 19.2 (RN 0.83+).
-// Falls back gracefully if not available (older new-arch builds).
-// @ts-ignore — not in @types/react yet for all versions
-const Activity = (React as any).Activity as
+// Activity: stable in React 19.2 (RN 0.83+). On older new-arch builds
+// (e.g. RN 0.80.2 / React 19.1) React does not *export* the component, but the
+// Fabric reconciler still ships the offscreen fiber implementation. The element
+// type the renderer matches on is the global Symbol.for('react.activity'), so we
+// fall back to that symbol to recover the real hide / suspend / pre-measure
+// behaviour instead of degrading to a fragment.
+//
+// Precedence: real export when present (0.83+), else the well-known symbol.
+// NOTE: the symbol path relies on a React internal that is officially unstable
+// below 0.83. It is validated empirically by the example app's
+// "Activity Probe (0.80.2 compat)" screen — confirm hidden cells still lay out
+// (Yoga measures) before relying on it for measure-ahead.
+// @ts-ignore — Activity not in @types/react for all versions
+const Activity = ((React as any).Activity ?? Symbol.for('react.activity')) as
   | React.ComponentType<{ mode: 'visible' | 'hidden'; children: React.ReactNode }>
   | undefined;
 

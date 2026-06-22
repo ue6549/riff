@@ -30,6 +30,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { usePerformanceMetrics } from '../utils/useMetrics';
 import { useBenchmark } from '../utils/useBenchmark';
 import type { AggregateResult, BenchmarkConfig, BenchmarkResult, RunResult } from '../utils/useBenchmark';
@@ -355,6 +356,7 @@ export function PerfHood({
   onToggleCrossSectionRecycling,
 }: PerfHoodProps) {
   const m = usePerformanceMetrics(disabled);
+  const insets = useSafeAreaInsets();
   const [showResult, setShowResult] = useState(false);
   const prevResultRef = useRef<BenchmarkResult | null>(null);
 
@@ -439,7 +441,7 @@ export function PerfHood({
         />
       )}
 
-      <View style={S.overlay} pointerEvents="box-none">
+      <View style={[S.overlay, { bottom: 16 + insets.bottom }]} pointerEvents="box-none">
         {/* Metric rows (no touch interception) */}
         <View pointerEvents="none">
           {/* UI (native CADisplayLink) FPS */}
@@ -554,7 +556,6 @@ export function PerfHood({
 const S = StyleSheet.create({
   overlay: {
     position: 'absolute',
-    bottom: 16,
     right: 10,
     backgroundColor: 'rgba(0,0,0,0.82)',
     borderRadius: 8,

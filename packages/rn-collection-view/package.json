@@ -10,6 +10,7 @@
   "module": "lib/module/index.js",
   "types": "lib/typescript/index.d.ts",
   "source": "src/index.ts",
+  "react-native": "src/index.ts",
   "files": [
     "src",
     "lib",
@@ -40,9 +41,10 @@
   "author": "",
   "license": "MIT",
   "peerDependencies": {
-    "react": ">=19.2.0",
-    "react-native": ">=0.83.0"
+    "react": ">=19.1.0",
+    "react-native": ">=0.80.0"
   },
+  "peerDependenciesComment": "Floor lowered from 19.2/0.83 to 19.1/0.80 for the Flipkart down-port. The Activity API degrades via Symbol.for('react.activity') (see CollectionView.tsx). Restore to 19.2/0.83 once the host upgrades.",
   "devDependencies": {
     "@react-native/babel-preset": "^0.83.0",
     "@types/react": "^19.2.14",

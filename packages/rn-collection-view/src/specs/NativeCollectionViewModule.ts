@@ -14,4 +14,8 @@ export interface Spec extends TurboModule {
   ping(): string;
 }
 
-export default TurboModuleRegistry.getEnforcing<Spec>('RiffModule');
+// On iOS, the TurboModule IS the C++ CollectionViewModule (get() override provides all JSI methods).
+// On Android, JavaTurboModule binding ignores C++ get() overrides — JSI methods are installed
+// via nativeInstall() in RiffModule.initialize() as a global HostObject instead.
+const _turboModule = TurboModuleRegistry.getEnforcing<Spec>('RiffModule');
+export default ((global as unknown as Record<string, unknown>).__riffNativeMod ?? _turboModule) as Spec;
